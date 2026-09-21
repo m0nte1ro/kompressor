@@ -1,0 +1,6 @@
+pyproject.toml
+kompressor.egg-info/PKG-INFO
+kompressor.egg-info/SOURCES.txt
+kompressor.egg-info/dependency_links.txt
+kompressor.egg-info/requires.txt
+kompressor.egg-info/top_level.txt

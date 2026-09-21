@@ -1,0 +1,221 @@
+{
+  "movies": [
+    {
+      "id": "movie-dune-part-two",
+      "name": "Dune: Part Two",
+      "year": 2024,
+      "path": "/media/movies/Dune Part Two (2024)/Dune Part Two.mkv",
+      "source": "UHD REMUX",
+      "width": 3840,
+      "height": 2160,
+      "resolution": "2160p",
+      "video_codec": "hevc",
+      "video_bitrate": 55500000,
+      "hdr": "dolby_vision_hdr10",
+      "interlaced": false,
+      "size": 69041532928,
+      "audio": [
+        {
+          "codec": "truehd",
+          "channels": 8,
+          "language": "eng",
+          "title": "Dolby Atmos"
+        }
+      ],
+      "hardlinks": 1,
+      "tags": [
+        "Preserve A/V"
+      ]
+    },
+    {
+      "id": "movie-king-of-comedy",
+      "name": "The King of Comedy",
+      "year": 1982,
+      "path": "/media/movies/The King of Comedy (1982)/The King of Comedy.mkv",
+      "source": "BluRay",
+      "width": 1920,
+      "height": 1080,
+      "resolution": "1080p",
+      "video_codec": "h264",
+      "video_bitrate": 23900000,
+      "hdr": null,
+      "interlaced": false,
+      "size": 19542101196,
+      "audio": [
+        {
+          "codec": "dts_hd_ma",
+          "channels": 2,
+          "language": "eng"
+        }
+      ],
+      "hardlinks": 1,
+      "tags": []
+    },
+    {
+      "id": "movie-hardlinked-example",
+      "name": "Hardlinked Example",
+      "year": 2020,
+      "path": "/media/movies/Hardlinked Example/Hardlinked Example.mkv",
+      "source": "WEB-DL",
+      "width": 1920,
+      "height": 1080,
+      "resolution": "1080p",
+      "video_codec": "h264",
+      "video_bitrate": 12000000,
+      "hdr": null,
+      "interlaced": false,
+      "size": 8589934592,
+      "audio": [
+        {
+          "codec": "eac3",
+          "channels": 6,
+          "language": "eng"
+        }
+      ],
+      "hardlinks": 2,
+      "tags": []
+    }
+  ],
+  "shows": [
+    {
+      "id": "show-modern-family",
+      "name": "Modern Family",
+      "tags": [],
+      "seasons": [
+        {
+          "season": 3,
+          "tags": [],
+          "episodes": [
+            {
+              "id": "modern-family-s03e04",
+              "season": 3,
+              "episode": 4,
+              "title": "Door to Door",
+              "path": "/media/shows/Modern Family/Season 03/Modern Family S03E04.mkv",
+              "width": 1920,
+              "height": 1080,
+              "resolution": "1080p",
+              "video_codec": "h264",
+              "video_bitrate": 18200000,
+              "hdr": null,
+              "interlaced": false,
+              "size": 4187593113,
+              "audio": [
+                {
+                  "codec": "eac3",
+                  "channels": 6,
+                  "language": "eng"
+                }
+              ],
+              "hardlinks": 1,
+              "tags": []
+            },
+            {
+              "id": "modern-family-s03e05",
+              "season": 3,
+              "episode": 5,
+              "title": "Hit and Run",
+              "path": "/media/shows/Modern Family/Season 03/Modern Family S03E05.mkv",
+              "width": 1920,
+              "height": 1080,
+              "resolution": "1080p",
+              "video_codec": "hevc",
+              "video_bitrate": 2100000,
+              "hdr": null,
+              "interlaced": false,
+              "size": 1258291200,
+              "audio": [
+                {
+                  "codec": "aac",
+                  "channels": 2,
+                  "language": "eng"
+                }
+              ],
+              "hardlinks": 1,
+              "tags": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "show-house-of-the-dragon",
+      "name": "House of the Dragon",
+      "tags": [
+        "Quality CPU"
+      ],
+      "seasons": [
+        {
+          "season": 1,
+          "tags": [],
+          "episodes": [
+            {
+              "id": "hotd-s01e01",
+              "season": 1,
+              "episode": 1,
+              "title": "The Heirs of the Dragon",
+              "path": "/media/shows/House of the Dragon/Season 01/House of the Dragon S01E01.mkv",
+              "width": 3840,
+              "height": 2160,
+              "resolution": "2160p",
+              "video_codec": "hevc",
+              "video_bitrate": 28500000,
+              "hdr": "hdr10",
+              "interlaced": false,
+              "size": 13743895347,
+              "audio": [
+                {
+                  "codec": "truehd",
+                  "channels": 8,
+                  "language": "eng",
+                  "title": "Atmos"
+                }
+              ],
+              "hardlinks": 1,
+              "tags": [
+                "Preserve Audio"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "show-top-gear",
+      "name": "Top Gear",
+      "tags": [],
+      "seasons": [
+        {
+          "season": 14,
+          "tags": [],
+          "episodes": [
+            {
+              "id": "top-gear-s14e01",
+              "season": 14,
+              "episode": 1,
+              "title": "Grand Tour of Romania",
+              "path": "/media/shows/Top Gear/Season 14/Top Gear S14E01.mkv",
+              "width": 1920,
+              "height": 1080,
+              "resolution": "1080i",
+              "video_codec": "h264",
+              "video_bitrate": 31000000,
+              "hdr": null,
+              "interlaced": true,
+              "size": 13851269529,
+              "audio": [
+                {
+                  "codec": "ac3",
+                  "channels": 2,
+                  "language": "eng"
+                }
+              ],
+              "hardlinks": 1,
+              "tags": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
