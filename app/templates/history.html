@@ -1,0 +1,10 @@
+{% extends 'base.html' %}
+{% block content %}
+<p class="notice">Simulation results for this app session. Sizes and savings are estimates; the source library stays unchanged.</p>
+<div class="stats" id="history-stats"></div>
+<div class="table-wrap"><table>
+  <caption class="sr-only">Simulated job history</caption>
+  <thead><tr><th scope="col">Media</th><th scope="col">State</th><th scope="col">Preset / backend</th><th scope="col">Source</th><th scope="col">Estimated output</th><th scope="col">Estimated saving</th><th scope="col">Video</th><th scope="col">Elapsed</th><th scope="col">Finished</th></tr></thead>
+  <tbody id="history-rows"><tr><td colspan="9" class="empty">Loading history…</td></tr></tbody>
+</table></div>
+{% endblock %}

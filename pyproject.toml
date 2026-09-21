@@ -23,3 +23,6 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["templates/*.html", "static/*.css", "static/*.js"]

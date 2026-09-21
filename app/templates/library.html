@@ -1,0 +1,79 @@
+{% extends 'base.html' %}
+{% block content %}
+{% set eligible = rows | selectattr('eligibility.eligible') | list %}
+<section class="stats" aria-label="Library summary">
+  <div class="card stat"><span>Library size</span><strong>{{ rows | sum(attribute='item.size') | size }}</strong><small>{{ rows | length }} {{ 'movies' if scope == 'movie' else 'episodes' }}</small></div>
+  <div class="card stat"><span>Estimated saving</span><strong class="saving">~{{ eligible | sum(attribute='eligibility.estimated_saving') | size }}</strong><small>Using suggested presets</small></div>
+  <div class="card stat"><span>Eligible</span><strong>{{ eligible | length }}</strong><small>Before queue exclusions</small></div>
+  <div class="card stat"><span>Blocked</span><strong>{{ rows | length - eligible | length }}</strong><small>Reasons shown below</small></div>
+</section>
+{% if scope == 'show' %}<a class="button back" href="/shows">← All shows</a>{% endif %}
+<section id="library" data-scope="{{ scope }}" aria-label="Media library">
+  <div class="toolbar">
+    <div class="filters">
+      <label class="sr-only" for="search">Search {{ title }}</label>
+      <input type="search" id="search" placeholder="Search {{ 'movies' if scope == 'movie' else 'episodes' }}…">
+      <label class="sr-only" for="filter">Filter media</label>
+      <select id="filter">
+        <option value="all">All media</option><option value="eligible">Eligible</option>
+        <option value="blocked">Blocked</option><option value="h264">H.264</option>
+        <option value="hevc">HEVC</option><option value="2160p">4K</option>
+        <option value="1080p">1080p</option><option value="hdr">HDR / DV</option>
+        <option value="hardlinked">Hardlinked</option><option value="queued">Queued / active</option>
+      </select>
+    </div>
+    <div class="actions"><span id="selection-count" class="muted">0 selected</span><button id="compress-selected" class="primary" disabled>Compress selected</button><button id="remove-selected" disabled>Remove queued selected</button></div>
+  </div>
+  <p class="muted table-note">Estimates use each row’s suggested preset with audio preserved. Open Review to see blockers or choose another preset.</p>
+  <div class="table-wrap">
+    <table>
+      <caption class="sr-only">{{ title }} media inventory and eligibility</caption>
+      <thead><tr>
+        <th scope="col"><input type="checkbox" id="select-all" aria-label="Select all visible items"></th>
+        <th scope="col">{{ 'Movie' if scope == 'movie' else 'Episode' }}</th>
+        {% if scope == 'movie' %}<th scope="col">Year</th><th scope="col">Source</th>{% endif %}
+        <th scope="col">Resolution</th><th scope="col">Codec</th>
+        {% if scope == 'movie' %}<th scope="col">HDR / DV</th>{% endif %}
+        <th scope="col">Bitrate</th><th scope="col">Size</th><th scope="col">Audio</th>
+        <th scope="col">{{ 'Policy / tags' if scope == 'movie' else 'Effective policy / tags' }}</th>
+        <th scope="col">Estimated saving</th><th scope="col">Action</th>
+      </tr></thead>
+      <tbody>
+        {% set season = namespace(number=none) %}
+        {% for row in rows %}
+        {% set item = row.item %}{% set result = row.eligibility %}
+        {% if scope == 'show' and season.number != item.season %}
+        {% set season.number = item.season %}
+        <tr class="season" data-season="{{ item.season }}"><th scope="rowgroup" colspan="10">Season {{ item.season }}</th></tr>
+        {% endif %}
+        <tr class="media-row" data-id="{{ item.id }}" data-season="{{ item.season if scope == 'show' else '' }}"
+            data-name="{{ row.entry.name }}" data-preset="{{ row.preset.id }}"
+            data-eligible="{{ 'true' if result.eligible else 'false' }}" data-codec="{{ item.video_codec }}"
+            data-resolution="{{ item.resolution }}" data-hdr="{{ item.hdr or '' }}" data-hardlinks="{{ item.hardlinks }}">
+          <td><input type="checkbox" class="media-select" aria-label="Select {{ row.entry.name }}"></td>
+          <th scope="row" class="media-name">
+            {% if scope == 'movie' %}{{ item.name }}{% else %}<span class="episode-code">S{{ '%02d' | format(item.season) }}E{{ '%02d' | format(item.episode) }}</span> {{ item.title or 'Untitled' }}{% endif %}
+            <small>{{ row.preset.name }}</small><span class="job-state"></span>
+          </th>
+          {% if scope == 'movie' %}<td>{{ item.year or '—' }}</td><td>{{ item.source or '—' }}</td>{% endif %}
+          <td><span class="badge">{{ item.resolution }}</span></td><td>{{ item.video_codec | label }}</td>
+          {% if scope == 'movie' %}<td><span class="{{ 'hdr' if item.hdr else 'muted' }}">{{ item.hdr | label }}</span></td>{% endif %}
+          <td class="numeric">{{ item.video_bitrate | bitrate }}</td><td class="numeric">{{ item.size | size }}</td>
+          <td class="audio">{% for track in item.audio %}<span>{{ track.codec | label }} · {{ track.channels }} ch{% if track.language %} · {{ track.language }}{% endif %}</span>{% else %}—{% endfor %}</td>
+          <td class="policy">
+            <div class="badges">{% for tag in row.entry.tags %}<span class="badge violet">{{ tag }}</span>{% endfor %}
+              {% if not result.eligible %}<span class="badge red">Blocked</span>{% else %}<span class="badge green">Eligible</span>{% endif %}
+            </div>
+            {% for reason in result.reasons %}<small class="reason">{{ reason }}</small>{% endfor %}
+          </td>
+          <td class="saving numeric">{% if result.eligible %}~{{ result.estimated_saving | size }}<small>{{ '%.0f' | format(result.estimated_saving_percent) }}%</small>{% else %}—{% endif %}</td>
+          <td class="row-action"><button data-action="compress" aria-label="Review compression for {{ row.entry.name }}">{{ 'Compress' if result.eligible else 'Review' }}</button></td>
+        </tr>
+        {% else %}<tr><td colspan="{{ 13 if scope == 'movie' else 10 }}" class="empty">No media in this seed library.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+    <p id="no-results" class="empty" hidden>No items match these filters.</p>
+  </div>
+</section>
+{% endblock %}
+{% block dialogs %}{% include 'compression.html' %}{% endblock %}

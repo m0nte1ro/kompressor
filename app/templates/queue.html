@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+{% block content %}
+<p class="notice">One CPU worker + one QSV worker. Progress is simulated; queue and history reset when the app restarts.</p>
+<div class="queue-grid" id="queue-lanes">
+  {% for backend, label in [('cpu', 'CPU Queue'), ('qsv', 'Intel QSV Queue')] %}
+  <section class="card lane" data-backend="{{ backend }}" aria-label="{{ label }}">
+    <header class="lane-head"><h2>{{ label }}</h2><span class="badge">1 worker</span></header>
+    <div class="active-slot"><p class="empty">Loading worker…</p></div>
+    <h3 class="section-label">Up next <span class="queued-count">0</span></h3>
+    <p class="muted">Move next → priority → estimated saving</p>
+    <ol class="queued-list"></ol>
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager, suppress
+from time import monotonic
 from typing import Literal
 
 from fastapi import (
@@ -8,12 +11,9 @@ from fastapi import (
     Query,
 )
 from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
 
-from app.config import settings
-from app.models.media import (
-    Episode,
-    Movie,
-)
+from app.config import PROJECT_ROOT, settings
 from app.repositories.preset_seed import (
     SeedPresetRepository,
 )
@@ -21,12 +21,12 @@ from app.repositories.seed import (
     SeedMediaRepository,
 )
 from app.services.policy import PolicyEngine
-
-
-app = FastAPI(
-    title=settings.app_name,
-    version="0.1.0",
-)
+from app.services.catalog import CatalogService
+from app.services.queue import QueueService
+from app.repositories.queue_fake import FakeQueueRepository
+from app.workers.fake import FakeEncoderWorker
+from app.routers.queue import router as queue_router
+from app.routers.web import router as web_router
 
 
 media_repository = SeedMediaRepository(
@@ -38,6 +38,38 @@ preset_repository = SeedPresetRepository(
 )
 
 policy_engine = PolicyEngine()
+catalog = CatalogService(media_repository, preset_repository, policy_engine)
+
+
+async def run_fake_workers(service: QueueService) -> None:
+    previous = monotonic()
+    while True:
+        await asyncio.sleep(1)
+        current = monotonic()
+        service.tick(current - previous)
+        previous = current
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    task = asyncio.create_task(run_fake_workers(application.state.queue_service))
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
+app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+app.state.catalog = catalog
+app.state.queue_service = QueueService(
+    FakeQueueRepository(PROJECT_ROOT / "fixtures" / "queue.json"),
+    catalog, FakeEncoderWorker(),
+)
+app.mount("/static", StaticFiles(directory=PROJECT_ROOT / "app" / "static"), name="static")
+app.include_router(queue_router)
+app.include_router(web_router)
 
 
 class EligibilityRequest(BaseModel):
@@ -52,50 +84,6 @@ class EligibilityRequest(BaseModel):
 
     preserve_audio: bool = False
     preserve_subtitles: bool = True
-
-
-def find_movie(
-    media_id: str,
-) -> Movie | None:
-    library = media_repository.get_library()
-
-    for movie in library.movies:
-        if movie.id == media_id:
-            return movie
-
-    return None
-
-
-def find_episode(
-    media_id: str,
-) -> tuple[
-    Episode,
-    list[str],
-] | None:
-    library = media_repository.get_library()
-
-    for show in library.shows:
-        for season in show.seasons:
-            for episode in season.episodes:
-                if episode.id != media_id:
-                    continue
-
-                effective_tags = list(
-                    dict.fromkeys(
-                        [
-                            *show.tags,
-                            *season.tags,
-                            *episode.tags,
-                        ]
-                    )
-                )
-
-                return (
-                    episode,
-                    effective_tags,
-                )
-
-    return None
 
 
 @app.get("/healthz")
@@ -189,70 +177,11 @@ def get_presets(
 def evaluate_eligibility(
     request: EligibilityRequest,
 ) -> dict:
-    preset = (
-        preset_repository.get_by_id(
-            request.preset_id,
-        )
-    )
-
-    if preset is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Preset not found.",
-        )
-
-    if request.scope == "movie":
-        movie = find_movie(
-            request.media_id,
-        )
-
-        if movie is None:
-            raise HTTPException(
-                status_code=404,
-                detail="Movie not found.",
-            )
-
-        result = policy_engine.evaluate(
-            item=movie,
-            scope="movie",
-            preset=preset,
-            effective_tags=movie.tags,
-            preserve_audio=(
-                request.preserve_audio
-            ),
-            preserve_subtitles=(
-                request.preserve_subtitles
-            ),
-        )
-
-        return result.model_dump()
-
-    episode_result = find_episode(
-        request.media_id,
-    )
-
-    if episode_result is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Episode not found.",
-        )
-
-    (
-        episode,
-        effective_tags,
-    ) = episode_result
-
-    result = policy_engine.evaluate(
-        item=episode,
-        scope="show",
-        preset=preset,
-        effective_tags=effective_tags,
-        preserve_audio=(
-            request.preserve_audio
-        ),
-        preserve_subtitles=(
-            request.preserve_subtitles
-        ),
-    )
-
-    return result.model_dump()
+    try:
+        preset = catalog.preset(request.preset_id)
+        entry = catalog.find(request.media_id, request.scope)
+    except LookupError as error:
+        raise HTTPException(404, str(error)) from error
+    return catalog.evaluate(
+        entry, preset, request.preserve_audio, request.preserve_subtitles,
+    ).model_dump()

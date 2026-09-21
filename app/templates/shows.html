@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="toolbar"><p class="muted">{{ cards | length }} series · open a series to browse all episodes</p><label class="sr-only" for="show-search">Search shows</label><input type="search" id="show-search" placeholder="Search shows…"></div>
+<section class="show-grid" aria-label="Shows">
+  {% for card in cards %}
+  <a href="/shows/{{ card.show.id | urlencode }}" class="card show-card" data-name="{{ card.show.name }}">
+    <span class="show-symbol" aria-hidden="true">▤</span><h2>{{ card.show.name }}</h2>
+    <p class="muted">{{ card.count }} episodes · {{ card.size | size }}</p>
+    <div class="badges">{% for tag in card.show.tags %}<span class="badge violet">{{ tag }}</span>{% else %}<span class="badge">Default show policies</span>{% endfor %}</div>
+    <span class="show-link">Browse episodes →</span>
+  </a>
+  {% else %}<p class="empty">No shows in this seed library.</p>{% endfor %}
+</section>
+<p id="no-shows" class="empty" hidden>No shows match your search.</p>
+{% endblock %}

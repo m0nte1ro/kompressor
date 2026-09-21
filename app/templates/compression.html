@@ -1,0 +1,21 @@
+<dialog id="compression-dialog" aria-labelledby="modal-title">
+  <form id="compression-form">
+    <header class="dialog-head"><div><h2 id="modal-title">Compress media</h2><p class="muted">Choose a preset. Technical settings belong to the preset.</p></div><button type="button" data-close aria-label="Close compression dialog">×</button></header>
+    <div class="dialog-body">
+      <section class="notice"><h3>Source</h3><div id="source-summary"></div></section>
+      <label class="field">Preset<select id="preset" required></select></label>
+      <div id="preset-properties" class="field-grid"></div>
+      <label class="check"><input type="checkbox" id="preserve-audio" checked> Preserve Audio · copy every audio track</label>
+      <p id="audio-rule" class="muted"></p>
+      <label class="check"><input type="checkbox" id="preserve-subtitles" checked> Preserve subtitles / chapters / attachments / metadata</label>
+      <section class="impact" aria-label="Estimated result for eligible unqueued items">
+        <div><small>Estimated output</small><strong id="estimated-output">—</strong></div>
+        <div><small>Estimated saving</small><strong id="estimated-saving" class="saving">—</strong></div>
+        <div><small>Estimated saving %</small><strong id="estimated-percent">—</strong></div>
+      </section>
+      <div id="eligibility" class="notice" aria-live="polite">Checking eligibility…</div>
+      <p id="modal-error" class="error" role="alert" hidden></p>
+    </div>
+    <footer class="dialog-foot"><button type="button" data-close>Cancel</button><button type="submit" class="primary" id="add-to-queue" disabled>Add to Queue</button></footer>
+  </form>
+</dialog>

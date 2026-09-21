@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% block content %}
+<p class="notice">Presets own all technical settings. This seed catalog is read-only; preset editing will be added later.</p>
+{% for scope, heading in [('movie', 'Movie presets'), ('show', 'Show presets')] %}
+<section class="preset-section" aria-label="{{ heading }}"><h2>{{ heading }}</h2><div class="preset-grid">
+  {% for preset in presets if preset.scope == scope %}
+  <article class="card preset-card"><header><h3>{{ preset.name }}</h3><span class="badge {{ 'green' if preset.enabled else 'red' }}">{{ 'Enabled' if preset.enabled else 'Disabled' }}</span></header>
+    <dl>
+      <dt>Backend</dt><dd>{{ preset.backend | label }}</dd>
+      <dt>Destination codec</dt><dd>{{ preset.destination_codec | label }}</dd>
+      <dt>Target bitrate</dt><dd>{{ preset.target_video_bitrate | bitrate }}</dd>
+      <dt>Resolution policy</dt><dd>{{ preset.resolution_policy | label }}</dd>
+      <dt>Audio policy</dt><dd>{{ preset.audio_policy | label }}{% if preset.target_audio_bitrate %} · {{ preset.target_audio_bitrate // 1000 }} kbps{% endif %}</dd>
+      <dt>HDR preservation</dt><dd>{{ 'Preserve HDR metadata' if preset.preserve_hdr_metadata else 'Not preserved' }}</dd>
+      <dt>Minimum source bitrate</dt><dd>{{ preset.minimum_source_bitrate | bitrate }}</dd>
+      <dt>Minimum expected saving</dt><dd>{{ '%g' | format(preset.minimum_expected_saving_percent) }}%</dd>
+      <dt>HEVC reencode allowed</dt><dd>{{ 'Yes' if preset.allow_hevc_reencode else 'No' }}</dd>
+    </dl>
+  </article>
+  {% endfor %}
+</div></section>
+<section class="notice"><h3>{{ 'Movie' if scope == 'movie' else 'Show' }} scope</h3>Only these presets are available when compressing {{ 'movies' if scope == 'movie' else 'episodes' }}.</section>
+{% endfor %}
+<section class="card future-settings"><h2>Workers & library</h2><p>Seed media repository · one simulated CPU worker · one simulated QSV worker.</p><p class="muted">Filesystem paths, scanning and production worker configuration will arrive with the production adapters. AV1 is unavailable in this workflow.</p></section>
+{% endblock %}
