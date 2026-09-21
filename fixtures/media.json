@@ -11,6 +11,7 @@
       "resolution": "2160p",
       "video_codec": "hevc",
       "video_bitrate": 55500000,
+      "duration_seconds": 9960,
       "hdr": "dolby_vision_hdr10",
       "interlaced": false,
       "size": 69041532928,
@@ -18,6 +19,7 @@
         {
           "codec": "truehd",
           "channels": 8,
+          "bitrate": 4200000,
           "language": "eng",
           "title": "Dolby Atmos"
         }
@@ -38,6 +40,7 @@
       "resolution": "1080p",
       "video_codec": "h264",
       "video_bitrate": 23900000,
+      "duration_seconds": 6540,
       "hdr": null,
       "interlaced": false,
       "size": 19542101196,
@@ -45,6 +48,7 @@
         {
           "codec": "dts_hd_ma",
           "channels": 2,
+          "bitrate": 1600000,
           "language": "eng"
         }
       ],
@@ -62,6 +66,7 @@
       "resolution": "1080p",
       "video_codec": "h264",
       "video_bitrate": 12000000,
+      "duration_seconds": 5400,
       "hdr": null,
       "interlaced": false,
       "size": 8589934592,
@@ -69,6 +74,7 @@
         {
           "codec": "eac3",
           "channels": 6,
+          "bitrate": 640000,
           "language": "eng"
         }
       ],
@@ -97,6 +103,7 @@
               "resolution": "1080p",
               "video_codec": "h264",
               "video_bitrate": 18200000,
+              "duration_seconds": 1320,
               "hdr": null,
               "interlaced": false,
               "size": 4187593113,
@@ -104,6 +111,7 @@
                 {
                   "codec": "eac3",
                   "channels": 6,
+                  "bitrate": 640000,
                   "language": "eng"
                 }
               ],
@@ -121,6 +129,7 @@
               "resolution": "1080p",
               "video_codec": "hevc",
               "video_bitrate": 2100000,
+              "duration_seconds": 1320,
               "hdr": null,
               "interlaced": false,
               "size": 1258291200,
@@ -128,6 +137,7 @@
                 {
                   "codec": "aac",
                   "channels": 2,
+                  "bitrate": 192000,
                   "language": "eng"
                 }
               ],
@@ -160,6 +170,7 @@
               "resolution": "2160p",
               "video_codec": "hevc",
               "video_bitrate": 28500000,
+              "duration_seconds": 3960,
               "hdr": "hdr10",
               "interlaced": false,
               "size": 13743895347,
@@ -167,6 +178,7 @@
                 {
                   "codec": "truehd",
                   "channels": 8,
+                  "bitrate": 4000000,
                   "language": "eng",
                   "title": "Atmos"
                 }
@@ -200,6 +212,7 @@
               "resolution": "1080i",
               "video_codec": "h264",
               "video_bitrate": 31000000,
+              "duration_seconds": 3720,
               "hdr": null,
               "interlaced": true,
               "size": 13851269529,
@@ -207,6 +220,7 @@
                 {
                   "codec": "ac3",
                   "channels": 2,
+                  "bitrate": 384000,
                   "language": "eng"
                 }
               ],

@@ -1,9 +1,17 @@
 from pathlib import Path
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    SettingsConfigDict,
+)
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = (
+    Path(__file__)
+    .resolve()
+    .parent
+    .parent
+)
 
 
 class Settings(BaseSettings):
@@ -23,6 +31,12 @@ class Settings(BaseSettings):
         PROJECT_ROOT
         / "fixtures"
         / "media.json"
+    )
+
+    seed_presets_path: Path = (
+        PROJECT_ROOT
+        / "fixtures"
+        / "presets.json"
     )
 
 
