@@ -180,6 +180,7 @@ class QueueService:
                 if job.status not in PENDING:
                     continue
                 before = job.model_dump()
+                result = None
                 try:
                     entry = self.catalog.find(job.media_id, job.scope)
                     requested = job.requested_preserve_audio
@@ -197,6 +198,7 @@ class QueueService:
                     job.reasons = reasons
                     job.finished_at = now()
                 elif job.status == "queued":
+                    assert result is not None
                     job.preserve_audio = result.preserve_audio
                     job.source_size = result.source_size
                     job.estimated_output_size = result.estimated_output_size
