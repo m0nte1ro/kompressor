@@ -1,11 +1,13 @@
 """Application facade. Transport, persistence and encoder details stay outside."""
 from app.models.media import MediaScope
+from app.models.preferences import LibraryPaths
 from app.models.preset import PresetSettings
 from app.models.queue import EnqueueRequest, Priority
 from app.models.tags import TAG_NAMES, TagTarget, TagUpdate
 from app.services.catalog import CatalogService
 from app.services.errors import InvalidOperation
 from app.services.presets import PresetService
+from app.repositories.preferences import SQLitePreferencesRepository
 from app.services.queue import QueueService
 from app.services.discovery import MediaScanner, ProbeService
 from app.services.tags import TagService
@@ -13,12 +15,14 @@ from app.services.tags import TagService
 
 class MediaProcessor:
     def __init__(self, catalog: CatalogService, presets: PresetService,
-                 queue: QueueService, scanner: MediaScanner, probe: ProbeService):
+                 queue: QueueService, scanner: MediaScanner, probe: ProbeService,
+                 preferences: SQLitePreferencesRepository | None = None):
         self.catalog = catalog
         self.presets = presets
         self.queue = queue
         self.scanner = scanner
         self.probe = probe
+        self.preferences = preferences
 
     def get_library(self):
         return self.catalog.library()
@@ -37,6 +41,14 @@ class MediaProcessor:
 
     def get_presets(self, scope: MediaScope | None = None):
         return self.presets.get_all(scope)
+
+    def get_library_paths(self) -> LibraryPaths:
+        return self.preferences.get_library_paths() if self.preferences else LibraryPaths()
+
+    def update_library_paths(self, paths: LibraryPaths) -> LibraryPaths:
+        if self.preferences is None:
+            raise InvalidOperation("Preferences storage is unavailable.")
+        return self.preferences.save_library_paths(paths)
 
     def create_preset(self, payload: PresetSettings):
         return self.presets.create(payload)

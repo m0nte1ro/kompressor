@@ -82,4 +82,4 @@ def history(request: Request):
 def settings(request: Request, processor: Processor):
     return render(request, "settings.html", "settings", "Settings",
                   subtitle="Presets and persistent library preferences",
-                  presets=processor.get_presets())
+                  presets=processor.get_presets(), library_paths=processor.get_library_paths())

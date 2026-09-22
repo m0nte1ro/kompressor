@@ -15,7 +15,7 @@ def test_pages_render_and_assets_are_served(client, url, title):
     assert 'href="/movies"' in response.text
 
 
-@pytest.mark.parametrize("asset,content_type", [("app.css", "text/css"), ("app.js", "javascript"), ("compression.js", "javascript"), ("queue.js", "javascript"), ("common.js", "javascript"), ("presets.js", "javascript"), ("tags.js", "javascript")])
+@pytest.mark.parametrize("asset,content_type", [("app.css", "text/css"), ("app.js", "javascript"), ("compression.js", "javascript"), ("queue.js", "javascript"), ("common.js", "javascript"), ("presets.js", "javascript"), ("settings.js", "javascript"), ("tags.js", "javascript")])
 def test_static_assets(client, asset, content_type):
     response = client.get(f"/static/{asset}")
     assert response.status_code == 200
@@ -59,7 +59,9 @@ def test_settings_groups_presets_and_shows_policy_fields(client):
     assert html[show_start:].count("Tone it down a bit + HEVC") >= 2
     assert "Source applicability" not in html
     assert "Planning estimate only" not in html
+    assert html.count('<details class="preset-section"') == 2
     assert '<details id="audio-conversion-options" class="notice" hidden>' in html
+    assert 'id="library-paths-form"' in html
     qsv_start = html.index('data-preset-id="show-streaming-quality"')
     qsv_card = html[qsv_start:html.index('</article>', qsv_start)]
     assert "Encoder effort" not in qsv_card

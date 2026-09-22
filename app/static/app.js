@@ -1,5 +1,6 @@
 import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js';
 import './presets.js';
+import './settings.js';
 import {setupTags} from './tags.js';
 import {compressionModal} from './compression.js';
 import {renderHistory, renderQueue} from './queue.js';

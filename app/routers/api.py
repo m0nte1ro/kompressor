@@ -1,3 +1,4 @@
+from app.models.preferences import LibraryPaths
 from typing import Literal
 
 from fastapi import APIRouter
@@ -36,6 +37,16 @@ def get_summary(processor: Processor):
 @router.get("/api/presets")
 def get_presets(processor: Processor, scope: Literal["movie", "show"] | None = None):
     return processor.get_presets(scope)
+
+
+@router.get("/api/settings")
+def get_settings(processor: Processor):
+    return processor.get_library_paths()
+
+
+@router.put("/api/settings")
+def update_settings(processor: Processor, payload: LibraryPaths):
+    return processor.update_library_paths(payload)
 
 
 @router.post("/api/eligibility")

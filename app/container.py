@@ -6,6 +6,7 @@ from app.models.preset import CompressionPreset
 from app.repositories.base import MediaRepository
 from app.repositories.database import Database
 from app.repositories.preset_seed import SeedPresetRepository
+from app.repositories.preferences import SQLitePreferencesRepository
 from app.repositories.seed import SeedMediaRepository
 from app.repositories.sqlite import SQLitePresetRepository, SQLiteQueueRepository, SQLiteTagRepository
 from app.services.catalog import CatalogService
@@ -26,7 +27,11 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
         raise ValueError("Only the seed media backend is implemented.")
     database = Database(database_path if database_path is not None else config.database_path)
     media_repository = media if media is not None else SeedMediaRepository(config.seed_media_path)
-    presets = SQLitePresetRepository(database, initial_presets if initial_presets is not None else SeedPresetRepository(config.seed_presets_path).get_all())
+    presets = SQLitePresetRepository(
+        database,
+        initial_presets if initial_presets is not None else SeedPresetRepository(config.seed_presets_path).get_all(),
+    )
+    preferences = SQLitePreferencesRepository(database)
     if initial_presets is None:
         from app.repositories.preset_migration import upgrade_streaming_presets
         upgrade_streaming_presets(database, SeedPresetRepository(config.seed_presets_path).get_all())
@@ -34,5 +39,11 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
     catalog = CatalogService(media_repository, presets, PolicyEngine(), tagger)
     queue = QueueService(SQLiteQueueRepository(database), catalog, FakeEncoderWorker(FakeEncoder()))
     queue.recover()
-    return MediaProcessor(catalog, PresetService(presets, database.transaction), queue,
-                          FakeMediaScanner(media_repository), FakeProbeService(media_repository))
+    return MediaProcessor(
+        catalog,
+        PresetService(presets, database.transaction),
+        queue,
+        FakeMediaScanner(media_repository),
+        FakeProbeService(media_repository),
+        preferences=preferences,
+    )

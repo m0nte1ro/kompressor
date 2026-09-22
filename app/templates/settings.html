@@ -2,7 +2,10 @@
 {% block content %}
 <p class="notice">Preset quality values and QSV settings are experimental starting points, not exact or Netflix-equivalent guarantees. Changes are saved locally. Queued jobs retain their original preset configuration.</p>
 {% for scope, heading in [('movie', 'Movie presets'), ('show', 'Show presets')] %}
-<section class="preset-section" aria-label="{{ heading }}"><div class="toolbar"><h2>{{ heading }}</h2><button class="primary" data-new-preset="{{ scope }}">+ New preset</button></div><div class="preset-grid">
+<details class="preset-section" aria-label="{{ heading }}" open>
+  <summary><h2>{{ heading }}</h2><span class="badge">{{ presets | selectattr('scope', 'equalto', scope) | list | length }} presets</span></summary>
+  <div class="toolbar"><span class="muted">{{ 'Movie' if scope == 'movie' else 'Show' }} quality and encoding presets</span><button class="primary" data-new-preset="{{ scope }}">+ New preset</button></div>
+  <div class="preset-grid">
   {% for preset in presets if preset.scope == scope %}
   <article class="card preset-card" data-preset-id="{{ preset.id }}"><header><h3>{{ preset.name }}</h3><span class="badge {{ 'green' if preset.enabled else 'red' }}">{{ 'Enabled' if preset.enabled else 'Disabled' }}</span></header>
     <dl>
@@ -26,10 +29,20 @@
     <div class="job-controls"><button data-edit-preset>Edit</button><button data-duplicate-preset>Duplicate</button><button data-toggle-preset>{{ "Disable" if preset.enabled else "Enable" }}</button></div>
   </article>
   {% endfor %}
-</div></section>
+</div>
 <section class="notice"><h3>{{ 'Movie' if scope == 'movie' else 'Show' }} scope</h3>Only these presets are available when compressing {{ 'movies' if scope == 'movie' else 'episodes' }}.</section>
+</details>
 {% endfor %}
-<section class="card future-settings"><h2>Workers & library</h2><p>Seed media repository · one simulated CPU worker · one simulated QSV worker.</p><p class="muted">Filesystem paths, scanning and production worker configuration will arrive with the production adapters. AV1 is unavailable in this workflow.</p></section>
+<section class="card library-settings" aria-labelledby="library-settings-title">
+  <h2 id="library-settings-title">Library paths</h2>
+  <p class="muted">Saved locally for the future media scanner. Changing these values does not scan or move media yet.</p>
+  <form id="library-paths-form" class="field-grid">
+    <label class="field">Movies path<input name="movies_path" value="{{ library_paths.movies_path }}" required maxlength="500"></label>
+    <label class="field">Shows path<input name="shows_path" value="{{ library_paths.shows_path }}" required maxlength="500"></label>
+    <div class="settings-actions"><button type="submit" class="primary">Save library paths</button><span id="library-paths-status" class="muted" role="status"></span></div>
+  </form>
+</section>
+<section class="card future-settings"><h2>Workers & library</h2><p>Seed media repository · one simulated CPU worker · one simulated QSV worker.</p><p class="muted">Scanning and production worker configuration will arrive with the production adapters. AV1 is unavailable in this workflow.</p></section>
 {% endblock %}
 
 {% block dialogs %}{% include 'preset_editor.html' %}{% endblock %}

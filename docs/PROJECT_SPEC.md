@@ -1179,10 +1179,16 @@ Useful sections:
 
 Paths
 
-Production only:
+Persisted library preferences:
 
 Movies path
 Shows path
+
+The Settings page stores these paths in SQLite. They configure the future scanner
+but do not trigger scanning or move media in the current seed workflow.
+
+Production-only workspace path:
+
 Workspace path
 Workers
 CPU workers

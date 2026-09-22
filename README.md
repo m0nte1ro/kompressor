@@ -49,6 +49,9 @@ are excluded from Git. Tests use isolated databases in temporary directories.
 - Settings separates movie/show presets and supports creating, editing,
   duplicating and enabling/disabling every preset. The initial presets are copied
   from the seed JSON once. Subsequent startups do not overwrite user edits.
+  Preset details are collapsed by default. The Settings page also persists the
+  Movies and Shows library paths in SQLite; these paths are currently stored for
+  the future scanner and do not trigger a scan yet.
   Built-in display names are user-owned: Just convert to HEVC, Tone it down a bit
   - HEVC, and Tone it down a bit + HEVC + Efficient Audio. Intent is stored
     separately from those names. All preserve source resolution.
