@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel
+from pydantic import Field
 
 
 class EligibilityResult(BaseModel):
@@ -23,3 +24,9 @@ class EligibilityResult(BaseModel):
 
     preserve_audio: bool
     preserve_subtitles: bool
+    estimated_output_size_low: int | None = None
+    estimated_output_size_high: int | None = None
+    estimated_saving_low: int | None = None
+    estimated_saving_high: int | None = None
+    estimate_basis: str = "bitrate"
+    audio_plan: list[dict] = Field(default_factory=list)

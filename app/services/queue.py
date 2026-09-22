@@ -85,6 +85,9 @@ class QueueService:
                     requested_preserve_audio=request.preserve_audio,
                     preserve_subtitles=result.preserve_subtitles,
                     source_size=result.source_size, source_codec=entry.item.video_codec,
+                    replace_source=request.replace_source, estimate_basis=result.estimate_basis,
+                    estimated_saving_low=result.estimated_saving_low,
+                    estimated_saving_high=result.estimated_saving_high,
                     estimated_output_size=result.estimated_output_size,
                     estimated_saving=result.estimated_saving, created_at=now(),
                 )
@@ -190,5 +193,8 @@ class QueueService:
                     job.source_size = result.source_size
                     job.estimated_output_size = result.estimated_output_size
                     job.estimated_saving = result.estimated_saving
+                    job.estimate_basis = result.estimate_basis
+                    job.estimated_saving_low = result.estimated_saving_low
+                    job.estimated_saving_high = result.estimated_saving_high
                 if job.model_dump() != before:
                     self.repository.save(job)

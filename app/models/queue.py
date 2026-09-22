@@ -18,6 +18,7 @@ class EnqueueRequest(BaseModel):
     preset_id: str
     preserve_audio: bool = True
     preserve_subtitles: bool = True
+    replace_source: bool = False
 
 
 class PriorityRequest(BaseModel):
@@ -39,6 +40,10 @@ class QueueJob(BaseModel):
     estimated_output_size: int
     estimated_saving: int
     source_codec: str
+    replace_source: bool = False
+    estimate_basis: str = "bitrate"
+    estimated_saving_low: int | None = None
+    estimated_saving_high: int | None = None
     priority: Priority = "normal"
     move_next_order: int = 0
     status: JobStatus = "queued"

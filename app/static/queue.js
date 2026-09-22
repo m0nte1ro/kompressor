@@ -3,7 +3,8 @@ import {$, $$, escapeHTML as esc, label, size} from './common.js';
 function jobDetails(job) {
   return `<div class="job-name">${esc(job.name)}</div>
     <p class="job-meta">${esc(job.preset.name)} · ${esc(label(job.backend))} · ${esc(label(job.preset.destination_codec))}</p>
-    <p class="saving">~${esc(size(job.estimated_saving))} estimated saving</p>`;
+    <p class="saving">${job.estimate_basis === 'planning_range' ? `${esc(size(job.estimated_saving_low))} – ${esc(size(job.estimated_saving_high))} planning reduction` : `~${esc(size(job.estimated_saving))} estimated reduction`}</p>
+    <p class="job-meta">${job.replace_source ? 'Replace after validation · simulated only' : 'Keep original · test copy · no storage reclaimed'}</p>`;
 }
 
 export function renderQueue(queue) {
@@ -49,13 +50,13 @@ export function renderHistory(queue) {
   const completed = queue.history.filter(j => j.status === 'completed');
   const saving = completed.reduce((sum, j) => sum + j.estimated_saving, 0);
   $('#history-stats').innerHTML = [
-    ['Estimated saving', `~${size(saving)}`], ['Completed simulations', completed.length],
+    ['Potential size reduction', `~${size(saving)}`], ['Completed simulations', completed.length],
     ['CPU / QSV completed', `${completed.filter(j => j.backend === 'cpu').length} / ${completed.filter(j => j.backend === 'qsv').length}`],
     ['Skipped / blocked', queue.history.filter(j => ['skipped', 'blocked'].includes(j.status)).length],
   ].map(([title, value]) => `<div class="card stat"><span>${esc(title)}</span><strong>${esc(value)}</strong></div>`).join('');
   rows.innerHTML = queue.history.map(job => `<tr>
     <th scope="row">${esc(job.name)}${(job.reasons ?? []).map(reason => `<small class="reason">${esc(reason)}</small>`).join('')}</th><td><span class="badge ${job.status === 'completed' ? 'green' : 'red'}">${esc(job.status)}</span></td>
-    <td>${esc(job.preset.name)}<small>${esc(label(job.backend))}</small></td><td>${esc(size(job.source_size))}</td>
+    <td>${esc(job.preset.name)}<small>${job.replace_source ? "Replace after validation · simulated" : "Keep original · no storage reclaimed"}</small><small>${esc(label(job.backend))}</small></td><td>${esc(size(job.source_size))}</td>
     <td>${job.status === 'completed' ? `~${esc(size(job.estimated_output_size))}` : '—'}</td>
     <td class="saving">${job.status === 'completed' ? `~${esc(size(job.estimated_saving))} (${(100 * job.estimated_saving / job.source_size).toFixed(1)}%)` : '—'}</td>
     <td>${esc(label(job.source_codec))} → ${esc(label(job.preset.destination_codec))}</td>

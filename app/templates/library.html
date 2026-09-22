@@ -3,7 +3,7 @@
 {% set eligible = rows | selectattr('eligibility.eligible') | list %}
 <section class="stats" aria-label="Library summary">
   <div class="card stat"><span>Library size</span><strong>{{ rows | sum(attribute='item.size') | size }}</strong><small>{{ rows | length }} {{ 'movies' if scope == 'movie' else 'episodes' }}</small></div>
-  <div class="card stat"><span>Estimated saving</span><strong class="saving">~{{ eligible | sum(attribute='eligibility.estimated_saving') | size }}</strong><small>Using suggested presets</small></div>
+  <div class="card stat"><span>Estimated saving</span><strong class="saving">~{{ eligible | sum(attribute='eligibility.estimated_saving') | size }}</strong><small>Planning midpoint · not measured</small></div>
   <div class="card stat"><span>Eligible</span><strong>{{ eligible | length }}</strong><small>Before queue exclusions</small></div>
   <div class="card stat"><span>Blocked</span><strong>{{ rows | length - eligible | length }}</strong><small>Reasons shown below</small></div>
 </section>
@@ -24,7 +24,7 @@
     </div>
     <div class="actions"><span id="selection-count" class="muted">0 selected</span><button id="tags-selected" disabled>Tag selected</button><button id="compress-selected" class="primary" disabled>Compress selected</button><button id="remove-selected" disabled>Remove queued selected</button></div>
   </div>
-  <p class="muted table-note">Estimates use each row’s suggested preset with audio preserved. Open Review to see blockers or choose another preset.</p>
+  <p class="muted table-note">Estimates use each row’s suggested preset with audio preserved. Quality-mode ranges are planning assumptions, not measured output or hard bounds. Open Review to see blockers or choose another preset.</p>
   <div class="table-wrap">
     <table>
       <caption class="sr-only">{{ title }} media inventory and eligibility</caption>
@@ -67,7 +67,7 @@
             <button class="tag-edit" data-tag-kind="{{ 'movie' if scope == 'movie' else 'episode' }}" data-tag-id="{{ item.id }}">Manage tags</button>
             {% for reason in result.reasons %}<small class="reason">{{ reason }}</small>{% endfor %}
           </td>
-          <td class="saving numeric">{% if result.eligible %}~{{ result.estimated_saving | size }}<small>{{ '%.0f' | format(result.estimated_saving_percent) }}%</small>{% else %}—{% endif %}</td>
+          <td class="saving numeric">{% if result.eligible %}{% if result.estimate_basis == 'planning_range' %}{{ result.estimated_saving_low | size }}–{{ result.estimated_saving_high | size }}<small>Planning range</small>{% else %}~{{ result.estimated_saving | size }}<small>{{ '%.0f' | format(result.estimated_saving_percent) }}%</small>{% endif %}{% else %}—{% endif %}</td>
           <td class="row-action"><button data-action="compress" aria-label="Review compression for {{ row.entry.name }}">{{ 'Compress' if result.eligible else 'Review' }}</button></td>
         </tr>
         {% else %}<tr><td colspan="{{ 13 if scope == 'movie' else 10 }}" class="empty">No media in this seed library.</td></tr>{% endfor %}

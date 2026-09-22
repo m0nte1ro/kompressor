@@ -6,9 +6,9 @@ from app.models.queue import EnqueueRequest
 from app.repositories.database import Database
 
 
-def test_restart_preserves_preferences_queue_order_and_history(tmp_path):
+def test_restart_preserves_preferences_queue_order_and_history(tmp_path, legacy_defaults):
     path = tmp_path / "state.sqlite3"
-    app = create_app(path, start_workers=False)
+    app = create_app(path, start_workers=False, initial_presets=legacy_defaults)
     with TestClient(app) as client:
         preset = client.get("/api/presets?scope=movie").json()[0]
         id = preset.pop("id")
@@ -32,7 +32,7 @@ def test_restart_preserves_preferences_queue_order_and_history(tmp_path):
         active_qsv = app.state.queue_service.snapshot()["lanes"][1]["active"]
         client.post(f"/api/queue/{active_qsv['id']}/skip")
         client.post("/api/queue", json=show_payload)
-    second = create_app(path, start_workers=False)
+    second = create_app(path, start_workers=False, initial_presets=legacy_defaults)
     with TestClient(second) as client:
         presets = client.get("/api/presets").json()
         assert len(presets) == 7
@@ -54,7 +54,7 @@ def test_restart_preserves_preferences_queue_order_and_history(tmp_path):
         second.state.queue_service.tick(0)
         second.state.queue_service.tick(185)
         assert all(lane["active"] is None for lane in second.state.queue_service.snapshot()["lanes"])
-    with TestClient(create_app(path, start_workers=False)) as client:
+    with TestClient(create_app(path, start_workers=False, initial_presets=legacy_defaults)) as client:
         history = client.get("/api/queue").json()["history"]
         assert sum(j["status"] == "completed" for j in history) == 2
 

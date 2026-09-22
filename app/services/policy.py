@@ -7,6 +7,7 @@ from app.models.media import (
 from app.models.policy import EligibilityResult
 from app.models.preset import CompressionPreset
 from app.models.tags import QualityFloor
+from app.services.estimation import estimate
 
 
 MediaItem = Movie | Episode
@@ -26,6 +27,16 @@ class PolicyEngine:
     ) -> EligibilityResult:
         reasons: list[str] = []
         warnings: list[str] = []
+        if item.resolution not in preset.source_resolutions:
+            reasons.append("Source resolution is not supported by this preset. Configure explicit applicability.")
+        if item.hdr and preset.hdr_support == "sdr_only":
+            reasons.append("This preset supports SDR sources only.")
+        elif item.hdr:
+            warnings.append("HDR10 pipeline is experimental and must be validated on actual output.")
+        if preset.rate_control != "abr":
+            warnings.append("Planning range only: quality-based output may fall outside it. Actual savings must be checked after encoding.")
+        if preset.backend == "qsv":
+            warnings.append("QSV quality and rate-control support require validation on your Intel hardware.")
 
         if "Quality CPU" in effective_tags and preset.backend != "cpu":
             reasons.append("Quality CPU policy requires a CPU preset.")
@@ -34,10 +45,12 @@ class PolicyEngine:
             if quality_floor is None:
                 reasons.append("Quality Floor requires configured bitrate and resolution limits.")
             else:
-                height = min(item.height, {"max_720p": 720, "max_1080p": 1080}.get(preset.resolution_policy, item.height))
+                height = min(item.height, {"max_480p": 480, "max_720p": 720, "max_1080p": 1080}.get(preset.resolution_policy, item.height))
                 if height < quality_floor.minimum_height:
                     reasons.append("Output resolution is below the inherited Quality Floor.")
-                if preset.target_video_bitrate < quality_floor.minimum_video_bitrate:
+                if preset.rate_control != "abr":
+                    reasons.append("Quality Floor bitrate cannot be guaranteed by CRF/ICQ. Use a bitrate preset or revise the tag.")
+                elif preset.target_video_bitrate < quality_floor.minimum_video_bitrate:
                     reasons.append("Target video bitrate is below the inherited Quality Floor.")
 
         if preset.scope != scope:
@@ -123,23 +136,12 @@ class PolicyEngine:
                 "Preserve Audio tag overrides the modal audio setting."
             )
 
-        (
-            estimated_output_size,
-            estimated_saving,
-            estimated_saving_percent,
-        ) = self._estimate_output(
-            item=item,
-            preset=preset,
-            preserve_audio=effective_preserve_audio,
-        )
-
-        if (
-            estimated_saving_percent
-            < preset.minimum_expected_saving_percent
-        ):
-            reasons.append(
-                "Estimated saving is below preset minimum."
-            )
+        estimates = estimate(item, preset, effective_preserve_audio)
+        if estimates["estimated_saving_percent"] < preset.minimum_expected_saving_percent:
+            if preset.rate_control == "abr":
+                reasons.append("Estimated saving is below preset minimum.")
+            else:
+                warnings.append("Planning estimate is below the minimum saving. Actual output must meet the threshold before replacement.")
 
         return EligibilityResult(
             eligible=not reasons,
@@ -152,98 +154,11 @@ class PolicyEngine:
                 preset.destination_codec
             ),
             source_size=item.size,
-            estimated_output_size=(
-                estimated_output_size
-            ),
-            estimated_saving=estimated_saving,
-            estimated_saving_percent=(
-                estimated_saving_percent
-            ),
+            **estimates,
             preserve_audio=(
                 effective_preserve_audio
             ),
             preserve_subtitles=(
                 preserve_subtitles
             ),
-        )
-
-    def _estimate_output(
-        self,
-        *,
-        item: MediaItem,
-        preset: CompressionPreset,
-        preserve_audio: bool,
-    ) -> tuple[int, int, float]:
-        duration = item.duration_seconds
-
-        source_video_bytes = int(
-            (
-                item.video_bitrate
-                * duration
-            )
-            / 8
-        )
-
-        source_non_video_bytes = max(
-            0,
-            item.size - source_video_bytes,
-        )
-
-        target_video_bytes = int(
-            (
-                preset.target_video_bitrate
-                * duration
-            )
-            / 8
-        )
-
-        if preserve_audio:
-            target_non_video_bytes = (
-                source_non_video_bytes
-            )
-        else:
-            target_audio_bitrate = (
-                preset.target_audio_bitrate
-                or 384_000
-            )
-
-            target_non_video_bytes = int(
-                (
-                    target_audio_bitrate
-                    * duration
-                )
-                / 8
-            )
-
-        estimated_output = int(
-            (
-                target_video_bytes
-                + target_non_video_bytes
-            )
-            * 1.01
-        )
-
-        estimated_output = min(
-            estimated_output,
-            item.size,
-        )
-
-        estimated_saving = max(
-            0,
-            item.size - estimated_output,
-        )
-
-        if item.size:
-            estimated_saving_percent = (
-                estimated_saving
-                / item.size
-                * 100
-            )
-        else:
-            estimated_saving_percent = 0.0
-
-        return (
-            estimated_output,
-            estimated_saving,
-            estimated_saving_percent,
         )

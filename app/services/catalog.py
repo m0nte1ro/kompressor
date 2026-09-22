@@ -80,6 +80,8 @@ class CatalogService:
                 source_size=entry.item.size, estimated_output_size=None, estimated_saving=None,
                 estimated_saving_percent=None, preserve_audio=True, preserve_subtitles=True,
             )
+        presets.sort(key=lambda p: (entry.item.resolution not in p.source_resolutions,
+                                    bool(entry.item.hdr) and p.hdr_support == "sdr_only"))
         fallback = None
         for preset in presets:
             result = self.evaluate(entry, preset)

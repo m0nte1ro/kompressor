@@ -10,6 +10,8 @@ router = APIRouter(prefix="/api", tags=["Presets and tags"])
 
 
 def ensure_supported(payload: PresetSettings):
+    if payload.enabled and not payload.source_resolutions:
+        raise HTTPException(422, "Choose at least one supported source resolution.")
     if payload.enabled and payload.destination_codec == "av1":
         raise HTTPException(422, "AV1 presets cannot be enabled yet.")
 

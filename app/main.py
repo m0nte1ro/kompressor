@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.config import PROJECT_ROOT, settings
+from app.models.preset import CompressionPreset
 from app.repositories.base import MediaRepository
 from app.repositories.database import Database
 from app.repositories.preset_seed import SeedPresetRepository
@@ -35,12 +36,15 @@ async def run_fake_workers(service: QueueService) -> None:
 
 
 def create_app(database_path: Path | None = None, *, media: MediaRepository | None = None,
-               start_workers: bool = True) -> FastAPI:
+               start_workers: bool = True, initial_presets: list[CompressionPreset] | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         database = Database(database_path if database_path is not None else settings.database_path)
         media_repository = media if media is not None else SeedMediaRepository(settings.seed_media_path)
-        presets = SQLitePresetRepository(database, SeedPresetRepository(settings.seed_presets_path).get_all())
+        presets = SQLitePresetRepository(database, initial_presets if initial_presets is not None else SeedPresetRepository(settings.seed_presets_path).get_all())
+        if initial_presets is None:
+            from app.repositories.preset_migration import upgrade_streaming_presets
+            upgrade_streaming_presets(database, SeedPresetRepository(settings.seed_presets_path).get_all())
         tagger = TagService(media_repository, SQLiteTagRepository(database))
         catalog = CatalogService(media_repository, presets, PolicyEngine(), tagger)
         queue = QueueService(SQLiteQueueRepository(database), catalog, FakeEncoderWorker())

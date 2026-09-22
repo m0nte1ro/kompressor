@@ -16,8 +16,9 @@ export function compressionModal(scope, refreshQueue) {
   function properties(preset) {
     const fields = [
       ['Backend', label(preset.backend)], ['Destination codec', label(preset.destination_codec)],
-      ['Target bitrate', bitrate(preset.target_video_bitrate)], ['Resolution policy', label(preset.resolution_policy)],
-      ['Audio policy', label(preset.audio_policy)], ['HDR policy', preset.preserve_hdr_metadata ? 'Preserve HDR metadata' : 'Not preserved'],
+      ['Rate control', `${preset.rate_control.toUpperCase()} ${preset.quality_value ?? bitrate(preset.target_video_bitrate)} · ${preset.encoder_preset} · ${preset.output_bit_depth} bit`], ['Resolution policy', label(preset.resolution_policy)],
+      ['Audio policy', preset.audio_policy === 'preserve' ? 'Copy all audio tracks' : `All tracks · AAC stereo ${preset.stereo_audio_bitrate / 1000}k / E-AC3 surround ${preset.target_audio_bitrate / 1000}k · no downmix`], ['HDR policy', preset.preserve_hdr_metadata ? 'Preserve HDR metadata' : 'Not preserved'],
+      ['Source applicability', `${preset.source_resolutions.join(', ') || 'Needs review'} · ${preset.hdr_support}`],
     ];
     $('#preset-properties').innerHTML = fields.map(([name, value]) =>
       `<label class="field">${esc(name)}<select disabled><option>${esc(value)}</option></select></label>`).join('');
@@ -48,11 +49,11 @@ export function compressionModal(scope, refreshQueue) {
         reasons: [...result.reasons, ...(pending.has(result.row.dataset.id) ? ['Already queued or active.'] : [])]}));
       const included = results.filter(r => !r.excluded);
       const total = key => included.reduce((sum, r) => sum + (r[key] ?? 0), 0);
-      $('#estimated-output').textContent = included.length ? `~${size(total('estimated_output_size'))}` : '—';
-      $('#estimated-saving').textContent = included.length ? `~${size(total('estimated_saving'))}` : '—';
-      $('#estimated-percent').textContent = total('source_size') ? `${(total('estimated_saving') / total('source_size') * 100).toFixed(1)}%` : '—';
+      $('#estimated-output').textContent = included.length ? `${size(total('estimated_output_size_low'))} – ${size(total('estimated_output_size_high'))}` : '—';
+      $('#estimated-saving').textContent = included.length ? `${size(total('estimated_saving_low'))} – ${size(total('estimated_saving_high'))}` : '—';
+      $('#estimated-percent').textContent = total('source_size') ? `${(total('estimated_saving_low') / total('source_size') * 100).toFixed(0)}–${(total('estimated_saving_high') / total('source_size') * 100).toFixed(0)}%` : '—';
       $('#eligibility').innerHTML = `<strong>${included.length} eligible · ${results.length - included.length} excluded</strong>
-        <p class="muted">Estimates above include eligible, unqueued items only.</p>
+        <p class="muted">Planning estimates for eligible, unqueued items only. CRF/ICQ ranges are assumptions, not output bounds. Keeping originals reclaims 0 bytes.</p>
         <div class="eligibility-items">${results.map(r => `<div class="eligibility-item">
           <strong>${esc(r.row.dataset.name)}</strong> <span class="badge ${r.excluded ? 'red' : 'green'}">${r.excluded ? 'Excluded' : 'Eligible'}</span>
           <p class="muted">Audio: ${r.preserve_audio ? 'preserved by effective policy' : 'preset conversion policy'} · Estimated saving ~${esc(size(r.estimated_saving))}</p>
@@ -86,7 +87,7 @@ export function compressionModal(scope, refreshQueue) {
     if (submit.disabled || submitting) return;
     submitting = true;
     submit.disabled = true;
-    const controls = $$('button, #preset, input', form);
+    const controls = $$('button, #preset, #replace-source, input', form);
     controls.forEach(control => control.disabled = true);
     error('');
     let failure = '';
@@ -94,6 +95,7 @@ export function compressionModal(scope, refreshQueue) {
       const response = await api('/api/queue', {method: 'POST', body: JSON.stringify({
         media_ids: selected.map(row => row.dataset.id), scope, preset_id: $('#preset').value,
         preserve_audio: $('#preserve-audio').checked, preserve_subtitles: $('#preserve-subtitles').checked,
+        replace_source: $('#replace-source').value === 'true',
       })});
       const exclusions = response.excluded.map(item => {
         const row = selected.find(r => r.dataset.id === item.media_id);
@@ -132,6 +134,7 @@ export function compressionModal(scope, refreshQueue) {
     ['estimated-output', 'estimated-saving', 'estimated-percent'].forEach(id => $(`#${id}`).textContent = '—');
     $('#preserve-audio').checked = true;
     $('#preserve-subtitles').checked = true;
+    $('#replace-source').value = 'false';
     dialog.showModal();
     try {
       const loaded = await Promise.all([api(`/api/presets?scope=${encodeURIComponent(scope)}`), library ? Promise.resolve(library) : api('/api/library')]);

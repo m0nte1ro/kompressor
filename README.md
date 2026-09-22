@@ -3,6 +3,9 @@
 A compact, seed-backed media inventory and compression WebUI using FastAPI,
 Jinja2, vanilla JavaScript and CSS. No frontend build step or external APIs.
 
+See the [streaming preset report](docs/STREAMING_PRESETS_REPORT.md) for the default
+quality settings, their rationale, the King of Comedy example and limitations.
+
 ## Run locally
 
 Requires Python 3.12 or newer:
@@ -47,6 +50,9 @@ are excluded from Git. Tests use isolated databases in temporary directories.
   from the seed JSON once. Subsequent startups do not overwrite user edits.
   Existing jobs keep a complete preset snapshot, even if that preset is later
   edited, moved to another scope or disabled. Disable affects new submissions.
+  The streaming-profile upgrade adds new presets and disables untouched legacy
+  defaults once; user edits are preserved. Legacy custom presets need explicit
+  source resolutions before they can be used again.
 - Movies and episodes have Manage tags; episode pages also expose series and
   season tags. Select multiple rows to add/remove tags without replacing unrelated
   direct tags. The editor shows direct tags, inherited tags and their origin.
@@ -64,6 +70,23 @@ or hardlink protections.
 - **Quality Floor** requires explicit minimum output video bitrate and resolution.
   Inheritance takes the highest bitrate and resolution independently. A preset
   that would downscale below that resolution or target a lower bitrate is blocked.
+  CRF/ICQ presets are also blocked because a planning range cannot guarantee a
+  bitrate floor. The tag is not a perceptual-quality measurement.
+
+## Quality modes and test output
+
+Presets support CPU CRF, QSV ICQ and explicit ABR, along with encoder effort,
+output bit depth, source resolutions and SDR/experimental-HDR10 applicability.
+Quality modes carry planning bitrate ranges separately from encoder settings.
+Estimates retain known audio and non-video residual data and no longer clamp
+oversized outputs to the source size. Actual quality-mode savings must be checked
+after encoding; pre-encode minimum-saving shortfalls produce a warning.
+
+Jobs default to `replace_source: false` (keep the original and plan a separate
+test output). `true` records replacement-after-validation intent. Both remain
+simulated; no source or output file is touched. Keeping originals reclaims zero
+storage, and real test outputs will need additional free space. The future real
+worker must validate streams/metadata and actual savings before replacing sources.
 
 Tag writes and pending-job revalidation share a transaction. Queued jobs get
 updated effective audio policy and savings. Jobs that become ineligible move to

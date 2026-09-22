@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block content %}
-<p class="notice">Presets own all technical settings. Changes are saved locally. Queued jobs retain their original preset configuration.</p>
+<p class="notice">Streaming-style presets are experimental starting points, not a guarantee of Netflix-equivalent quality. Changes are saved locally. Queued jobs retain their original preset configuration.</p>
 {% for scope, heading in [('movie', 'Movie presets'), ('show', 'Show presets')] %}
 <section class="preset-section" aria-label="{{ heading }}"><div class="toolbar"><h2>{{ heading }}</h2><button class="primary" data-new-preset="{{ scope }}">+ New preset</button></div><div class="preset-grid">
   {% for preset in presets if preset.scope == scope %}
@@ -8,8 +8,13 @@
     <dl>
       <dt>Backend</dt><dd>{{ preset.backend | label }}</dd>
       <dt>Destination codec</dt><dd>{{ preset.destination_codec | label }}</dd>
-      <dt>Target bitrate</dt><dd>{{ preset.target_video_bitrate | bitrate }}</dd>
+      <dt>Source resolutions</dt><dd>{{ preset.source_resolutions | join(', ') or 'Needs review' }}</dd>
+      <dt>HDR applicability</dt><dd>{{ preset.hdr_support }}</dd>
+      <dt>Rate control</dt><dd>{{ preset.rate_control | upper }}{% if preset.quality_value is not none %} {{ preset.quality_value }}{% endif %} · {{ preset.encoder_preset }} · {{ preset.output_bit_depth }} bit</dd>
+      {% if preset.rate_control == 'abr' %}<dt>Target bitrate</dt><dd>{{ preset.target_video_bitrate | bitrate }}</dd>
+      {% else %}<dt>Planning bitrate range</dt><dd>{{ preset.planning_video_bitrate_low | bitrate }} – {{ preset.planning_video_bitrate_high | bitrate }} · unmeasured</dd>{% endif %}
       <dt>Resolution policy</dt><dd>{{ preset.resolution_policy | label }}</dd>
+      <dt>Stereo AAC target</dt><dd>{{ preset.stereo_audio_bitrate // 1000 }} kbps</dd>
       <dt>Audio policy</dt><dd>{{ preset.audio_policy | label }}{% if preset.target_audio_bitrate %} · {{ preset.target_audio_bitrate // 1000 }} kbps{% endif %}</dd>
       <dt>HDR preservation</dt><dd>{{ 'Preserve HDR metadata' if preset.preserve_hdr_metadata else 'Not preserved' }}</dd>
       <dt>Minimum source bitrate</dt><dd>{{ preset.minimum_source_bitrate | bitrate }}</dd>

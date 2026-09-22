@@ -8,6 +8,8 @@
       <label class="check"><input type="checkbox" id="preserve-audio" checked> Preserve Audio · copy every audio track</label>
       <p id="audio-rule" class="muted"></p>
       <label class="check"><input type="checkbox" id="preserve-subtitles" checked> Preserve subtitles / chapters / attachments / metadata</label>
+      <label class="field">Output handling<select id="replace-source"><option value="false">Keep original · separate test output (default)</option><option value="true">Replace source after validation</option></select></label>
+      <p class="notice">Workers are simulated: neither option creates, replaces or deletes a file yet. Keeping the original reclaims no storage; a real test output will need additional free space. Future replacement must pass validation and the minimum saving threshold.</p>
       <section class="impact" aria-label="Estimated result for eligible unqueued items">
         <div><small>Estimated output</small><strong id="estimated-output">—</strong></div>
         <div><small>Estimated saving</small><strong id="estimated-saving" class="saving">—</strong></div>

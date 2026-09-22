@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from app import main
 from app.models.media import MediaLibrary
 from app.repositories.seed import SeedMediaRepository
+from app.repositories.preset_seed import SeedPresetRepository
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,9 +21,18 @@ class MemoryMedia:
 
 
 @pytest.fixture
-def runtime(tmp_path):
+def legacy_defaults():
+    # Existing regression tests exercise explicit bitrate presets. Production defaults
+    # and upgrades are tested independently in test_streaming_presets.py.
+    return [p.model_copy(update={"source_resolutions": ["480p", "720p", "1080p", "2160p"],
+                                "hdr_support": "hdr10_experimental"})
+            for p in SeedPresetRepository(ROOT / "fixtures/presets-legacy.json").get_all()]
+
+
+@pytest.fixture
+def runtime(tmp_path, legacy_defaults):
     media = MemoryMedia(SeedMediaRepository(ROOT / "fixtures/media.json").get_library())
-    application = main.create_app(tmp_path / "state.sqlite3", media=media, start_workers=False)
+    application = main.create_app(tmp_path / "state.sqlite3", media=media, start_workers=False, initial_presets=legacy_defaults)
     with TestClient(application) as client:
         yield application, client
 
