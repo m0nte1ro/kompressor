@@ -5,6 +5,8 @@ from app.config import Settings
 from app.models.preset import CompressionPreset
 from app.repositories.base import MediaRepository
 from app.repositories.database import Database
+from app.repositories.inventory import SQLiteInventoryRepository
+from app.services.reconciliation import ReconciliationService
 from app.repositories.preset_seed import SeedPresetRepository
 from app.repositories.preferences import SQLitePreferencesRepository
 from app.repositories.seed import SeedMediaRepository
@@ -46,4 +48,5 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
         FakeMediaScanner(media_repository),
         FakeProbeService(media_repository),
         preferences=preferences,
+        inventory=ReconciliationService(SQLiteInventoryRepository(database)),
     )

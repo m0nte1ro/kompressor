@@ -1,5 +1,7 @@
 """Application facade. Transport, persistence and encoder details stay outside."""
 from app.models.media import MediaScope
+from app.models.inventory import ReconciliationResult, ScanSnapshot
+from app.services.reconciliation import ReconciliationService
 from app.models.preferences import LibraryPaths
 from app.models.preset import PresetSettings
 from app.models.queue import EnqueueRequest, Priority
@@ -16,13 +18,15 @@ from app.services.tags import TagService
 class MediaProcessor:
     def __init__(self, catalog: CatalogService, presets: PresetService,
                  queue: QueueService, scanner: MediaScanner, probe: ProbeService,
-                 preferences: SQLitePreferencesRepository | None = None):
+                 preferences: SQLitePreferencesRepository | None = None,
+                 inventory: ReconciliationService | None = None):
         self.catalog = catalog
         self.presets = presets
         self.queue = queue
         self.scanner = scanner
         self.probe = probe
         self.preferences = preferences
+        self.inventory = inventory
 
     def get_library(self):
         return self.catalog.library()
@@ -106,3 +110,9 @@ class MediaProcessor:
     def scan_library(self):
         # Seed discovery only; no new HTTP scan workflow or filesystem side effects.
         return self.scanner.scan()
+
+    def reconcile_library(self, snapshot: ScanSnapshot) -> ReconciliationResult:
+        """Apply observations supplied by fixtures; never initiate filesystem IO."""
+        if self.inventory is None:
+            raise InvalidOperation("Reconciliation service is unavailable.")
+        return self.inventory.reconcile(snapshot)

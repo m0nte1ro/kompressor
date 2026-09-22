@@ -52,6 +52,19 @@ Movies are treated significantly more conservatively than TV shows.
 
 ---
 
+## Fixture reconciliation milestone
+
+A separate reconciliation inventory now models persistent logical `file_id`
+records, content `revision_id` versions and independent output `artifact_id`
+identities. It consumes fixture snapshots through MediaProcessor, with tiered
+fingerprint evidence, conservative rename matching and root-scoped absence rules.
+Raw probe/HDR facts are separate from semantic media identity and derived HDR
+classification. Source revision and hardlinks must be freshly revalidated both
+before processing and immediately before any future replacement. The existing
+seed catalogue/queue remains unchanged; real scanning, probing and replacement
+are not implemented. See [RECONCILIATION.md](RECONCILIATION.md) for contracts,
+safety boundaries and remaining production work.
+
 ## Application boundary and composition
 
 ```text

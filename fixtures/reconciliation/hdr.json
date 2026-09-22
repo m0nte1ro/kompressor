@@ -1,0 +1,11 @@
+{
+  "hdr10": {"transfer": "smpte2084", "primaries": "bt2020", "matrix": "bt2020nc", "bit_depth": 10,
+            "mastering_display": {"max_luminance": "1000/1"}, "content_light": {"max_cll": 1000},
+            "dolby_vision_rpu": false, "hdr10plus_metadata": false, "inspection_complete": true},
+  "dv_plus": {"transfer": "smpte2084", "primaries": "bt2020", "bit_depth": 10,
+              "dolby_vision_config": {"profile": 8, "compatibility_id": 1},
+              "dolby_vision_rpu": true, "hdr10plus_metadata": true, "inspection_complete": true},
+  "incomplete": {"transfer": "smpte2084", "primaries": "bt2020", "bit_depth": 10},
+  "hlg": {"transfer": "arib-std-b67", "bit_depth": 10,
+          "dolby_vision_rpu": false, "hdr10plus_metadata": false, "inspection_complete": true}
+}

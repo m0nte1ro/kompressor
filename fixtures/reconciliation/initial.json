@@ -1,0 +1,31 @@
+{
+  "root_id": "movies-fixture", "sequence": 1, "status": "complete",
+  "files": [{
+    "root_id": "movies-fixture", "relative_path": "Comedy/original.mkv",
+    "media_id": "movie-king-of-comedy", "scope": "movie",
+    "filesystem_id": "fixture-fs-a", "inode": 101, "generation": "birth-1",
+    "size": 19542101196, "mtime_ns": 1000000000, "hardlinks": 1,
+    "fingerprints": {},
+    "probe": {
+      "container": "matroska", "duration_seconds": 6540,
+      "streams": [
+        {"index": 0, "kind": "video", "codec": "h264", "width": 1920, "height": 1080,
+         "resolution_class": 1080, "scan_type": "interlaced", "field_order": "top_first",
+         "hdr": {"transfer": "bt709", "primaries": "bt709", "bit_depth": 8,
+                 "dolby_vision_rpu": false, "hdr10plus_metadata": false, "inspection_complete": true}},
+        {"index": 1, "kind": "audio", "codec": "dts_hd_ma", "channels": 6,
+         "channel_layout": "5.1", "language": "eng", "sample_rate": 48000,
+         "dispositions": {"default": true}},
+        {"index": 2, "kind": "audio", "codec": "aac", "channels": 2,
+         "channel_layout": "stereo", "language": "por", "title": "Commentary",
+         "dispositions": {"comment": true}},
+        {"index": 3, "kind": "subtitle", "codec": "subrip", "language": "eng",
+         "dispositions": {"forced": true}},
+        {"index": 4, "kind": "subtitle", "codec": "ass", "language": "por"},
+        {"index": 5, "kind": "attachment", "codec": "ttf", "metadata": {"filename": "font.ttf"}}
+      ],
+      "chapters": [{"start_seconds": 0, "end_seconds": 100, "title": "Opening"}],
+      "metadata": {"title": "Fixture only; not measured media"}
+    }
+  }]
+}
