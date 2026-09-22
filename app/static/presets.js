@@ -5,27 +5,131 @@ if (dialog) {
   const form = $('#preset-form');
   const field = name => form.elements.namedItem(name);
   const error = $('#preset-error');
-  let editing = null, saving = false, revision = 0, efficientAudioRules = null;
-  const mbps = ['target_video_bitrate', 'minimum_source_bitrate', 'planning_video_bitrate_low', 'planning_video_bitrate_high'];
+  let editing = null, saving = false, revision = 0, efficientAudioRules = null, sourceApplicability = [];
+  const allSourceResolutions = ['480p', '576p', '720p', '1080p', '2160p'];
+  let planningVideoBitrateLow = null, planningVideoBitrateHigh = null;
+  const mbps = ['target_video_bitrate', 'minimum_source_bitrate'];
   const numeric = [...mbps, 'target_audio_bitrate', 'stereo_audio_bitrate', 'minimum_expected_saving_percent', 'quality_value', 'output_bit_depth'];
-  const boolean = ['enabled', 'preserve_audio_by_default', 'preserve_hdr_metadata', 'allow_hevc_reencode'];
-  const text = ['name', 'scope', 'intent', 'backend', 'destination_codec', 'resolution_policy', 'audio_policy', 'audio_conversion_policy', 'rate_control', 'encoder_preset', 'hdr_support'];
+  const boolean = ['enabled', 'preserve_hdr_metadata', 'allow_hevc_reencode'];
+  const text = ['name', 'scope', 'intent', 'backend', 'destination_codec', 'target_resolution', 'audio_policy', 'audio_conversion_policy', 'rate_control', 'encoder_preset', 'hdr_support', 'hdr_policy'];
+
+  function planningDefaults(scope, intent) {
+    if (intent === 'preserve_quality') return scope === 'movie' ? [1, 30] : [1, 20];
+    return scope === 'movie' ? [2, 8] : [1, 6];
+  }
+
+  function intentDefaults(scope, intent) {
+    const preserve = intent === 'preserve_quality';
+    const planning = planningDefaults(scope, intent);
+    return {
+      backend: preserve || scope === 'movie' ? 'cpu' : 'qsv',
+      destination_codec: 'hevc',
+      rate_control: preserve || scope === 'movie' ? 'crf' : 'icq',
+      quality_value: preserve ? 18 : scope === 'movie' ? 22 : 23,
+      encoder_preset: 'slow',
+      output_bit_depth: 10,
+      hdr_support: 'hdr10_experimental',
+      hdr_policy: 'preserve_source',
+      planning_video_bitrate_low: planning[0],
+      planning_video_bitrate_high: planning[1],
+      target_video_bitrate: '',
+      target_resolution: 'keep',
+      audio_policy: 'preserve',
+      audio_conversion_policy: 'preserve',
+      target_audio_bitrate: 640,
+      stereo_audio_bitrate: 192,
+      minimum_source_bitrate: preserve ? 0 : scope === 'movie' ? 8 : 4,
+      minimum_expected_saving_percent: preserve ? 5 : 20,
+      preserve_hdr_metadata: true,
+      allow_hevc_reencode: false,
+    };
+  }
+
+  function applyIntentDefaults() {
+    const defaults = intentDefaults(field('scope').value, field('intent').value);
+    planningVideoBitrateLow = Math.round(defaults.planning_video_bitrate_low * 1e6);
+    planningVideoBitrateHigh = Math.round(defaults.planning_video_bitrate_high * 1e6);
+    for (const [name, value] of Object.entries(defaults)) {
+      const control = field(name);
+      if (control) control.value = value;
+    }
+    audioPolicy();
+    backendFields();
+    rateFields();
+  }
 
   function audioPolicy() {
     const efficient = field('audio_policy').value === 'efficient' || field('audio_conversion_policy').value === 'efficient';
     field('target_audio_bitrate').disabled = !efficient;
     field('target_audio_bitrate').required = efficient;
+    field('stereo_audio_bitrate').disabled = !efficient;
+    field('stereo_audio_bitrate').required = efficient;
+    $('#audio-conversion-options').hidden = !efficient;
+  }
+  function backendFields() {
+    const qsv = field('backend').value === 'qsv';
+    $('#encoder-effort-field').hidden = qsv;
+    $('#qsv-validation-field').hidden = !qsv;
+    const rateControl = field('rate_control');
+    const crf = rateControl.querySelector('option[value="crf"]');
+    const icq = rateControl.querySelector('option[value="icq"]');
+    crf.disabled = qsv;
+    icq.disabled = !qsv;
+    if (qsv && rateControl.value === 'crf') rateControl.value = 'icq';
+    if (!qsv && rateControl.value === 'icq') rateControl.value = 'crf';
+    rateFields();
+  }
+  function hdrPolicyFields() {
+    let toneMap = field('hdr_policy').value === 'tone_map_to_sdr';
+    let sdrOnly = field('hdr_support').value === 'sdr_only';
+    if (toneMap && sdrOnly) {
+      field('hdr_support').value = 'hdr10_experimental';
+      sdrOnly = false;
+    }
+    field('hdr_policy').disabled = sdrOnly;
+    if (sdrOnly) field('hdr_policy').value = 'preserve_source';
+    toneMap = field('hdr_policy').value === 'tone_map_to_sdr';
+    const preserveMetadata = field('preserve_hdr_metadata');
+    preserveMetadata.disabled = toneMap || sdrOnly;
+    if (toneMap || sdrOnly) preserveMetadata.checked = false;
   }
   function rateFields() {
     const quality = field('rate_control').value !== 'abr';
+    const icq = field('rate_control').value === 'icq';
+    const qualityValue = field('quality_value');
     field('target_video_bitrate').disabled = quality;
     field('target_video_bitrate').required = !quality;
-    for (const name of ['quality_value', 'planning_video_bitrate_low', 'planning_video_bitrate_high']) {
+    $('#abr-target-field').hidden = quality;
+    $('#quality-value-field').hidden = !quality;
+    for (const name of ['quality_value']) {
       field(name).disabled = !quality;
       field(name).required = quality;
     }
-    field('quality_value').step = field('rate_control').value === 'icq' ? '1' : '0.1';
-    field('quality_value').min = field('rate_control').value === 'icq' ? '1' : '0';
+    if (quality) {
+      if (planningVideoBitrateLow == null || planningVideoBitrateHigh == null) {
+        const planning = planningDefaults(field('scope').value, field('intent').value);
+        planningVideoBitrateLow = planning[0] * 1e6;
+        planningVideoBitrateHigh = planning[1] * 1e6;
+      }
+    }
+    qualityValue.type = icq ? 'range' : 'number';
+    qualityValue.step = icq ? '1' : '0.1';
+    qualityValue.min = icq ? '18' : '0';
+    qualityValue.max = icq ? '30' : '51';
+    $('#quality-value-label').textContent = icq ? 'ICQ quality (18–30; lower = higher quality)' : 'CRF quality (lower = higher quality)';
+    updateQualityOutput();
+  }
+  function updateQualityOutput() {
+    const qualityValue = field('quality_value');
+    const output = $('#quality-value-output');
+    const icq = field('rate_control').value === 'icq';
+    const value = Number(qualityValue.value);
+    const min = Number(qualityValue.min);
+    const max = Number(qualityValue.max);
+    output.hidden = !icq || !Number.isFinite(value);
+    if (output.hidden) return;
+    output.textContent = qualityValue.value;
+    output.style.left = `${((value - min) / (max - min)) * 100}%`;
   }
   field('rate_control').addEventListener('change', rateFields);
   function close() {
@@ -37,19 +141,30 @@ if (dialog) {
   dialog.addEventListener('cancel', event => {event.preventDefault(); close();});
   field('audio_policy').addEventListener('change', audioPolicy);
   field('audio_conversion_policy').addEventListener('change', audioPolicy);
+  field('backend').addEventListener('change', backendFields);
+  field('quality_value').addEventListener('input', updateQualityOutput);
+  field('hdr_policy').addEventListener('change', hdrPolicyFields);
+  field('hdr_support').addEventListener('change', hdrPolicyFields);
+  field('intent').addEventListener('change', applyIntentDefaults);
+  field('scope').addEventListener('change', applyIntentDefaults);
 
   function open(preset, id = null) {
     editing = id;
     efficientAudioRules = preset.efficient_audio_rules ?? null;
+    sourceApplicability = preset.source_resolutions?.length ? [...preset.source_resolutions] : [...allSourceResolutions];
+    planningVideoBitrateLow = preset.planning_video_bitrate_low ?? null;
+    planningVideoBitrateHigh = preset.planning_video_bitrate_high ?? null;
     error.hidden = true;
     $('#preset-editor-title').textContent = id ? 'Edit preset' : 'New preset';
     [...text, ...numeric].forEach(name => field(name).value = preset[name] ?? '');
     mbps.forEach(name => field(name).value = preset[name] == null ? '' : preset[name] / 1e6);
-    [...field('source_resolutions').options].forEach(option => option.selected = (preset.source_resolutions ?? []).includes(option.value));
     field('stereo_audio_bitrate').value = (preset.stereo_audio_bitrate ?? 192000) / 1000;
     field('target_audio_bitrate').value = (preset.target_audio_bitrate ?? 640000) / 1000;
     boolean.forEach(name => field(name).checked = preset[name]);
     audioPolicy();
+    backendFields();
+    field('hdr_policy').querySelector('option[value="tone_map_to_sdr"]').disabled = preset.origin === 'built_in';
+    hdrPolicyFields();
     rateFields();
     dialog.showModal();
   }
@@ -62,9 +177,9 @@ if (dialog) {
       const scope = button.dataset.newPreset;
       open({name: '', scope, intent: 'streaming_quality', enabled: true, backend: 'cpu', destination_codec: 'hevc',
         target_video_bitrate: null, rate_control: 'crf', quality_value: scope === 'movie' ? 22 : 23,
-        source_resolutions: ['480p', '720p', '1080p', '2160p'], encoder_preset: 'slow', output_bit_depth: 10, hdr_support: 'sdr_only',
-        planning_video_bitrate_low: 2000000, planning_video_bitrate_high: 6000000, stereo_audio_bitrate: 192000, resolution_policy: 'preserve',
-        audio_policy: 'preserve', preserve_audio_by_default: true, audio_conversion_policy: 'efficient', target_audio_bitrate: 640000, preserve_hdr_metadata: true,
+        source_resolutions: allSourceResolutions, encoder_preset: 'slow', output_bit_depth: 10, hdr_support: 'hdr10_experimental', hdr_policy: 'preserve_source',
+        planning_video_bitrate_low: 2000000, planning_video_bitrate_high: 6000000, stereo_audio_bitrate: 192000, target_resolution: 'keep',
+        audio_policy: 'preserve', audio_conversion_policy: 'preserve', target_audio_bitrate: null, preserve_hdr_metadata: true,
         minimum_source_bitrate: 8000000,
         minimum_expected_saving_percent: 20, allow_hevc_reencode: false});
       return;
@@ -97,8 +212,11 @@ if (dialog) {
     const payload = {};
     text.forEach(name => payload[name] = field(name).value);
     numeric.forEach(name => payload[name] = field(name).value === '' ? null : Number(field(name).value));
-    payload.source_resolutions = [...field('source_resolutions').selectedOptions].map(option => option.value);
+    payload.source_resolutions = sourceApplicability.length ? sourceApplicability : allSourceResolutions;
+    payload.planning_video_bitrate_low = payload.rate_control === 'abr' ? null : planningVideoBitrateLow;
+    payload.planning_video_bitrate_high = payload.rate_control === 'abr' ? null : planningVideoBitrateHigh;
     boolean.forEach(name => payload[name] = field(name).checked);
+    payload.preserve_audio_by_default = payload.audio_policy === 'preserve';
     if (efficientAudioRules) payload.efficient_audio_rules = efficientAudioRules;
     mbps.forEach(name => payload[name] = payload[name] == null ? null : Math.round(payload[name] * 1e6));
     payload.stereo_audio_bitrate *= 1000;

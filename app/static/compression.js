@@ -14,15 +14,19 @@ export function compressionModal(scope, refreshQueue) {
   }
 
   function properties(preset) {
+    const rateControl = `${preset.rate_control.toUpperCase()} ${preset.quality_value ?? bitrate(preset.target_video_bitrate)}`;
     const fields = [
       ['Backend', label(preset.backend)], ['Destination codec', label(preset.destination_codec)],
-      ['Rate control', `${preset.rate_control.toUpperCase()} ${preset.quality_value ?? bitrate(preset.target_video_bitrate)} · ${preset.encoder_preset} · ${preset.output_bit_depth} bit`], ['Resolution policy', label(preset.resolution_policy)],
-      ['Audio policy', preset.audio_policy === 'efficient' ? `Efficient by default · AAC stereo ${preset.stereo_audio_bitrate / 1000}k / E-AC3 surround ${preset.target_audio_bitrate / 1000}k` : preset.audio_conversion_policy === 'efficient' ? `Preserve by default · efficient fallback AAC ${preset.stereo_audio_bitrate / 1000}k / E-AC3 ${preset.target_audio_bitrate / 1000}k` : 'Copy all audio tracks'], ['HDR policy', preset.preserve_hdr_metadata ? 'Preserve HDR metadata' : 'Not preserved'],
-      ['Source applicability', `${preset.source_resolutions.join(', ') || 'Needs review'} · ${preset.hdr_support}`],
+      ['Rate control', rateControl], ...(preset.backend === 'qsv' ? [['Output bit depth', `${preset.output_bit_depth} bit`], ['Validation', 'Experimental']] : [['Encoder effort', preset.encoder_preset], ['Output bit depth', `${preset.output_bit_depth} bit`]]), ['Target resolution', label(preset.target_resolution)],
+      ['Audio policy', preset.audio_policy === 'efficient' ? 'Efficient conversion' : 'Preserve every audio track by default'], ...(preset.audio_policy === 'efficient' ? [['Conversion profile', 'AAC stereo / E-AC3 multichannel']] : []), ['HDR input support', label(preset.hdr_support)], ['HDR output policy', label(preset.hdr_policy)],
     ];
     $('#preset-properties').innerHTML = fields.map(([name, value]) =>
       `<label class="field">${esc(name)}<select disabled><option>${esc(value)}</option></select></label>`).join('');
     $('#audio-rule').textContent = 'Preserve Audio tags and the preset’s audio policy take precedence over this checkbox.';
+    const movieAudioForced = scope === 'movie' && preset.origin === 'built_in' && preset.audio_policy === 'preserve' && preset.audio_conversion_policy === 'preserve';
+    $('#preserve-audio').checked = movieAudioForced || preset.preserve_audio_by_default;
+    $('#preserve-audio').disabled = movieAudioForced;
+    $('#preserve-audio-text').textContent = movieAudioForced ? 'Preserve Audio · required by this Movie preset' : 'Preserve Audio · copy every audio track';
   }
 
   async function evaluate() {
@@ -141,6 +145,8 @@ export function compressionModal(scope, refreshQueue) {
     $('#audio-rule').textContent = 'Preserve Audio tags and preset policy are enforced by the backend.';
     ['estimated-output', 'estimated-saving', 'estimated-percent'].forEach(id => $(`#${id}`).textContent = '—');
     $('#preserve-audio').checked = true;
+    $('#preserve-audio').disabled = false;
+    $('#preserve-audio-text').textContent = 'Preserve Audio · copy every audio track';
     preserveAudioTouched = false;
     $('#preserve-subtitles').checked = true;
     $('#replace-source').value = 'false';
@@ -154,7 +160,7 @@ export function compressionModal(scope, refreshQueue) {
       const chosen = suggested ?? presets.find(p => p.enabled && p.destination_codec !== 'av1');
       if (!chosen) throw new Error('No available presets for this media scope.');
       $('#preset').value = chosen.id;
-      $('#preserve-audio').checked = chosen.preserve_audio_by_default;
+      properties(chosen);
       const items = scope === 'movie' ? library.movies : library.shows.flatMap(show => show.seasons.flatMap(season => season.episodes));
       $('#source-summary').innerHTML = rows.map(row => {
         const item = items.find(i => i.id === row.dataset.id);

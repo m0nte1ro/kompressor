@@ -40,11 +40,9 @@ def test_default_catalogue_has_exactly_five_enabled_built_ins(streaming):
     enabled = [p for p in presets if p["origin"] == "built_in" and p["enabled"]]
     assert {p["id"] for p in enabled} == DEFAULT_IDS
     assert {p["name"] for p in enabled} == {
-        "Movie Preserve Quality",
-        "Movie Streaming Quality",
-        "Show Preserve Quality",
-        "Show Streaming Quality",
-        "Show Streaming + Efficient Audio",
+        "Just convert to HEVC",
+        "Tone it down a bit + HEVC",
+        "Tone it down a bit + HEVC + Efficient Audio",
     }
     assert len([p for p in enabled if p["scope"] == "movie"]) == 2
     assert len([p for p in enabled if p["scope"] == "show"]) == 3
@@ -54,8 +52,13 @@ def test_default_catalogue_has_exactly_five_enabled_built_ins(streaming):
     assert {p["id"] for p in client.get("/api/presets?scope=show").json()} == {
         "show-preserve-quality", "show-streaming-quality", "show-streaming-efficient-audio",
     }
-    assert all(p["resolution_policy"] == "preserve" for p in enabled)
-    assert all(p["source_resolutions"] == ["480p", "720p", "1080p", "2160p"] for p in enabled)
+    assert all(p["target_resolution"] == "keep" for p in enabled)
+    assert all(p["source_resolutions"] == ["480p", "576p", "720p", "1080p", "2160p"] for p in enabled)
+    assert all(p["hdr_support"] == "hdr10_experimental" and p["hdr_policy"] == "preserve_source" for p in enabled)
+    assert all(set(p["hdr_metadata"]) >= {
+        "validate_signalling", "preserve_color_primaries", "preserve_transfer_characteristics",
+        "preserve_matrix_coefficients", "preserve_mastering_display_metadata", "preserve_max_cll", "preserve_max_fall",
+    } for p in enabled)
 
 
 def test_default_backends_and_shared_show_video_policy(streaming):
@@ -70,7 +73,7 @@ def test_default_backends_and_shared_show_video_policy(streaming):
     video_fields = [
         "intent", "backend", "destination_codec", "rate_control", "quality_value",
         "encoder_preset", "output_bit_depth", "source_resolutions", "hdr_support",
-        "planning_video_bitrate_low", "planning_video_bitrate_high", "resolution_policy",
+        "planning_video_bitrate_low", "planning_video_bitrate_high", "target_resolution",
         "preserve_hdr_metadata", "minimum_source_bitrate", "minimum_expected_saving_percent",
         "allow_hevc_reencode",
     ]
@@ -80,7 +83,103 @@ def test_default_backends_and_shared_show_video_policy(streaming):
         field: efficient_video[field] for field in video_fields
     }
     assert streaming_video["audio_policy"] != efficient_video["audio_policy"]
-    assert streaming_video["audio_conversion_policy"] == efficient_video["audio_conversion_policy"] == "efficient"
+    assert streaming_video["audio_conversion_policy"] == "preserve"
+    assert efficient_video["audio_conversion_policy"] == "efficient"
+    assert all(
+        presets[preset_id]["audio_policy"] == "preserve"
+        and presets[preset_id]["audio_conversion_policy"] == "preserve"
+        and presets[preset_id]["target_audio_bitrate"] is None
+        for preset_id in ("movie-preserve-quality", "movie-streaming-quality", "show-preserve-quality", "show-streaming-quality")
+    )
+
+
+def test_hdr10_source_preserves_hdr_mode_without_tone_mapping(streaming):
+    app, _ = streaming
+    item = next(
+        episode
+        for show in app.state.catalog.media.get_library().shows
+        for season in show.seasons
+        for episode in season.episodes
+        if episode.id == "hotd-s01e01"
+    )
+    item.video_codec = "h264"
+    result = app.state.catalog.policy.evaluate(
+        item=item,
+        scope="show",
+        preset=app.state.catalog.preset("show-preserve-quality"),
+        effective_tags=item.tags + ["Quality CPU"],
+        preserve_audio=True,
+        preserve_subtitles=True,
+    )
+    assert result.eligible is True
+    assert any("HDR10" in warning for warning in result.warnings)
+    assert not any("SDR" in reason for reason in result.reasons)
+
+
+def test_movie_built_ins_force_audio_preservation(streaming):
+    _, client = streaming
+    for preset_id in ("movie-preserve-quality", "movie-streaming-quality"):
+        result = client.post("/api/eligibility", json={
+            "scope": "movie", "media_id": "movie-king-of-comedy", "preset_id": preset_id,
+            "preserve_audio": False,
+        }).json()
+        assert result["preserve_audio"] is True
+        assert all(track["action"] == "copy" for track in result["audio_plan"])
+
+
+@pytest.mark.parametrize("target_resolution", ["keep", "max_2160p", "max_1080p", "max_720p", "max_576p", "max_480p"])
+def test_custom_target_resolution_options_are_supported(streaming, target_resolution):
+    _, client = streaming
+    custom = payload(client, "show-streaming-quality")
+    custom.update(name=f"Custom {target_resolution}", target_resolution=target_resolution)
+    response = client.post("/api/presets", json=custom)
+    assert response.status_code == 201
+    assert response.json()["target_resolution"] == target_resolution
+
+
+def test_built_in_tone_mapping_is_rejected(streaming):
+    _, client = streaming
+    custom = payload(client, "movie-streaming-quality")
+    custom.update(hdr_policy="tone_map_to_sdr", preserve_hdr_metadata=False,
+                  hdr_metadata={key: False for key in [
+                      "validate_signalling", "preserve_color_primaries", "preserve_transfer_characteristics",
+                      "preserve_matrix_coefficients", "preserve_mastering_display_metadata", "preserve_max_cll", "preserve_max_fall",
+                  ]})
+    assert client.put("/api/presets/movie-streaming-quality", json=custom).status_code == 422
+
+
+def test_tone_mapping_requires_hdr10_input_support(streaming):
+    _, client = streaming
+    custom = payload(client, "movie-streaming-quality")
+    custom.update(name="Explicit SDR tone map", hdr_support="sdr_only", hdr_policy="tone_map_to_sdr",
+                  preserve_hdr_metadata=False,
+                  hdr_metadata={key: False for key in [
+                      "validate_signalling", "preserve_color_primaries", "preserve_transfer_characteristics",
+                      "preserve_matrix_coefficients", "preserve_mastering_display_metadata", "preserve_max_cll", "preserve_max_fall",
+                  ]})
+    assert client.post("/api/presets", json=custom).status_code == 422
+
+
+def test_new_preset_defaults_to_all_supported_source_resolutions(streaming):
+    _, client = streaming
+    custom = payload(client, "show-streaming-quality")
+    custom.pop("source_resolutions")
+    custom["name"] = "All resolution inputs"
+    response = client.post("/api/presets", json=custom)
+    assert response.status_code == 201
+    assert response.json()["source_resolutions"] == ["480p", "576p", "720p", "1080p", "2160p"]
+
+
+def test_quality_preset_planning_defaults_follow_intent(streaming):
+    _, client = streaming
+    custom = payload(client, "movie-preserve-quality")
+    custom.pop("planning_video_bitrate_low")
+    custom.pop("planning_video_bitrate_high")
+    custom["name"] = "Intent planning defaults"
+    response = client.post("/api/presets", json=custom)
+    assert response.status_code == 201
+    assert response.json()["planning_video_bitrate_low"] == 1_000_000
+    assert response.json()["planning_video_bitrate_high"] == 30_000_000
 
 
 def test_king_of_comedy_is_eligible_for_movie_streaming(streaming):
@@ -135,15 +234,25 @@ def test_preserve_audio_default_and_tag_override(streaming):
     default = client.post("/api/eligibility", json=request).json()
     overridden = client.post("/api/eligibility", json={**request, "preserve_audio": False}).json()
     assert default["preserve_audio"] is True
-    assert overridden["preserve_audio"] is False
-    assert overridden["audio_plan"][0]["action"] == "encode"
-    assert overridden["audio_plan"][0]["codec"] == "aac"
+    assert overridden["preserve_audio"] is True
+    assert all(track["action"] == "copy" for track in overridden["audio_plan"])
+
+    conversion = payload(client, "movie-streaming-quality")
+    conversion.update(name="Movie streaming with opt-in audio conversion",
+                      audio_conversion_policy="efficient", target_audio_bitrate=640000)
+    conversion_id = client.post("/api/presets", json=conversion).json()["id"]
+    conversion_request = {"scope": "movie", "media_id": "movie-king-of-comedy", "preset_id": conversion_id,
+                          "preserve_audio": False}
+    converted = client.post("/api/eligibility", json=conversion_request).json()
+    assert converted["preserve_audio"] is False
+    assert converted["audio_plan"][0]["action"] == "encode"
+    assert converted["audio_plan"][0]["codec"] == "aac"
 
     assert client.patch("/api/tags", json={
         "targets": [{"kind": "movie", "id": "movie-king-of-comedy"}],
         "tags": ["Preserve Audio"],
     }).status_code == 200
-    tagged = client.post("/api/eligibility", json={**request, "preserve_audio": False}).json()
+    tagged = client.post("/api/eligibility", json=conversion_request).json()
     assert tagged["preserve_audio"] is True
     assert any("overrides" in warning for warning in tagged["warnings"])
 
@@ -172,18 +281,18 @@ def test_duplicate_is_independent_custom_and_deletable(streaming):
     duplicate = client.post(f"/api/presets/{source['id']}/duplicate").json()
     assert duplicate["id"] != source["id"]
     assert duplicate["origin"] == "custom"
-    assert duplicate["name"] == "Show Streaming Quality (Copy)"
+    assert duplicate["name"] == f"{source['name']} (Copy)"
     assert duplicate["backend"] == source["backend"]
     assert duplicate["rate_control"] == source["rate_control"]
 
     edited = {key: value for key, value in duplicate.items() if key != "id"}
-    edited.update(name="The Office Space Saver", resolution_policy="max_1080p")
+    edited.update(name="The Office Space Saver", target_resolution="max_1080p")
     response = client.put(f"/api/presets/{duplicate['id']}", json=edited)
     assert response.status_code == 200
     changed = response.json()
-    assert changed["resolution_policy"] == "max_1080p"
+    assert changed["target_resolution"] == "max_1080p"
     original_after = next(p for p in client.get("/api/presets").json() if p["id"] == source["id"])
-    assert original_after["resolution_policy"] == "preserve"
+    assert original_after["target_resolution"] == "keep"
     assert original_after["name"] == source["name"]
     assert client.delete(f"/api/presets/{duplicate['id']}").status_code == 204
     assert client.get(f"/api/presets/{duplicate['id']}").status_code == 405
@@ -224,8 +333,10 @@ def test_invalid_quality_presets_rejected(streaming, changes):
 def test_qsv_quality_validation_and_warning(streaming):
     _, client = streaming
     source = payload(client, "show-streaming-quality")
-    for quality in (0, 23.5, 52):
+    for quality in (0, 17, 23.5, 31, 52):
         assert client.post("/api/presets", json={**source, "quality_value": quality}).status_code == 422
+    for quality in (18, 23, 30):
+        assert client.post("/api/presets", json={**source, "name": f"ICQ {quality}", "quality_value": quality}).status_code == 201
     result = client.post("/api/eligibility", json={
         "scope": "show", "media_id": "modern-family-s03e04", "preset_id": "show-streaming-quality",
     }).json()
@@ -242,7 +353,7 @@ def test_output_options_are_separate_from_presets(tmp_path, replace):
                    "preset_id": "movie-streaming-quality", "replace_source": replace}
         job = client.post("/api/queue", json=request).json()["added"][0]
         assert job["replace_source"] is replace
-        assert job["preset"]["resolution_policy"] == "preserve"
+        assert job["preset"]["target_resolution"] == "keep"
         assert job["estimated_saving"] is None
         assert job["planning_saving"] is not None
     app = create_app(path, start_workers=False)
@@ -303,6 +414,97 @@ def test_legacy_audio_rule_field_loads_from_sqlite(tmp_path):
         stored = next(p for p in client.get("/api/presets").json() if p["id"] == current.id)
         assert stored["efficient_audio_rules"]["channel_handling"] == "preserve"
         assert "preserve_channels" not in stored["efficient_audio_rules"]
+
+
+def test_legacy_resolution_policy_loads_as_target_resolution(streaming):
+    app, _ = streaming
+    preset = app.state.catalog.preset("show-streaming-quality")
+    legacy = preset.model_dump()
+    legacy.pop("target_resolution")
+    legacy["resolution_policy"] = "max_720p"
+    loaded = type(preset).model_validate(legacy)
+    assert loaded.target_resolution == "max_720p"
+
+
+def test_current_catalogue_migration_canonicalizes_resolution_fields(tmp_path):
+    path = tmp_path / "pre-v4.sqlite3"
+    database = Database(path)
+    current = SeedPresetRepository(PROJECT_ROOT / "fixtures/presets.json").get_all()
+    with database.transaction() as connection:
+        for preset in current:
+            payload = preset.model_dump()
+            payload["source_resolutions"] = ["480p", "720p", "1080p", "2160p"]
+            payload["resolution_policy"] = "preserve"
+            payload.pop("target_resolution")
+            connection.execute("INSERT INTO presets VALUES (?, ?)", (preset.id, json.dumps(payload)))
+        connection.executemany("INSERT INTO metadata VALUES (?, 'true')", [
+            ("presets_initialized",), ("preset_catalog_v3",),
+        ])
+    with TestClient(create_app(path, start_workers=False)) as client:
+        presets = client.get("/api/presets").json()
+        assert all(p["target_resolution"] == "keep" for p in presets)
+        assert all(p["source_resolutions"] == ["480p", "576p", "720p", "1080p", "2160p"] for p in presets)
+
+
+def test_catalogue_migration_does_not_rewrite_builtin_names(tmp_path):
+    path = tmp_path / "named-built-in.sqlite3"
+    database = Database(path)
+    current = SeedPresetRepository(PROJECT_ROOT / "fixtures/presets.json").get_all()
+    preset = current[0].model_copy(update={"name": "My Movie Name"})
+    with database.transaction() as connection:
+        connection.execute("INSERT INTO presets VALUES (?, ?)", (preset.id, preset.model_dump_json()))
+        connection.executemany("INSERT INTO metadata VALUES (?, 'true')", [
+            ("presets_initialized",), ("preset_catalog_v7",),
+        ])
+    with TestClient(create_app(path, start_workers=False)) as client:
+        stored = next(p for p in client.get("/api/presets").json() if p["id"] == preset.id)
+        assert stored["name"] == "My Movie Name"
+
+
+def test_built_in_audio_migration_restores_preserve_defaults(tmp_path):
+    path = tmp_path / "pre-audio-v6.sqlite3"
+    database = Database(path)
+    current = SeedPresetRepository(PROJECT_ROOT / "fixtures/presets.json").get_all()
+    with database.transaction() as connection:
+        for preset in current:
+            payload = preset.model_dump()
+            if preset.id in {"movie-streaming-quality", "show-streaming-quality"}:
+                payload["audio_policy"] = "efficient"
+                payload["preserve_audio_by_default"] = False
+                payload["audio_conversion_policy"] = "preserve"
+                payload["target_audio_bitrate"] = 640000
+            connection.execute("INSERT INTO presets VALUES (?, ?)", (preset.id, json.dumps(payload)))
+        connection.executemany("INSERT INTO metadata VALUES (?, 'true')", [
+            ("presets_initialized",), ("preset_catalog_v5",),
+        ])
+    with TestClient(create_app(path, start_workers=False)) as client:
+        presets = {p["id"]: p for p in client.get("/api/presets").json()}
+        for preset_id in ("movie-preserve-quality", "movie-streaming-quality", "show-preserve-quality", "show-streaming-quality"):
+            assert presets[preset_id]["audio_policy"] == "preserve"
+            assert presets[preset_id]["audio_conversion_policy"] == "preserve"
+            assert presets[preset_id]["target_audio_bitrate"] is None
+
+
+def test_efficient_audio_builtin_migration_restores_conversion_defaults(tmp_path):
+    path = tmp_path / "pre-audio-v7.sqlite3"
+    database = Database(path)
+    current = SeedPresetRepository(PROJECT_ROOT / "fixtures/presets.json").get_all()
+    efficient = next(p for p in current if p.id == "show-streaming-efficient-audio")
+    payload = efficient.model_dump()
+    payload["audio_policy"] = "efficient"
+    payload["audio_conversion_policy"] = "preserve"
+    payload["preserve_audio_by_default"] = True
+    with database.transaction() as connection:
+        connection.execute("INSERT INTO presets VALUES (?, ?)", (efficient.id, json.dumps(payload)))
+        connection.executemany("INSERT INTO metadata VALUES (?, 'true')", [
+            ("presets_initialized",), ("preset_catalog_v6",),
+        ])
+    with TestClient(create_app(path, start_workers=False)) as client:
+        stored = next(p for p in client.get("/api/presets").json() if p["id"] == efficient.id)
+        assert stored["audio_policy"] == "efficient"
+        assert stored["audio_conversion_policy"] == "efficient"
+        assert stored["preserve_audio_by_default"] is False
+        assert stored["target_audio_bitrate"] == 640000
 
 
 def test_estimates_are_not_clamped_to_source_size(streaming):

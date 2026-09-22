@@ -22,7 +22,7 @@ class MemoryMedia:
 
 @pytest.fixture
 def legacy_defaults():
-    return [p.model_copy(update={"source_resolutions": ["480p", "720p", "1080p", "2160p"],
+    return [p.model_copy(update={"source_resolutions": ["480p", "576p", "720p", "1080p", "2160p"],
                                 "hdr_support": "hdr10_experimental"})
             for p in SeedPresetRepository(ROOT / "fixtures/presets.json").get_all()]
 

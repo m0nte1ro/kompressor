@@ -52,12 +52,23 @@ def test_flat_episodes_and_escaped_seed_names(client, catalog):
 def test_settings_groups_presets_and_shows_policy_fields(client):
     html = client.get("/settings").text
     movie_start, show_start = html.index('<h2>Movie presets'), html.index('<h2>Show presets')
-    assert "Movie Preserve Quality" in html[movie_start:show_start]
-    assert "Movie Streaming Quality" in html[movie_start:show_start]
-    assert "Show Streaming Quality" in html[show_start:]
-    assert "Show Streaming + Efficient Audio" in html[show_start:]
-    assert "Movie Streaming Quality" not in html[show_start:]
-    for field in ["Intent", "Origin", "Minimum source bitrate", "Minimum expected saving", "HEVC reencode allowed", "HDR preservation"]:
+    assert "Just convert to HEVC" in html[movie_start:show_start]
+    assert "Tone it down a bit + HEVC" in html[movie_start:show_start]
+    assert "Tone it down a bit + HEVC + Efficient Audio" in html[show_start:]
+    assert html[movie_start:show_start].count("Tone it down a bit + HEVC") == 1
+    assert html[show_start:].count("Tone it down a bit + HEVC") >= 2
+    assert "Source applicability" not in html
+    assert "Planning estimate only" not in html
+    assert '<details id="audio-conversion-options" class="notice" hidden>' in html
+    qsv_start = html.index('data-preset-id="show-streaming-quality"')
+    qsv_card = html[qsv_start:html.index('</article>', qsv_start)]
+    assert "Encoder effort" not in qsv_card
+    assert "Validation" in qsv_card and "Experimental" in qsv_card
+    assert "Output bit depth" in qsv_card
+    assert "Conversion profile" in html
+    assert 'class="quality-range"' in html
+    assert 'id="quality-value-output"' in html
+    for field in ["Intent", "Origin", "Minimum source bitrate", "Minimum expected saving", "HEVC reencode allowed", "HDR signalling"]:
         assert field in html
 
 

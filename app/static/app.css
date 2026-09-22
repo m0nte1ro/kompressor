@@ -121,6 +121,8 @@ dialog::backdrop { background: #000b; backdrop-filter: blur(3px); }
 .field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
 .field select { width: 100%; }
 .field input { background: #0d141d; border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; color: var(--text); width: 100%; }
+.quality-range { position: relative; padding-bottom: 1.25rem; }
+.quality-range output { position: absolute; top: 2.2rem; transform: translateX(-50%); color: var(--text); font-variant-numeric: tabular-nums; }
 fieldset { border: 1px solid var(--line); border-radius: 7px; margin: 16px 0; padding: 10px 14px; }
 legend { color: var(--muted); padding: 0 5px; }
 .tag-edit, .season-tags { font-size: 10px; padding: 3px 7px; margin-top: 6px; }

@@ -49,14 +49,15 @@ are excluded from Git. Tests use isolated databases in temporary directories.
 - Settings separates movie/show presets and supports creating, editing,
   duplicating and enabling/disabling every preset. The initial presets are copied
   from the seed JSON once. Subsequent startups do not overwrite user edits.
-  Built-in defaults are Movie Preserve Quality, Movie Streaming Quality, Show
-  Preserve Quality, Show Streaming Quality and Show Streaming + Efficient Audio;
-  all preserve source resolution.
-  Existing jobs keep a complete preset snapshot, even if that preset is later
-  edited, moved to another scope or disabled. Disable affects new submissions.
-  The catalogue upgrade inserts missing current presets and disables untouched
-  legacy defaults once; user edits and queued snapshots are preserved. Legacy
-  custom presets need explicit source resolutions before they can be used again.
+  Built-in display names are user-owned: Just convert to HEVC, Tone it down a bit
+  - HEVC, and Tone it down a bit + HEVC + Efficient Audio. Intent is stored
+    separately from those names. All preserve source resolution.
+    Existing jobs keep a complete preset snapshot, even if that preset is later
+    edited, moved to another scope or disabled. Disable affects new submissions.
+    The catalogue upgrade inserts missing current presets and disables untouched
+    legacy defaults once; user edits and queued snapshots are preserved. Legacy
+    custom presets retain explicit source applicability rules, while target
+    resolution is configured separately.
 - Movies and episodes have Manage tags; episode pages also expose series and
   season tags. Select multiple rows to add/remove tags without replacing unrelated
   direct tags. The editor shows direct tags, inherited tags and their origin.
@@ -80,12 +81,15 @@ or hardlink protections.
 ## Quality modes and test output
 
 Presets support CPU CRF, QSV ICQ and explicit ABR, along with encoder effort,
-output bit depth, source resolutions and SDR/experimental-HDR10 applicability.
+output bit depth, source applicability and SDR/HDR10 input support. HDR defaults
+to preserving the source mode; tone mapping is never implicit and is blocked
+until a future real encoder path exists.
 Quality modes carry planning bitrate ranges separately from encoder settings.
 They do not return fake exact output sizes or savings; ranges are labeled as
 planning estimates and may fall outside their bounds. Actual quality-mode savings
 must be checked after encoding; pre-encode minimum-saving shortfalls produce a
-warning.
+warning. The editor fills these ranges from the selected intent; they are optional
+advanced planning metadata, not values that control CRF, ICQ or x265.
 
 Jobs default to `replace_source: false` (keep the original and plan a separate
 test output). `true` records replacement-after-validation intent. Both remain

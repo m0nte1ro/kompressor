@@ -33,6 +33,8 @@ class PolicyEngine:
             reasons.append("This preset supports SDR sources only.")
         elif item.hdr:
             warnings.append("HDR10 pipeline is experimental and must be validated on actual output.")
+        if preset.hdr_policy == "tone_map_to_sdr":
+            reasons.append("HDR to SDR tone mapping is not implemented in this workflow.")
         if preset.rate_control != "abr":
             warnings.append("Planning range only: quality-based output may fall outside it. Actual savings must be checked after encoding.")
         if preset.backend == "qsv":
@@ -45,7 +47,13 @@ class PolicyEngine:
             if quality_floor is None:
                 reasons.append("Quality Floor requires configured bitrate and resolution limits.")
             else:
-                height = min(item.height, {"max_480p": 480, "max_720p": 720, "max_1080p": 1080}.get(preset.resolution_policy, item.height))
+                height = min(item.height, {
+                    "max_480p": 480,
+                    "max_576p": 576,
+                    "max_720p": 720,
+                    "max_1080p": 1080,
+                    "max_2160p": 2160,
+                }.get(preset.target_resolution, item.height))
                 if height < quality_floor.minimum_height:
                     reasons.append("Output resolution is below the inherited Quality Floor.")
                 if preset.rate_control != "abr":

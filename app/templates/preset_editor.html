@@ -6,30 +6,33 @@
       <div class="field-grid">
         <label class="field">Name<input name="name" required maxlength="120"></label>
         <label class="field">Scope<select name="scope"><option value="movie">Movie</option><option value="show">Show</option></select></label>
-        <label class="field">Intent<select name="intent"><option value="preserve_quality">Preserve perceived quality</option><option value="streaming_quality">Streaming-style quality</option></select></label>
+        <label class="field">Intent<select name="intent"><option value="preserve_quality">Preserve perceived quality</option><option value="streaming_quality">Streaming-style quality</option></select><small>Changing intent fills the technical defaults; you can adjust them afterward.</small></label>
         <label class="field">Backend<select name="backend"><option value="cpu">CPU · x265</option><option value="qsv">Intel QSV</option></select></label>
         <label class="field">Destination codec<select name="destination_codec"><option value="hevc">HEVC</option><option value="av1" disabled>AV1 · unavailable</option></select></label>
-        <label class="field">Source resolutions (select applicable inputs)<select name="source_resolutions" multiple required><option value="480p">480p</option><option value="720p">720p</option><option value="1080p">1080p</option><option value="2160p">2160p</option></select></label>
-        <label class="field">HDR applicability<select name="hdr_support"><option value="sdr_only">SDR only</option><option value="hdr10_experimental">HDR10 · experimental pipeline</option></select></label>
+        <label class="field">HDR input support<select name="hdr_support"><option value="hdr10_experimental">SDR + HDR10 · experimental pipeline</option><option value="sdr_only">SDR sources only</option></select><small>Controls which HDR inputs are accepted. Dolby Vision remains blocked.</small></label>
+        <label class="field">HDR output policy<select name="hdr_policy"><option value="preserve_source">Preserve source HDR mode</option><option value="tone_map_to_sdr">Tone map HDR to SDR · custom only</option></select><small>Default presets never tone map. HDR10 remains HDR10.</small></label>
         <label class="field">Rate control<select name="rate_control"><option value="crf">CRF · CPU quality</option><option value="icq">ICQ · QSV quality</option><option value="abr">ABR · target bitrate</option></select></label>
-        <label class="field">Quality value (lower = higher quality)<input name="quality_value" type="number" min="0" max="51" step="0.1"></label>
-        <label class="field">Encoder effort<select name="encoder_preset"><option value="fast">Fast</option><option value="medium">Medium</option><option value="slow">Slow</option><option value="slower">Slower</option></select></label>
+        <label class="field" id="quality-value-field"><span id="quality-value-label">Quality value</span><div class="quality-range"><input name="quality_value" type="number" min="0" max="51" step="0.1"><output id="quality-value-output" for="quality_value" hidden></output></div></label>
+        <label class="field" id="encoder-effort-field">Encoder effort<select name="encoder_preset"><option value="fast">Fast</option><option value="medium">Medium</option><option value="slow">Slow</option><option value="slower">Slower</option></select></label>
+        <label class="field" id="qsv-validation-field" hidden>Validation<select disabled><option>Experimental</option></select></label>
         <label class="field">Output bit depth<select name="output_bit_depth"><option value="10">10 bit</option><option value="8">8 bit</option></select></label>
-        <label class="field">Planning video bitrate low (Mbps)<input name="planning_video_bitrate_low" type="number" min="0.001" max="200" step="0.001"></label>
-        <label class="field">Planning video bitrate high (Mbps)<input name="planning_video_bitrate_high" type="number" min="0.001" max="200" step="0.001"></label>
-        <label class="field">Target video bitrate — ABR only (Mbps)<input name="target_video_bitrate" type="number" min="0.001" max="200" step="0.001" required></label>
-        <label class="field">Resolution policy<select name="resolution_policy"><option value="preserve">Preserve source</option><option value="max_1080p">Max 1080p</option><option value="max_720p">Max 720p</option><option value="max_480p">Max 480p</option></select></label>
-        <label class="field">Audio policy<select name="audio_policy"><option value="preserve">Preserve by default</option><option value="efficient">Efficient by default</option></select></label>
-        <label class="field">Audio conversion fallback<select name="audio_conversion_policy"><option value="preserve">Preserve all tracks</option><option value="efficient">Efficient E-AC3 / AAC</option></select></label>
-        <label class="field">Surround E-AC3 target (kbps)<input name="target_audio_bitrate" type="number" min="1" max="10000" step="1"></label>
-        <label class="field">Stereo AAC target (kbps)<input name="stereo_audio_bitrate" type="number" min="64" max="320" step="1" required></label>
+        <label class="field" id="abr-target-field">Target video bitrate (ABR only)<input name="target_video_bitrate" type="number" min="0.001" max="200" step="0.001"></label>
+        <label class="field">Target resolution<select name="target_resolution"><option value="keep">KEEP · preserve source</option><option value="max_2160p">2160p maximum</option><option value="max_1080p">1080p maximum</option><option value="max_720p">720p maximum</option><option value="max_576p">576p maximum</option><option value="max_480p">480p maximum</option></select></label>
+        <label class="field">Default audio policy<select name="audio_policy"><option value="preserve">Preserve every track</option><option value="efficient">Use efficient conversion</option></select></label>
+        <label class="field">Conversion profile<select name="audio_conversion_policy"><option value="preserve">Preserve every track</option><option value="efficient">AAC stereo / E-AC3 multichannel</option></select></label>
         <label class="field">Minimum source bitrate (Mbps)<input name="minimum_source_bitrate" type="number" min="0" max="500" step="0.001" required></label>
         <label class="field">Minimum expected saving (%)<input name="minimum_expected_saving_percent" type="number" min="0" max="99.9" step="0.1" required></label>
       </div>
-      <p class="notice">Planning ranges are assumptions for storage estimates, not encoder limits or measured results. Quality-based output can fall outside them. Efficient audio retains all tracks/channels, copies efficient low-bitrate tracks, uses AAC for mono/stereo and E-AC3 for multichannel audio, and does not downmix by default.</p>
+      <details id="audio-conversion-options" class="notice" hidden>
+        <summary>Advanced audio conversion</summary>
+        <p>Only used when the selected audio policy allows conversion. Preserve Audio remains the default behavior. Efficient conversion keeps every track and language, uses AAC for mono/stereo and E-AC3 for multichannel audio, and does not downmix by default.</p>
+        <div class="field-grid">
+          <label class="field">Multichannel audio bitrate<select name="target_audio_bitrate"><option value="256">256 kbps</option><option value="384">384 kbps</option><option value="512">512 kbps</option><option value="640" selected>640 kbps</option><option value="768">768 kbps</option><option value="1024">1024 kbps</option></select></label>
+          <label class="field">Mono/stereo audio bitrate<select name="stereo_audio_bitrate"><option value="96">96 kbps</option><option value="128">128 kbps</option><option value="160">160 kbps</option><option value="192" selected>192 kbps</option><option value="256">256 kbps</option><option value="320">320 kbps</option></select></label>
+        </div>
+      </details>
       <label class="check"><input name="enabled" type="checkbox"> Enabled</label>
-      <label class="check"><input name="preserve_audio_by_default" type="checkbox"> Preserve Audio by default</label>
-      <label class="check"><input name="preserve_hdr_metadata" type="checkbox"> Preserve HDR metadata</label>
+      <label class="check"><input name="preserve_hdr_metadata" type="checkbox"> Preserve HDR metadata <small>Preserves and validates HDR10 signalling when HDR10 input is allowed; not applicable to SDR-only input or tone-mapped output.</small></label>
       <label class="check"><input name="allow_hevc_reencode" type="checkbox"> Allow HEVC reencode</label>
       <p id="preset-error" class="error" role="alert" hidden></p>
     </div>

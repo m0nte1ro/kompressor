@@ -10,13 +10,13 @@ transparent or extremely difficult to distinguish during normal viewing, not
 mathematical or bit-perfect preservation. HEVC/x265 transcoding is lossy in this
 workflow.
 
-| Preset | Scope | Video | Audio default | Resolution |
-| --- | --- | --- | --- | --- |
-| Movie Preserve Quality | Movie | CPU/x265 HEVC, experimental CRF | Preserve | Preserve source |
-| Movie Streaming Quality | Movie | CPU/x265 HEVC, experimental CRF | Preserve by default; efficient fallback | Preserve source |
-| Show Preserve Quality | Show | CPU/x265 HEVC, experimental CRF | Preserve | Preserve source |
-| Show Streaming Quality | Show | Intel QSV HEVC, experimental ICQ | Preserve by default | Preserve source |
-| Show Streaming + Efficient Audio | Show | Same video policy as Show Streaming Quality | Efficient rules by default | Preserve source |
+| Preset                                      | Scope | Video                                                  | Audio default              | Target resolution |
+| ------------------------------------------- | ----- | ------------------------------------------------------ | -------------------------- | ----------------- |
+| Just convert to HEVC                        | Movie | CPU/x265 HEVC, experimental CRF                        | Preserve every track       | KEEP              |
+| Tone it down a bit + HEVC                   | Movie | CPU/x265 HEVC, experimental CRF                        | Preserve every track       | KEEP              |
+| Just convert to HEVC                        | Show  | CPU/x265 HEVC, experimental CRF                        | Preserve every track       | KEEP              |
+| Tone it down a bit + HEVC                   | Show  | Intel QSV HEVC, experimental ICQ                       | Preserve every track       | KEEP              |
+| Tone it down a bit + HEVC + Efficient Audio | Show  | Same video policy as the Show streaming-quality intent | Efficient rules by default | KEEP              |
 
 The streaming presets aim for a premium-streaming-style visual philosophy and
 significant storage reduction. They do not copy Netflix bitrate settings. CRF and
@@ -25,10 +25,11 @@ on Intel UHD 730 hardware.
 
 ## Audio policy
 
-Preserve Quality presets copy all audio tracks. Movie Streaming Quality and Show
-Streaming Quality preserve audio by default, but an explicit per-job Preserve
-Audio override can be disabled to use their efficient fallback. Show Streaming +
-Efficient Audio selects that fallback by default.
+Both Movie presets and the Show preserve-quality and Show streaming-quality
+presets copy every audio track, language, codec, channel layout and lossless
+audio stream untouched. Movie Preserve Audio is forced and locked in the job
+modal. The Efficient Audio Show preset is the only built-in that enables
+conversion by default. Other custom presets may opt into conversion explicitly.
 
 The experimental efficient rules are deterministic:
 
@@ -56,7 +57,7 @@ measured result.
 ## Safety and applicability
 
 Movie and Show scopes are enforced by the backend. A 1080p Blu-ray REMUX such as
-The King of Comedy is eligible for Movie Streaming Quality when no other rule
+The King of Comedy is eligible for the Movie streaming-quality intent when no other rule
 blocks it. A 2160p UHD REMUX such as Dune: Part Two remains blocked by the movie
 REMUX guard, and its Dolby Vision and Preserve A/V protections also remain in
 force. Hardlinked/seeding media and interlaced media remain blocked.
@@ -64,19 +65,23 @@ force. Hardlinked/seeding media and interlaced media remain blocked.
 HEVC re-encoding, source applicability, minimum source bitrate, HDR policy and
 minimum worthwhile saving remain configurable on each preset. Defaults are
 conservative; specialized behavior such as 4K to 1080p is created by duplicating
-a preset and changing its resolution policy.
+a preset and changing its target resolution to `max_1080p`. Target resolution is
+a maximum cap, so it never upscales a smaller source. The available choices are
+`KEEP`, `2160p`, `1080p`, `720p`, `576p` and `480p`; every built-in uses `KEEP`.
+Source applicability defaults to all supported resolutions and is kept out of the
+normal preset editor and compression workflow.
 
 ## Custom presets and migration
 
 Built-ins have `origin = built_in`. Users can create, duplicate, edit,
-enable/disable and delete custom presets. Duplicating Show Streaming Quality
-creates an independent custom preset such as `Show Streaming Quality (Copy)`
-with a new ID. Changing its resolution policy to `max_1080p` does not change the
+enable/disable and delete custom presets. Duplicating a Show streaming-quality
+preset creates an independent custom preset with a user-chosen name
+with a new ID. Changing its target resolution to `max_1080p` does not change the
 built-in default.
 
-Catalogue migration is idempotent. It inserts missing current built-ins, disables
-untouched obsolete built-ins, preserves edited/custom presets, and leaves queued
-preset snapshots unchanged.
+Catalogue migration is idempotent. It inserts missing current built-ins, removes
+known obsolete built-in catalogue rows, preserves edited/custom presets, and
+leaves queued preset snapshots unchanged.
 
 ## Output handling
 
@@ -88,3 +93,8 @@ implement real ffmpeg, filesystem replacement, or media scanning.
 Real-media validation is still required for CRF values, QSV ICQ behavior, speed
 settings, HDR handling, player compatibility, frame and grain sensitivity,
 audio codec support, and actual output-size savings.
+
+HDR10 sources remain HDR10 when encoded to HEVC. SDR sources remain SDR. No
+default preset tone maps HDR to SDR. HDR10 output must eventually preserve and
+validate colour primaries, PQ transfer characteristics, matrix coefficients,
+mastering display metadata, MaxCLL, MaxFALL and related signalling.

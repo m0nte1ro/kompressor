@@ -47,7 +47,7 @@ def test_create_edit_duplicate_and_disable_presets(client, show_payload):
 @pytest.mark.parametrize("change", [
     {"name": "   "}, {"scope": "episode"}, {"target_video_bitrate": 0},
     {"target_video_bitrate": -1}, {"minimum_expected_saving_percent": 100},
-    {"minimum_source_bitrate": -1}, {"target_audio_bitrate": None},
+    {"minimum_source_bitrate": -1},
     {"destination_codec": "av1"}, {"extra_encoder_flag": "anything"},
 ])
 def test_invalid_preset_edits_are_atomic(client, change):
@@ -107,7 +107,7 @@ def test_quality_floor_inheritance_and_removal(client):
     assert tag(client, "season", "show-modern-family", ["Quality Floor"], season=3,
                quality_floor={"minimum_video_bitrate": 2_000_000, "minimum_height": 1080}).status_code == 200
     max_720 = settings(client, "show-streaming-quality")
-    max_720.update(name="Temporary max 720p", resolution_policy="max_720p")
+    max_720.update(name="Temporary max 720p", target_resolution="max_720p")
     max_720_id = client.post("/api/presets", json=max_720).json()["id"]
     result = eligible(client, preset=max_720_id)
     assert not result["eligible"]
@@ -163,7 +163,7 @@ def test_new_protection_blocks_pending_or_active_job(client, queue, show_payload
 
 def test_audio_tag_recalculates_queued_job_before_execution(client, queue, catalog, show_payload):
     catalog.media.library.shows[0].seasons[0].episodes[0].audio[0].bitrate = 1_500_000
-    client.post("/api/queue", json={**show_payload, "preserve_audio": False})
+    client.post("/api/queue", json={**show_payload, "preset_id": "show-streaming-efficient-audio", "preserve_audio": False})
     before = queue.snapshot()["lanes"][1]["queued"][0]
     assert not before["preserve_audio"]
     tag(client, "show", "show-modern-family", ["Preserve Audio"])

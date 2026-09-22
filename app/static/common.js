@@ -6,8 +6,11 @@ export const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char 
 export const size = value => value == null ? '—' : `${(value / 1e9).toFixed(1)} GB`;
 export const bitrate = value => `${value / 1e6} Mbps`;
 export const label = value => ({cpu: 'CPU · x265', qsv: 'Intel QSV', hevc: 'HEVC', h264: 'H.264',
-  preserve: 'Preserve source', efficient: 'Efficient E-AC3 / AAC', max_1080p: 'Max 1080p',
-  max_720p: 'Max 720p', hdr10: 'HDR10', dolby_vision: 'Dolby Vision', dolby_vision_hdr10: 'DV + HDR10',
+  preserve: 'Preserve source', keep: 'Keep source resolution', efficient: 'Efficient E-AC3 / AAC',
+  max_2160p: 'Max 2160p', max_1080p: 'Max 1080p', max_720p: 'Max 720p', max_576p: 'Max 576p', max_480p: 'Max 480p',
+  sdr_only: 'SDR sources only', hdr10_experimental: 'SDR + HDR10 · experimental',
+  preserve_source: 'Preserve source HDR mode', tone_map_to_sdr: 'Tone map HDR to SDR', hdr10: 'HDR10',
+  dolby_vision: 'Dolby Vision', dolby_vision_hdr10: 'DV + HDR10',
   preserve_quality: 'Preserve perceived quality', streaming_quality: 'Streaming-style quality',
   built_in: 'Built-in', custom: 'Custom'
 })[value] ?? String(value ?? 'SDR').replaceAll('_', ' ').toUpperCase();

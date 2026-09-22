@@ -30,12 +30,16 @@ DestinationCodec = Literal[
     "av1",
 ]
 
-ResolutionPolicy = Literal[
-    "preserve",
+TargetResolution = Literal[
+    "keep",
+    "max_2160p",
     "max_1080p",
     "max_720p",
+    "max_576p",
     "max_480p",
 ]
+
+SUPPORTED_SOURCE_RESOLUTIONS = ("480p", "576p", "720p", "1080p", "2160p")
 
 AudioPolicy = Literal[
     "preserve",
@@ -46,6 +50,23 @@ AudioConversionPolicy = Literal[
     "preserve",
     "efficient",
 ]
+
+HDRPolicy = Literal[
+    "preserve_source",
+    "tone_map_to_sdr",
+]
+
+
+class HDRMetadataPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    validate_signalling: bool = True
+    preserve_color_primaries: bool = True
+    preserve_transfer_characteristics: bool = True
+    preserve_matrix_coefficients: bool = True
+    preserve_mastering_display_metadata: bool = True
+    preserve_max_cll: bool = True
+    preserve_max_fall: bool = True
 
 
 class EfficientAudioRules(BaseModel):
@@ -91,17 +112,21 @@ class PresetSettings(BaseModel):
     quality_value: float | None = Field(default=None, ge=0, le=51)
     encoder_preset: Literal["fast", "medium", "slow", "slower"] = "slow"
     output_bit_depth: Literal[8, 10] = 10
-    source_resolutions: list[Literal["480p", "720p", "1080p", "2160p"]] = Field(default_factory=list)
-    hdr_support: Literal["sdr_only", "hdr10_experimental"] = "sdr_only"
+    source_resolutions: list[Literal["480p", "576p", "720p", "1080p", "2160p"]] = Field(
+        default_factory=lambda: list(SUPPORTED_SOURCE_RESOLUTIONS),
+    )
+    hdr_support: Literal["sdr_only", "hdr10_experimental"] = "hdr10_experimental"
+    hdr_policy: HDRPolicy = "preserve_source"
+    hdr_metadata: HDRMetadataPolicy = Field(default_factory=HDRMetadataPolicy)
     planning_video_bitrate_low: int | None = Field(default=None, gt=0, le=200_000_000)
     planning_video_bitrate_high: int | None = Field(default=None, gt=0, le=200_000_000)
     stereo_audio_bitrate: int = Field(default=192000, ge=64000, le=320000)
 
-    resolution_policy: ResolutionPolicy
+    target_resolution: TargetResolution = "keep"
 
-    audio_policy: AudioPolicy
+    audio_policy: AudioPolicy = "preserve"
 
-    preserve_audio_by_default: bool = False
+    preserve_audio_by_default: bool = True
 
     audio_conversion_policy: AudioConversionPolicy = "preserve"
 
@@ -111,11 +136,62 @@ class PresetSettings(BaseModel):
 
     efficient_audio_rules: EfficientAudioRules = Field(default_factory=EfficientAudioRules)
 
-    minimum_source_bitrate: int = Field(ge=0, le=500_000_000)
+    minimum_source_bitrate: int = Field(default=0, ge=0, le=500_000_000)
 
     minimum_expected_saving_percent: float = Field(default=20.0, ge=0, lt=100)
 
     allow_hevc_reencode: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def fill_quality_planning_defaults(cls, value):
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if (
+            normalized.get("rate_control") in {"crf", "icq"}
+            and "planning_video_bitrate_low" not in normalized
+            and "planning_video_bitrate_high" not in normalized
+        ):
+            scope = normalized.get("scope")
+            intent = normalized.get("intent", "streaming_quality")
+            if intent == "preserve_quality":
+                low, high = (1_000_000, 30_000_000) if scope == "movie" else (1_000_000, 20_000_000)
+            else:
+                low, high = (2_000_000, 8_000_000) if scope == "movie" else (1_000_000, 6_000_000)
+            normalized["planning_video_bitrate_low"] = low
+            normalized["planning_video_bitrate_high"] = high
+        if normalized.get("hdr_policy") == "tone_map_to_sdr" and normalized.get("preserve_hdr_metadata") is False:
+            normalized["hdr_metadata"] = {
+                "validate_signalling": False,
+                "preserve_color_primaries": False,
+                "preserve_transfer_characteristics": False,
+                "preserve_matrix_coefficients": False,
+                "preserve_mastering_display_metadata": False,
+                "preserve_max_cll": False,
+                "preserve_max_fall": False,
+            }
+        return normalized
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_resolution_policy(cls, value):
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        legacy = normalized.pop("resolution_policy", None)
+        if "target_resolution" not in normalized and legacy is not None:
+            normalized["target_resolution"] = {
+                "preserve": "keep",
+                "max_2160p": "max_2160p",
+                "max_1080p": "max_1080p",
+                "max_720p": "max_720p",
+                "max_576p": "max_576p",
+                "max_480p": "max_480p",
+            }.get(legacy, legacy)
+        elif normalized.get("target_resolution") == "preserve":
+            normalized["target_resolution"] = "keep"
+        return normalized
 
     @model_validator(mode="after")
     def efficient_audio_requires_bitrate(self):
@@ -140,6 +216,13 @@ class PresetSettings(BaseModel):
             raise ValueError("Planning bitrate range must be ordered.")
         if self.hdr_support == "hdr10_experimental" and (not self.preserve_hdr_metadata or self.output_bit_depth != 10):
             raise ValueError("Experimental HDR10 requires 10-bit output and metadata preservation.")
+        if self.hdr_policy == "tone_map_to_sdr":
+            if self.hdr_support == "sdr_only":
+                raise ValueError("Tone mapping requires HDR10 input support.")
+            if self.origin == "built_in":
+                raise ValueError("Built-in presets must preserve source HDR mode.")
+            if self.preserve_hdr_metadata or any(self.hdr_metadata.model_dump().values()):
+                raise ValueError("Tone mapping to SDR cannot preserve HDR metadata.")
         return self
 
 

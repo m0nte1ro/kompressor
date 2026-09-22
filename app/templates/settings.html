@@ -10,16 +10,15 @@
       <dt>Intent</dt><dd>{{ preset.intent | label }}</dd>
       <dt>Origin</dt><dd>{{ preset.origin | label }}</dd>
       <dt>Destination codec</dt><dd>{{ preset.destination_codec | label }}</dd>
-      <dt>Source resolutions</dt><dd>{{ preset.source_resolutions | join(', ') or 'Needs review' }}</dd>
-      <dt>HDR applicability</dt><dd>{{ preset.hdr_support }}</dd>
-      <dt>Rate control</dt><dd>{{ preset.rate_control | upper }}{% if preset.quality_value is not none %} {{ preset.quality_value }}{% endif %} · {{ preset.encoder_preset }} · {{ preset.output_bit_depth }} bit</dd>
-      {% if preset.rate_control == 'abr' %}<dt>Target bitrate</dt><dd>{{ preset.target_video_bitrate | bitrate }}</dd>
-      {% else %}<dt>Planning bitrate range</dt><dd>{{ preset.planning_video_bitrate_low | bitrate }} – {{ preset.planning_video_bitrate_high | bitrate }} · unmeasured</dd>{% endif %}
-      <dt>Resolution policy</dt><dd>{{ preset.resolution_policy | label }}</dd>
-      <dt>Stereo AAC target</dt><dd>{{ preset.stereo_audio_bitrate // 1000 }} kbps</dd>
-      <dt>Audio policy</dt><dd>{{ preset.audio_policy | label }}{% if preset.preserve_audio_by_default %} by default{% endif %}</dd>
-      <dt>Audio conversion</dt><dd>{{ preset.audio_conversion_policy | label }}{% if preset.target_audio_bitrate %} · {{ preset.target_audio_bitrate // 1000 }} kbps{% endif %}</dd>
-      <dt>HDR preservation</dt><dd>{{ 'Preserve HDR metadata' if preset.preserve_hdr_metadata else 'Not preserved' }}</dd>
+      <dt>HDR input support</dt><dd>{{ preset.hdr_support | label }}</dd>
+      <dt>HDR output policy</dt><dd>{{ preset.hdr_policy | label }}</dd>
+      <dt>Rate control</dt><dd>{{ preset.rate_control | upper }}{% if preset.quality_value is not none %} {{ preset.quality_value }}{% endif %}{% if preset.backend != 'qsv' %} · {{ preset.encoder_preset }}{% endif %}</dd>
+      {% if preset.backend == 'qsv' %}<dt>Output bit depth</dt><dd>{{ preset.output_bit_depth }} bit</dd><dt>Validation</dt><dd>Experimental</dd>{% else %}<dt>Output bit depth</dt><dd>{{ preset.output_bit_depth }} bit</dd>{% endif %}
+      {% if preset.rate_control == 'abr' %}<dt>Target bitrate</dt><dd>{{ preset.target_video_bitrate | bitrate }}</dd>{% endif %}
+      <dt>Target resolution</dt><dd>{{ preset.target_resolution | label }}</dd>
+      <dt>Audio</dt><dd>{{ 'Preserve every audio track by default' if preset.audio_policy == 'preserve' else 'Efficient conversion by default' }}</dd>
+      {% if preset.audio_policy == 'efficient' %}<dt>Conversion profile</dt><dd>AAC stereo / E-AC3 multichannel · AAC {{ preset.stereo_audio_bitrate // 1000 }} kbps / E-AC3 {{ preset.target_audio_bitrate // 1000 }} kbps</dd>{% endif %}
+      <dt>HDR signalling</dt><dd>{% if preset.hdr_support == 'sdr_only' %}Not applicable to SDR-only inputs{% elif preset.preserve_hdr_metadata %}Preserve and validate HDR10 signalling{% else %}Not preserved{% endif %}</dd>
       <dt>Minimum source bitrate</dt><dd>{{ preset.minimum_source_bitrate | bitrate }}</dd>
       <dt>Minimum expected saving</dt><dd>{{ '%g' | format(preset.minimum_expected_saving_percent) }}%</dd>
       <dt>HEVC reencode allowed</dt><dd>{{ 'Yes' if preset.allow_hevc_reencode else 'No' }}</dd>
