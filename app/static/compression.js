@@ -4,7 +4,7 @@ export function compressionModal(scope, refreshQueue) {
   const dialog = $('#compression-dialog');
   const form = $('#compression-form');
   let selected = [], presets = [], library, results = [];
-  let generation = 0, evaluation = 0, submitting = false;
+  let generation = 0, evaluation = 0, submitting = false, preserveAudioTouched = false;
   const errorBox = $('#modal-error');
   const submit = $('#add-to-queue');
 
@@ -17,7 +17,7 @@ export function compressionModal(scope, refreshQueue) {
     const fields = [
       ['Backend', label(preset.backend)], ['Destination codec', label(preset.destination_codec)],
       ['Rate control', `${preset.rate_control.toUpperCase()} ${preset.quality_value ?? bitrate(preset.target_video_bitrate)} · ${preset.encoder_preset} · ${preset.output_bit_depth} bit`], ['Resolution policy', label(preset.resolution_policy)],
-      ['Audio policy', preset.audio_policy === 'preserve' ? 'Copy all audio tracks' : `All tracks · AAC stereo ${preset.stereo_audio_bitrate / 1000}k / E-AC3 surround ${preset.target_audio_bitrate / 1000}k · no downmix`], ['HDR policy', preset.preserve_hdr_metadata ? 'Preserve HDR metadata' : 'Not preserved'],
+      ['Audio policy', preset.audio_policy === 'efficient' ? `Efficient by default · AAC stereo ${preset.stereo_audio_bitrate / 1000}k / E-AC3 surround ${preset.target_audio_bitrate / 1000}k` : preset.audio_conversion_policy === 'efficient' ? `Preserve by default · efficient fallback AAC ${preset.stereo_audio_bitrate / 1000}k / E-AC3 ${preset.target_audio_bitrate / 1000}k` : 'Copy all audio tracks'], ['HDR policy', preset.preserve_hdr_metadata ? 'Preserve HDR metadata' : 'Not preserved'],
       ['Source applicability', `${preset.source_resolutions.join(', ') || 'Needs review'} · ${preset.hdr_support}`],
     ];
     $('#preset-properties').innerHTML = fields.map(([name, value]) =>
@@ -56,7 +56,7 @@ export function compressionModal(scope, refreshQueue) {
         <p class="muted">Planning estimates for eligible, unqueued items only. CRF/ICQ ranges are assumptions, not output bounds. Keeping originals reclaims 0 bytes.</p>
         <div class="eligibility-items">${results.map(r => `<div class="eligibility-item">
           <strong>${esc(r.row.dataset.name)}</strong> <span class="badge ${r.excluded ? 'red' : 'green'}">${r.excluded ? 'Excluded' : 'Eligible'}</span>
-          <p class="muted">Audio: ${r.preserve_audio ? 'preserved by effective policy' : 'preset conversion policy'} · Estimated saving ~${esc(size(r.estimated_saving))}</p>
+          <p class="muted">Audio: ${r.preserve_audio ? 'preserved by effective policy' : 'preset conversion policy'} · ${r.estimate_basis === 'planning_range' ? `Planning saving ${esc(size(r.estimated_saving_low))} – ${esc(size(r.estimated_saving_high))}` : `Estimated saving ~${esc(size(r.estimated_saving))}`}</p>
           ${r.reasons.length ? `<ul>${r.reasons.map(reason => `<li>${esc(reason)}</li>`).join('')}</ul>` : ''}
           ${r.warnings.map(warning => `<p class="hdr">${esc(warning)}</p>`).join('')}
         </div>`).join('')}</div>`;
@@ -80,7 +80,15 @@ export function compressionModal(scope, refreshQueue) {
     const rect = dialog.getBoundingClientRect();
     if (event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) close();
   });
-  ['preset', 'preserve-audio', 'preserve-subtitles'].forEach(id => $(`#${id}`).addEventListener('change', evaluate));
+  $('#preset').addEventListener('change', () => {
+    if (!preserveAudioTouched) {
+      const chosen = presets.find(p => p.id === $('#preset').value);
+      if (chosen) $('#preserve-audio').checked = chosen.preserve_audio_by_default;
+    }
+    evaluate();
+  });
+  $('#preserve-audio').addEventListener('change', () => {preserveAudioTouched = true; evaluate();});
+  $('#preserve-subtitles').addEventListener('change', evaluate);
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
@@ -133,6 +141,7 @@ export function compressionModal(scope, refreshQueue) {
     $('#audio-rule').textContent = 'Preserve Audio tags and preset policy are enforced by the backend.';
     ['estimated-output', 'estimated-saving', 'estimated-percent'].forEach(id => $(`#${id}`).textContent = '—');
     $('#preserve-audio').checked = true;
+    preserveAudioTouched = false;
     $('#preserve-subtitles').checked = true;
     $('#replace-source').value = 'false';
     dialog.showModal();
@@ -145,6 +154,7 @@ export function compressionModal(scope, refreshQueue) {
       const chosen = suggested ?? presets.find(p => p.enabled && p.destination_codec !== 'av1');
       if (!chosen) throw new Error('No available presets for this media scope.');
       $('#preset').value = chosen.id;
+      $('#preserve-audio').checked = chosen.preserve_audio_by_default;
       const items = scope === 'movie' ? library.movies : library.shows.flatMap(show => show.seasons.flatMap(season => season.episodes));
       $('#source-summary').innerHTML = rows.map(row => {
         const item = items.find(i => i.id === row.dataset.id);

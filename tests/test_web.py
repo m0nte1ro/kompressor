@@ -52,11 +52,12 @@ def test_flat_episodes_and_escaped_seed_names(client, catalog):
 def test_settings_groups_presets_and_shows_policy_fields(client):
     html = client.get("/settings").text
     movie_start, show_start = html.index('<h2>Movie presets'), html.index('<h2>Show presets')
-    assert "Movie 1080p Quality" in html[movie_start:show_start]
-    assert "Show 1080p" not in html[movie_start:show_start]
-    assert "Show 1080p" in html[show_start:]
-    assert "Movie 1080p Quality" not in html[show_start:]
-    for field in ["Minimum source bitrate", "Minimum expected saving", "HEVC reencode allowed", "HDR preservation"]:
+    assert "Movie Preserve Quality" in html[movie_start:show_start]
+    assert "Movie Streaming Quality" in html[movie_start:show_start]
+    assert "Show Streaming Quality" in html[show_start:]
+    assert "Show Streaming + Efficient Audio" in html[show_start:]
+    assert "Movie Streaming Quality" not in html[show_start:]
+    for field in ["Intent", "Origin", "Minimum source bitrate", "Minimum expected saving", "HEVC reencode allowed", "HDR preservation"]:
         assert field in html
 
 

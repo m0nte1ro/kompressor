@@ -10,6 +10,16 @@ PresetScope = Literal[
     "show",
 ]
 
+PresetIntent = Literal[
+    "preserve_quality",
+    "streaming_quality",
+]
+
+PresetOrigin = Literal[
+    "built_in",
+    "custom",
+]
+
 EncoderBackend = Literal[
     "cpu",
     "qsv",
@@ -32,12 +42,43 @@ AudioPolicy = Literal[
     "efficient",
 ]
 
+AudioConversionPolicy = Literal[
+    "preserve",
+    "efficient",
+]
+
+
+class EfficientAudioRules(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mono_stereo_codec: Literal["aac"] = "aac"
+    multichannel_codec: Literal["eac3"] = "eac3"
+    channel_handling: Literal["preserve", "downmix_stereo"] = "preserve"
+    copy_codecs: list[Literal["aac", "eac3", "ac3"]] = Field(
+        default_factory=lambda: ["aac", "eac3", "ac3"],
+    )
+    copy_if_bitrate_at_or_below_target: bool = True
+    copy_unknown_bitrate: bool = True
+    copy_channels_above: int | None = Field(default=None, ge=2, le=16)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_channel_field(cls, value):
+        if not isinstance(value, dict) or "preserve_channels" not in value:
+            return value
+        normalized = dict(value)
+        preserve_channels = normalized.pop("preserve_channels")
+        normalized.setdefault("channel_handling", "preserve" if preserve_channels else "downmix_stereo")
+        return normalized
+
 
 class PresetSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     name: str = Field(min_length=1, max_length=120)
 
     scope: PresetScope
+    intent: PresetIntent = "streaming_quality"
+    origin: PresetOrigin = "custom"
 
     enabled: bool = True
 
@@ -60,9 +101,15 @@ class PresetSettings(BaseModel):
 
     audio_policy: AudioPolicy
 
+    preserve_audio_by_default: bool = False
+
+    audio_conversion_policy: AudioConversionPolicy = "preserve"
+
     target_audio_bitrate: int | None = Field(default=None, gt=0, le=10_000_000)
 
     preserve_hdr_metadata: bool = True
+
+    efficient_audio_rules: EfficientAudioRules = Field(default_factory=EfficientAudioRules)
 
     minimum_source_bitrate: int = Field(ge=0, le=500_000_000)
 
@@ -72,7 +119,7 @@ class PresetSettings(BaseModel):
 
     @model_validator(mode="after")
     def efficient_audio_requires_bitrate(self):
-        if self.audio_policy == "efficient" and self.target_audio_bitrate is None:
+        if (self.audio_policy == "efficient" or self.audio_conversion_policy == "efficient") and self.target_audio_bitrate is None:
             raise ValueError("Efficient audio requires a target audio bitrate.")
         if self.rate_control == "abr":
             if self.target_video_bitrate is None or self.quality_value is not None:

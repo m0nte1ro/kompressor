@@ -12,7 +12,9 @@ def test_restart_preserves_preferences_queue_order_and_history(tmp_path, legacy_
     with TestClient(app) as client:
         preset = client.get("/api/presets?scope=movie").json()[0]
         id = preset.pop("id")
-        preset.update(name="My movie quality", target_video_bitrate=9_000_000)
+        preset.update(name="My movie quality", target_video_bitrate=9_000_000,
+                  rate_control="abr", quality_value=None,
+                  planning_video_bitrate_low=None, planning_video_bitrate_high=None)
         client.put(f"/api/presets/{id}", json=preset)
         custom = dict(preset, name="Created preset survives restart")
         created_id = client.post("/api/presets", json=custom).json()["id"]
@@ -25,7 +27,7 @@ def test_restart_preserves_preferences_queue_order_and_history(tmp_path, legacy_
         client.patch(f"/api/queue/{job['id']}/priority", json={"priority": "urgent"})
         client.post(f"/api/queue/{job['id']}/move-next")
         # Produce history on the other lane, then queue another job there.
-        show_payload = {"scope": "show", "preset_id": "show-1080p", "media_ids": ["modern-family-s03e04"]}
+        show_payload = {"scope": "show", "preset_id": "show-streaming-quality", "media_ids": ["modern-family-s03e04"]}
         client.post("/api/queue", json=show_payload)
         app.state.queue_service.tick(0)
         app.state.queue_service.tick(30)
@@ -35,7 +37,7 @@ def test_restart_preserves_preferences_queue_order_and_history(tmp_path, legacy_
     second = create_app(path, start_workers=False, initial_presets=legacy_defaults)
     with TestClient(second) as client:
         presets = client.get("/api/presets").json()
-        assert len(presets) == 7
+        assert len(presets) == 6
         assert next(p for p in presets if p["id"] == created_id)["name"] == custom["name"]
         assert next(p for p in presets if p["id"] == disabled_id)["enabled"] is False
         dune = client.get("/api/tags", params={"kind": "movie", "id": "movie-dune-part-two"}).json()
@@ -69,7 +71,7 @@ def test_queue_transaction_rolls_back_partial_batch(client, queue, catalog, monk
         save(job)
     monkeypatch.setattr(queue.repository, "add", fail_second)
     with pytest.raises(RuntimeError, match="storage failure"):
-        queue.enqueue(EnqueueRequest(scope="movie", preset_id="movie-1080p-quality", media_ids=[original.id, "another"]))
+        queue.enqueue(EnqueueRequest(scope="movie", preset_id="movie-streaming-quality", media_ids=[original.id, "another"]))
     assert queue.snapshot()["pending_count"] == 0
 
 

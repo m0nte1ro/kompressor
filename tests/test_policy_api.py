@@ -1,7 +1,7 @@
 import pytest
 
 
-@pytest.mark.parametrize("scope,count", [("movie", 2), ("show", 4)])
+@pytest.mark.parametrize("scope,count", [("movie", 2), ("show", 3)])
 def test_scoped_presets(client, scope, count):
     response = client.get(f"/api/presets?scope={scope}")
     assert response.status_code == 200
@@ -10,13 +10,13 @@ def test_scoped_presets(client, scope, count):
 
 
 @pytest.mark.parametrize("scope,media,preset,eligible,reason", [
-    ("movie", "movie-dune-part-two", "movie-1080p-quality", False, "2160p REMUX"),
-    ("movie", "movie-hardlinked-example", "movie-1080p-quality", False, "hardlinked"),
-    ("movie", "movie-king-of-comedy", "show-1080p", False, "scope"),
-    ("show", "modern-family-s03e04", "movie-1080p-quality", False, "scope"),
-    ("show", "modern-family-s03e04", "show-1080p", True, ""),
-    ("show", "modern-family-s03e05", "show-1080p", False, "compression floor"),
-    ("show", "top-gear-s14e01", "show-1080p", False, "Interlaced"),
+    ("movie", "movie-dune-part-two", "movie-streaming-quality", False, "2160p REMUX"),
+    ("movie", "movie-hardlinked-example", "movie-streaming-quality", False, "hardlinked"),
+    ("movie", "movie-king-of-comedy", "show-streaming-quality", False, "scope"),
+    ("show", "modern-family-s03e04", "movie-streaming-quality", False, "scope"),
+    ("show", "modern-family-s03e04", "show-streaming-quality", True, ""),
+    ("show", "modern-family-s03e05", "show-streaming-quality", False, "HEVC"),
+    ("show", "top-gear-s14e01", "show-streaming-quality", False, "Interlaced"),
 ])
 def test_eligibility_regressions(client, scope, media, preset, eligible, reason):
     response = client.post("/api/eligibility", json={"media_id": media, "scope": scope, "preset_id": preset})
@@ -27,11 +27,11 @@ def test_eligibility_regressions(client, scope, media, preset, eligible, reason)
         assert any(reason in item for item in result["reasons"])
     else:
         assert result["backend"] == "qsv"
-        assert result["estimated_saving"] > 0
+        assert result["planning_saving"] > 0
 
 
 def test_dune_keeps_all_core_protections(client):
-    result = client.post("/api/eligibility", json={"scope": "movie", "media_id": "movie-dune-part-two", "preset_id": "movie-4k-quality"}).json()
+    result = client.post("/api/eligibility", json={"scope": "movie", "media_id": "movie-dune-part-two", "preset_id": "movie-preserve-quality"}).json()
     assert not result["eligible"]
     assert any("Preserve A/V" in reason for reason in result["reasons"])
     assert any("2160p REMUX" in reason for reason in result["reasons"])
@@ -42,7 +42,7 @@ def test_audio_inheritance_and_override(client, catalog):
     show = catalog.media.library.shows[0]
     show.tags.append("Preserve Audio")
     show.seasons[0].tags.append("Preserve Audio")
-    request = {"scope": "show", "media_id": "modern-family-s03e04", "preset_id": "show-1080p", "preserve_audio": False}
+    request = {"scope": "show", "media_id": "modern-family-s03e04", "preset_id": "show-streaming-quality", "preserve_audio": False}
     result = client.post("/api/eligibility", json=request).json()
     assert result["preserve_audio"] is True
     assert any("tag overrides" in warning for warning in result["warnings"])
@@ -58,5 +58,5 @@ def test_api_errors_and_inventory(client):
     assert (summary["movies"], summary["shows"], summary["episodes"]) == (3, 3, 4)
     assert len(client.get("/api/library").json()["movies"]) == 3
     assert client.get("/api/presets?scope=episode").status_code == 422
-    for media, preset in [("missing", "show-1080p"), ("modern-family-s03e04", "missing")]:
+    for media, preset in [("missing", "show-streaming-quality"), ("modern-family-s03e04", "missing")]:
         assert client.post("/api/eligibility", json={"media_id": media, "scope": "show", "preset_id": preset}).status_code == 404

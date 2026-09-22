@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from app.models.preset import CompressionPreset, PresetSettings
 from app.models.tags import TAG_NAMES, TagTarget, TagUpdate
@@ -19,7 +19,7 @@ def ensure_supported(payload: PresetSettings):
 @router.post("/presets", status_code=201)
 def create_preset(request: Request, payload: PresetSettings):
     ensure_supported(payload)
-    preset = CompressionPreset(id=str(uuid4()), **payload.model_dump())
+    preset = CompressionPreset(id=str(uuid4()), **payload.model_dump(exclude={"origin"}), origin="custom")
     request.app.state.catalog.presets.save(preset)
     return preset.model_dump()
 
@@ -31,7 +31,8 @@ def update_preset(request: Request, preset_id: str, payload: PresetSettings):
     with request.app.state.database.transaction():
         if repository.get_by_id(preset_id) is None:
             raise HTTPException(404, "Preset not found.")
-        preset = CompressionPreset(id=preset_id, **payload.model_dump())
+        existing = repository.get_by_id(preset_id)
+        preset = CompressionPreset(id=preset_id, **payload.model_dump(exclude={"origin"}), origin=existing.origin)
         repository.save(preset)
     return preset.model_dump()
 
@@ -43,9 +44,22 @@ def duplicate_preset(request: Request, preset_id: str):
         source = repository.get_by_id(preset_id)
         if source is None:
             raise HTTPException(404, "Preset not found.")
-        preset = source.model_copy(update={"id": str(uuid4()), "name": source.name[:113] + " (copy)"})
+        preset = source.model_copy(update={"id": str(uuid4()), "name": source.name[:112] + " (Copy)", "origin": "custom"}, deep=True)
         repository.save(preset)
     return preset.model_dump()
+
+
+@router.delete("/presets/{preset_id}", status_code=204)
+def delete_preset(request: Request, preset_id: str) -> Response:
+    repository = request.app.state.catalog.presets
+    with request.app.state.database.transaction():
+        preset = repository.get_by_id(preset_id)
+        if preset is None:
+            raise HTTPException(404, "Preset not found.")
+        if preset.origin == "built_in":
+            raise HTTPException(409, "Built-in presets cannot be deleted. Disable or duplicate this preset instead.")
+        repository.delete(preset_id)
+    return Response(status_code=204)
 
 
 @router.get("/tags")

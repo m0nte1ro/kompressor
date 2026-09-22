@@ -16,7 +16,7 @@ class EnqueueRequest(BaseModel):
     media_ids: list[str] = Field(min_length=1, max_length=500)
     scope: MediaScope
     preset_id: str
-    preserve_audio: bool = True
+    preserve_audio: bool | None = None
     preserve_subtitles: bool = True
     replace_source: bool = False
 
@@ -37,8 +37,11 @@ class QueueJob(BaseModel):
     requested_preserve_audio: bool | None = None
     preserve_subtitles: bool
     source_size: int
-    estimated_output_size: int
-    estimated_saving: int
+    estimated_output_size: int | None
+    estimated_saving: int | None
+    planning_output_size: int | None = None
+    planning_saving: int | None = None
+    planning_saving_percent: float | None = None
     source_codec: str
     replace_source: bool = False
     estimate_basis: str = "bitrate"

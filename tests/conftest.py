@@ -22,11 +22,9 @@ class MemoryMedia:
 
 @pytest.fixture
 def legacy_defaults():
-    # Existing regression tests exercise explicit bitrate presets. Production defaults
-    # and upgrades are tested independently in test_streaming_presets.py.
     return [p.model_copy(update={"source_resolutions": ["480p", "720p", "1080p", "2160p"],
                                 "hdr_support": "hdr10_experimental"})
-            for p in SeedPresetRepository(ROOT / "fixtures/presets-legacy.json").get_all()]
+            for p in SeedPresetRepository(ROOT / "fixtures/presets.json").get_all()]
 
 
 @pytest.fixture
@@ -54,9 +52,9 @@ def client(runtime):
 
 @pytest.fixture
 def movie_payload():
-    return {"scope": "movie", "preset_id": "movie-1080p-quality", "media_ids": ["movie-king-of-comedy"]}
+    return {"scope": "movie", "preset_id": "movie-streaming-quality", "media_ids": ["movie-king-of-comedy"]}
 
 
 @pytest.fixture
 def show_payload():
-    return {"scope": "show", "preset_id": "show-1080p", "media_ids": ["modern-family-s03e04"]}
+    return {"scope": "show", "preset_id": "show-streaming-quality", "media_ids": ["modern-family-s03e04"]}

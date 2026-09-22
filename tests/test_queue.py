@@ -23,8 +23,8 @@ def test_bulk_skips_blocked_missing_and_duplicates(client, movie_payload):
 
 
 def test_cross_scope_is_rejected_by_backend(client, movie_payload, show_payload):
-    movie_payload["preset_id"] = "show-1080p"
-    show_payload["preset_id"] = "movie-1080p-quality"
+    movie_payload["preset_id"] = "show-streaming-quality"
+    show_payload["preset_id"] = "movie-streaming-quality"
     for payload in (movie_payload, show_payload):
         result = add(client, payload)
         assert not result["added"]
@@ -37,7 +37,8 @@ def test_preservation_and_preset_snapshot(client, catalog, show_payload):
     job = add(client, show_payload)["added"][0]
     assert job["preserve_audio"] is True
     assert job["preserve_subtitles"] is False
-    assert job["preset"]["target_video_bitrate"] == 2_500_000
+    assert job["preset"]["rate_control"] == "icq"
+    assert job["preset"]["quality_value"] == 23
     assert job["backend"] == "qsv"
     assert client.post("/api/queue", json={**show_payload, "target_video_bitrate": 1}).status_code == 422
     assert client.post("/api/queue", json={**show_payload, "backend": "cpu"}).status_code == 422
@@ -77,7 +78,7 @@ def test_order_priority_move_next_and_skip(client, queue, catalog, movie_payload
     movie_payload["media_ids"] = ["copy-0", original.id, "copy-1"]
     add(client, movie_payload)
     queued = client.get("/api/queue").json()["lanes"][0]["queued"]
-    assert [j["estimated_saving"] for j in queued] == sorted((j["estimated_saving"] for j in queued), reverse=True)
+    assert [j["planning_saving"] for j in queued] == sorted((j["planning_saving"] for j in queued), reverse=True)
     smallest = queued[-1]
     assert client.patch(f"/api/queue/{smallest['id']}/priority", json={"priority": "urgent"}).status_code == 204
     assert client.get("/api/queue").json()["lanes"][0]["queued"][0]["id"] == smallest["id"]

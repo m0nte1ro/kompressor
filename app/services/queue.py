@@ -35,7 +35,8 @@ class QueueService:
         return sorted(
             (j for j in self.repository.get_all() if j.backend == backend and j.status == "queued"),
             key=lambda j: (-j.move_next_order, -PRIORITIES[j.priority],
-                           -j.estimated_saving, j.created_at, j.id),
+                           -(j.estimated_saving if j.estimated_saving is not None else j.planning_saving or 0),
+                           j.created_at, j.id),
         )
 
     def snapshot(self) -> dict:
@@ -90,6 +91,9 @@ class QueueService:
                     estimated_saving_high=result.estimated_saving_high,
                     estimated_output_size=result.estimated_output_size,
                     estimated_saving=result.estimated_saving, created_at=now(),
+                    planning_output_size=result.planning_output_size,
+                    planning_saving=result.planning_saving,
+                    planning_saving_percent=result.planning_saving_percent,
                 )
                 self.repository.add(job)
                 added.append(job.model_dump())
@@ -196,5 +200,8 @@ class QueueService:
                     job.estimate_basis = result.estimate_basis
                     job.estimated_saving_low = result.estimated_saving_low
                     job.estimated_saving_high = result.estimated_saving_high
+                    job.planning_output_size = result.planning_output_size
+                    job.planning_saving = result.planning_saving
+                    job.planning_saving_percent = result.planning_saving_percent
                 if job.model_dump() != before:
                     self.repository.save(job)

@@ -13,7 +13,7 @@ class EligibilityRequest(BaseModel):
     media_id: str
     scope: Literal["movie", "show"]
     preset_id: str
-    preserve_audio: bool = False
+    preserve_audio: bool | None = None
     preserve_subtitles: bool = True
 
 

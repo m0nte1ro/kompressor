@@ -7,7 +7,9 @@ export const size = value => value == null ? '—' : `${(value / 1e9).toFixed(1)
 export const bitrate = value => `${value / 1e6} Mbps`;
 export const label = value => ({cpu: 'CPU · x265', qsv: 'Intel QSV', hevc: 'HEVC', h264: 'H.264',
   preserve: 'Preserve source', efficient: 'Efficient E-AC3 / AAC', max_1080p: 'Max 1080p',
-  max_720p: 'Max 720p', hdr10: 'HDR10', dolby_vision: 'Dolby Vision', dolby_vision_hdr10: 'DV + HDR10'
+  max_720p: 'Max 720p', hdr10: 'HDR10', dolby_vision: 'Dolby Vision', dolby_vision_hdr10: 'DV + HDR10',
+  preserve_quality: 'Preserve perceived quality', streaming_quality: 'Streaming-style quality',
+  built_in: 'Built-in', custom: 'Custom'
 })[value] ?? String(value ?? 'SDR').replaceAll('_', ' ').toUpperCase();
 
 export async function api(path, options = {}) {

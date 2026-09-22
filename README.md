@@ -3,8 +3,9 @@
 A compact, seed-backed media inventory and compression WebUI using FastAPI,
 Jinja2, vanilla JavaScript and CSS. No frontend build step or external APIs.
 
-See the [streaming preset report](docs/STREAMING_PRESETS_REPORT.md) for the default
-quality settings, their rationale, the King of Comedy example and limitations.
+See the [streaming preset report](docs/STREAMING_PRESETS_REPORT.md) for the five
+intent-based defaults, their audio policies, the King of Comedy example and
+real-media validation assumptions.
 
 ## Run locally
 
@@ -48,11 +49,14 @@ are excluded from Git. Tests use isolated databases in temporary directories.
 - Settings separates movie/show presets and supports creating, editing,
   duplicating and enabling/disabling every preset. The initial presets are copied
   from the seed JSON once. Subsequent startups do not overwrite user edits.
+  Built-in defaults are Movie Preserve Quality, Movie Streaming Quality, Show
+  Preserve Quality, Show Streaming Quality and Show Streaming + Efficient Audio;
+  all preserve source resolution.
   Existing jobs keep a complete preset snapshot, even if that preset is later
   edited, moved to another scope or disabled. Disable affects new submissions.
-  The streaming-profile upgrade adds new presets and disables untouched legacy
-  defaults once; user edits are preserved. Legacy custom presets need explicit
-  source resolutions before they can be used again.
+  The catalogue upgrade inserts missing current presets and disables untouched
+  legacy defaults once; user edits and queued snapshots are preserved. Legacy
+  custom presets need explicit source resolutions before they can be used again.
 - Movies and episodes have Manage tags; episode pages also expose series and
   season tags. Select multiple rows to add/remove tags without replacing unrelated
   direct tags. The editor shows direct tags, inherited tags and their origin.
@@ -78,9 +82,10 @@ or hardlink protections.
 Presets support CPU CRF, QSV ICQ and explicit ABR, along with encoder effort,
 output bit depth, source resolutions and SDR/experimental-HDR10 applicability.
 Quality modes carry planning bitrate ranges separately from encoder settings.
-Estimates retain known audio and non-video residual data and no longer clamp
-oversized outputs to the source size. Actual quality-mode savings must be checked
-after encoding; pre-encode minimum-saving shortfalls produce a warning.
+They do not return fake exact output sizes or savings; ranges are labeled as
+planning estimates and may fall outside their bounds. Actual quality-mode savings
+must be checked after encoding; pre-encode minimum-saving shortfalls produce a
+warning.
 
 Jobs default to `replace_source: false` (keep the original and plan a separate
 test output). `true` records replacement-after-validation intent. Both remain
@@ -125,8 +130,9 @@ New endpoints: `GET/POST /api/queue`, `DELETE /api/queue/{id}`,
 `PATCH /api/queue/{id}/priority`, `POST /api/queue/{id}/move-next`, and
 `POST /api/queue/{id}/skip`. Interactive API documentation is at `/docs`.
 
-Preset management: `POST /api/presets`, `PUT /api/presets/{id}` and
-`POST /api/presets/{id}/duplicate`. Tag management: `GET /api/tags?kind=movie&id=...`
+Preset management: `POST /api/presets`, `PUT /api/presets/{id}`,
+`POST /api/presets/{id}/duplicate` and `DELETE /api/presets/{id}` for custom
+presets. Tag management: `GET /api/tags?kind=movie&id=...`
 (kinds: movie, show, season, episode; season targets also need `season=...`) and
 `PATCH /api/tags` with targets, tags, operation and optional quality_floor.
 Bulk operations accept `add` or `remove`; single targets also accept `replace`.

@@ -21,7 +21,7 @@ class PolicyEngine:
         scope: str,
         preset: CompressionPreset,
         effective_tags: list[str],
-        preserve_audio: bool,
+        preserve_audio: bool | None,
         preserve_subtitles: bool,
         quality_floor: QualityFloor | None = None,
     ) -> EligibilityResult:
@@ -123,21 +123,25 @@ class PolicyEngine:
             )
 
         effective_preserve_audio = (
-            preserve_audio
+            preserve_audio is True
+            or (preserve_audio is not False and preset.preserve_audio_by_default)
             or "Preserve Audio" in effective_tags
-            or preset.audio_policy == "preserve"
+            or (preset.audio_policy == "preserve" and preset.audio_conversion_policy == "preserve")
         )
 
         if (
             "Preserve Audio" in effective_tags
-            and not preserve_audio
+            and preserve_audio is not True
         ):
             warnings.append(
                 "Preserve Audio tag overrides the modal audio setting."
             )
 
         estimates = estimate(item, preset, effective_preserve_audio)
-        if estimates["estimated_saving_percent"] < preset.minimum_expected_saving_percent:
+        saving_percent = estimates["estimated_saving_percent"]
+        if saving_percent is None:
+            saving_percent = estimates["planning_saving_percent"]
+        if saving_percent < preset.minimum_expected_saving_percent:
             if preset.rate_control == "abr":
                 reasons.append("Estimated saving is below preset minimum.")
             else:

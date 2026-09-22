@@ -29,4 +29,7 @@ class EligibilityResult(BaseModel):
     estimated_saving_low: int | None = None
     estimated_saving_high: int | None = None
     estimate_basis: str = "bitrate"
+    planning_output_size: int | None = None
+    planning_saving: int | None = None
+    planning_saving_percent: float | None = None
     audio_plan: list[dict] = Field(default_factory=list)

@@ -1,7 +1,7 @@
 import pytest
 
 
-def settings(client, preset_id="show-1080p"):
+def settings(client, preset_id="show-streaming-quality"):
     preset = next(p for p in client.get("/api/presets").json() if p["id"] == preset_id)
     preset.pop("id")
     return preset
@@ -14,7 +14,7 @@ def tag(client, kind, id, tags, **extra):
     return client.patch("/api/tags", json={"targets": [target], "tags": tags, **extra})
 
 
-def eligible(client, media="modern-family-s03e04", preset="show-1080p", **extra):
+def eligible(client, media="modern-family-s03e04", preset="show-streaming-quality", **extra):
     return client.post("/api/eligibility", json={"scope": "show", "media_id": media,
                                                 "preset_id": preset, **extra}).json()
 
@@ -25,14 +25,16 @@ def test_create_edit_duplicate_and_disable_presets(client, show_payload):
     response = client.post("/api/presets", json=payload)
     assert response.status_code == 201
     preset = response.json()
-    payload.update(target_video_bitrate=3_000_000, backend="cpu", name="Edited show preset")
+    payload.update(target_video_bitrate=3_000_000, backend="cpu", name="Edited show preset",
+                   rate_control="abr", quality_value=None, planning_video_bitrate_low=None,
+                   planning_video_bitrate_high=None)
     assert client.put(f"/api/presets/{preset['id']}", json=payload).status_code == 200
     scoped = client.get("/api/presets?scope=movie").json()
     assert all(p["id"] != preset["id"] for p in scoped)
     duplicate = client.post(f"/api/presets/{preset['id']}/duplicate").json()
     assert duplicate["id"] != preset["id"]
     assert duplicate["target_video_bitrate"] == 3_000_000
-    assert duplicate["name"] == "Edited show preset (copy)"
+    assert duplicate["name"] == "Edited show preset (Copy)"
     payload["enabled"] = False
     client.put(f"/api/presets/{preset['id']}", json=payload)
     result = client.post("/api/queue", json={**show_payload, "preset_id": preset["id"]}).json()
@@ -51,7 +53,7 @@ def test_create_edit_duplicate_and_disable_presets(client, show_payload):
 def test_invalid_preset_edits_are_atomic(client, change):
     payload = settings(client)
     before = client.get("/api/presets").json()
-    assert client.put("/api/presets/show-1080p", json={**payload, **change}).status_code == 422
+    assert client.put("/api/presets/show-streaming-quality", json={**payload, **change}).status_code == 422
     assert client.get("/api/presets").json() == before
 
 
@@ -81,7 +83,7 @@ def test_direct_and_inherited_tag_provenance(client):
     result = eligible(client, preserve_audio=False)
     assert result["preserve_audio"] is True
     assert any("Quality CPU" in reason for reason in result["reasons"])
-    assert eligible(client, preset="show-quality")["eligible"] is True
+    assert eligible(client, preset="show-preserve-quality")["eligible"] is True
     assert client.get("/api/library").json()["shows"][0]["tags"] == ["Preserve Audio"]
 
 
@@ -104,13 +106,21 @@ def test_quality_floor_inheritance_and_removal(client):
     assert tag(client, "show", "show-modern-family", ["Quality Floor"], quality_floor=floor).status_code == 200
     assert tag(client, "season", "show-modern-family", ["Quality Floor"], season=3,
                quality_floor={"minimum_video_bitrate": 2_000_000, "minimum_height": 1080}).status_code == 200
-    result = eligible(client, preset="show-720p")
+    max_720 = settings(client, "show-streaming-quality")
+    max_720.update(name="Temporary max 720p", resolution_policy="max_720p")
+    max_720_id = client.post("/api/presets", json=max_720).json()["id"]
+    result = eligible(client, preset=max_720_id)
     assert not result["eligible"]
     assert any("resolution" in reason for reason in result["reasons"])
     assert any("bitrate" in reason for reason in result["reasons"])
     detail = client.get("/api/tags", params={"kind": "episode", "id": "modern-family-s03e04"}).json()
     assert detail["effective_quality_floor"] == {"minimum_video_bitrate": 3_000_000, "minimum_height": 1080}
-    assert eligible(client, preset="show-quality")["eligible"] is True
+    abr = settings(client, "show-streaming-quality")
+    abr.update(name="Quality floor ABR", backend="cpu", rate_control="abr", quality_value=None,
+               target_video_bitrate=6_000_000, planning_video_bitrate_low=None,
+               planning_video_bitrate_high=None)
+    abr_id = client.post("/api/presets", json=abr).json()["id"]
+    assert eligible(client, preset=abr_id)["eligible"] is True
     assert tag(client, "season", "show-modern-family", ["Quality Floor"], season=3, operation="remove").status_code == 200
     detail = client.get("/api/tags", params={"kind": "episode", "id": "modern-family-s03e04"}).json()
     assert detail["effective_quality_floor"] == floor
@@ -131,7 +141,7 @@ def test_invalid_tags_and_missing_target_roll_back_bulk(client):
 def test_removing_seed_protection_does_not_override_automatic_guards(client):
     response = tag(client, "movie", "movie-dune-part-two", [])
     assert response.status_code == 200
-    result = client.post("/api/eligibility", json={"scope": "movie", "media_id": "movie-dune-part-two", "preset_id": "movie-4k-quality"}).json()
+    result = client.post("/api/eligibility", json={"scope": "movie", "media_id": "movie-dune-part-two", "preset_id": "movie-preserve-quality"}).json()
     assert not result["eligible"]
     assert any("REMUX" in reason for reason in result["reasons"])
     assert any("Dolby Vision" in reason for reason in result["reasons"])
@@ -151,14 +161,15 @@ def test_new_protection_blocks_pending_or_active_job(client, queue, show_payload
     assert client.get("/api/queue").json()["history"][0]["status"] == "blocked"
 
 
-def test_audio_tag_recalculates_queued_job_before_execution(client, queue, show_payload):
+def test_audio_tag_recalculates_queued_job_before_execution(client, queue, catalog, show_payload):
+    catalog.media.library.shows[0].seasons[0].episodes[0].audio[0].bitrate = 1_500_000
     client.post("/api/queue", json={**show_payload, "preserve_audio": False})
     before = queue.snapshot()["lanes"][1]["queued"][0]
     assert not before["preserve_audio"]
     tag(client, "show", "show-modern-family", ["Preserve Audio"])
     after = queue.snapshot()["lanes"][1]["queued"][0]
     assert after["preserve_audio"]
-    assert after["estimated_saving"] < before["estimated_saving"]
+    assert after["planning_saving"] < before["planning_saving"]
     queue.tick(0)
     assert queue.snapshot()["lanes"][1]["active"]["preserve_audio"]
 
@@ -167,7 +178,9 @@ def test_preset_edits_do_not_modify_existing_jobs(client, queue, show_payload):
     original = client.post("/api/queue", json=show_payload).json()["added"][0]
     payload = settings(client)
     payload.update(enabled=False, backend="cpu", target_video_bitrate=5_000_000)
-    client.put("/api/presets/show-1080p", json=payload)
+    payload.update(rate_control="abr", quality_value=None, planning_video_bitrate_low=None,
+                   planning_video_bitrate_high=None)
+    client.put("/api/presets/show-streaming-quality", json=payload)
     queue.tick(0)
     job = queue.snapshot()["lanes"][1]["active"]
     assert job["preset"] == original["preset"]
