@@ -5,13 +5,7 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.models.media import MediaLibrary
-from app.repositories.preset_seed import SeedPresetRepository
-from app.repositories.queue_fake import FakeQueueRepository
 from app.repositories.seed import SeedMediaRepository
-from app.services.catalog import CatalogService
-from app.services.policy import PolicyEngine
-from app.services.queue import QueueService
-from app.workers.fake import FakeEncoderWorker
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,29 +20,26 @@ class MemoryMedia:
 
 
 @pytest.fixture
-def catalog():
+def runtime(tmp_path):
     media = MemoryMedia(SeedMediaRepository(ROOT / "fixtures/media.json").get_library())
-    return CatalogService(media, SeedPresetRepository(ROOT / "fixtures/presets.json"), PolicyEngine())
+    application = main.create_app(tmp_path / "state.sqlite3", media=media, start_workers=False)
+    with TestClient(application) as client:
+        yield application, client
 
 
 @pytest.fixture
-def queue(catalog):
-    return QueueService(FakeQueueRepository(ROOT / "fixtures/queue.json"), catalog, FakeEncoderWorker())
+def catalog(runtime):
+    return runtime[0].state.catalog
 
 
 @pytest.fixture
-def client(monkeypatch, catalog, queue):
-    monkeypatch.setattr(main, "catalog", catalog)
-    monkeypatch.setattr(main, "media_repository", catalog.media)
-    monkeypatch.setattr(main, "preset_repository", catalog.presets)
-    monkeypatch.setattr(main.app.state, "catalog", catalog)
-    monkeypatch.setattr(main.app.state, "queue_service", queue)
-    # No lifespan: tests control scheduler time explicitly, without wall-clock sleeps.
-    test_client = TestClient(main.app)
-    try:
-        yield test_client
-    finally:
-        test_client.close()
+def queue(runtime):
+    return runtime[0].state.queue_service
+
+
+@pytest.fixture
+def client(runtime):
+    return runtime[1]
 
 
 @pytest.fixture

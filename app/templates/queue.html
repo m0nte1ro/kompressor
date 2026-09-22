@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block content %}
-<p class="notice">One CPU worker + one QSV worker. Progress is simulated; queue and history reset when the app restarts.</p>
+<p class="notice">One CPU worker + one QSV worker. Progress is simulated; queue and history are saved locally. Interrupted simulations restart after revalidation.</p>
 <div class="queue-grid" id="queue-lanes">
   {% for backend, label in [('cpu', 'CPU Queue'), ('qsv', 'Intel QSV Queue')] %}
   <section class="card lane" data-backend="{{ backend }}" aria-label="{{ label }}">

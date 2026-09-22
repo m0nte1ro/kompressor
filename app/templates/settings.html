@@ -1,10 +1,10 @@
 {% extends 'base.html' %}
 {% block content %}
-<p class="notice">Presets own all technical settings. This seed catalog is read-only; preset editing will be added later.</p>
+<p class="notice">Presets own all technical settings. Changes are saved locally. Queued jobs retain their original preset configuration.</p>
 {% for scope, heading in [('movie', 'Movie presets'), ('show', 'Show presets')] %}
-<section class="preset-section" aria-label="{{ heading }}"><h2>{{ heading }}</h2><div class="preset-grid">
+<section class="preset-section" aria-label="{{ heading }}"><div class="toolbar"><h2>{{ heading }}</h2><button class="primary" data-new-preset="{{ scope }}">+ New preset</button></div><div class="preset-grid">
   {% for preset in presets if preset.scope == scope %}
-  <article class="card preset-card"><header><h3>{{ preset.name }}</h3><span class="badge {{ 'green' if preset.enabled else 'red' }}">{{ 'Enabled' if preset.enabled else 'Disabled' }}</span></header>
+  <article class="card preset-card" data-preset-id="{{ preset.id }}"><header><h3>{{ preset.name }}</h3><span class="badge {{ 'green' if preset.enabled else 'red' }}">{{ 'Enabled' if preset.enabled else 'Disabled' }}</span></header>
     <dl>
       <dt>Backend</dt><dd>{{ preset.backend | label }}</dd>
       <dt>Destination codec</dt><dd>{{ preset.destination_codec | label }}</dd>
@@ -16,6 +16,7 @@
       <dt>Minimum expected saving</dt><dd>{{ '%g' | format(preset.minimum_expected_saving_percent) }}%</dd>
       <dt>HEVC reencode allowed</dt><dd>{{ 'Yes' if preset.allow_hevc_reencode else 'No' }}</dd>
     </dl>
+    <div class="job-controls"><button data-edit-preset>Edit</button><button data-duplicate-preset>Duplicate</button><button data-toggle-preset>{{ "Disable" if preset.enabled else "Enable" }}</button></div>
   </article>
   {% endfor %}
 </div></section>
@@ -23,3 +24,5 @@
 {% endfor %}
 <section class="card future-settings"><h2>Workers & library</h2><p>Seed media repository · one simulated CPU worker · one simulated QSV worker.</p><p class="muted">Filesystem paths, scanning and production worker configuration will arrive with the production adapters. AV1 is unavailable in this workflow.</p></section>
 {% endblock %}
+
+{% block dialogs %}{% include 'preset_editor.html' %}{% endblock %}

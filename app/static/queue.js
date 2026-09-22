@@ -51,10 +51,10 @@ export function renderHistory(queue) {
   $('#history-stats').innerHTML = [
     ['Estimated saving', `~${size(saving)}`], ['Completed simulations', completed.length],
     ['CPU / QSV completed', `${completed.filter(j => j.backend === 'cpu').length} / ${completed.filter(j => j.backend === 'qsv').length}`],
-    ['Skipped', queue.history.filter(j => j.status === 'skipped').length],
+    ['Skipped / blocked', queue.history.filter(j => ['skipped', 'blocked'].includes(j.status)).length],
   ].map(([title, value]) => `<div class="card stat"><span>${esc(title)}</span><strong>${esc(value)}</strong></div>`).join('');
   rows.innerHTML = queue.history.map(job => `<tr>
-    <th scope="row">${esc(job.name)}</th><td><span class="badge ${job.status === 'completed' ? 'green' : 'red'}">${esc(job.status)}</span></td>
+    <th scope="row">${esc(job.name)}${(job.reasons ?? []).map(reason => `<small class="reason">${esc(reason)}</small>`).join('')}</th><td><span class="badge ${job.status === 'completed' ? 'green' : 'red'}">${esc(job.status)}</span></td>
     <td>${esc(job.preset.name)}<small>${esc(label(job.backend))}</small></td><td>${esc(size(job.source_size))}</td>
     <td>${job.status === 'completed' ? `~${esc(size(job.estimated_output_size))}` : '—'}</td>
     <td class="saving">${job.status === 'completed' ? `~${esc(size(job.estimated_saving))} (${(100 * job.estimated_saving / job.source_size).toFixed(1)}%)` : '—'}</td>

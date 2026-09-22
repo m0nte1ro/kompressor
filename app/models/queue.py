@@ -6,7 +6,7 @@ from app.models.media import MediaScope
 from app.models.preset import CompressionPreset, EncoderBackend
 
 
-JobStatus = Literal["queued", "encoding", "validating", "completed", "skipped"]
+JobStatus = Literal["queued", "encoding", "validating", "completed", "skipped", "blocked"]
 Priority = Literal["low", "normal", "high", "urgent"]
 
 
@@ -33,6 +33,7 @@ class QueueJob(BaseModel):
     backend: EncoderBackend
     preset: CompressionPreset
     preserve_audio: bool
+    requested_preserve_audio: bool | None = None
     preserve_subtitles: bool
     source_size: int
     estimated_output_size: int
@@ -46,3 +47,4 @@ class QueueJob(BaseModel):
     started_at: str | None = None
     finished_at: str | None = None
     elapsed_seconds: float = 0
+    reasons: list[str] = Field(default_factory=list)

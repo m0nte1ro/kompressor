@@ -6,6 +6,7 @@ from app.models.media import (
 )
 from app.models.policy import EligibilityResult
 from app.models.preset import CompressionPreset
+from app.models.tags import QualityFloor
 
 
 MediaItem = Movie | Episode
@@ -21,9 +22,23 @@ class PolicyEngine:
         effective_tags: list[str],
         preserve_audio: bool,
         preserve_subtitles: bool,
+        quality_floor: QualityFloor | None = None,
     ) -> EligibilityResult:
         reasons: list[str] = []
         warnings: list[str] = []
+
+        if "Quality CPU" in effective_tags and preset.backend != "cpu":
+            reasons.append("Quality CPU policy requires a CPU preset.")
+
+        if "Quality Floor" in effective_tags:
+            if quality_floor is None:
+                reasons.append("Quality Floor requires configured bitrate and resolution limits.")
+            else:
+                height = min(item.height, {"max_720p": 720, "max_1080p": 1080}.get(preset.resolution_policy, item.height))
+                if height < quality_floor.minimum_height:
+                    reasons.append("Output resolution is below the inherited Quality Floor.")
+                if preset.target_video_bitrate < quality_floor.minimum_video_bitrate:
+                    reasons.append("Target video bitrate is below the inherited Quality Floor.")
 
         if preset.scope != scope:
             reasons.append(

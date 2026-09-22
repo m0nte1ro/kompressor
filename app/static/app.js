@@ -1,4 +1,6 @@
 import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js';
+import './presets.js';
+import {setupTags} from './tags.js';
 import {compressionModal} from './compression.js';
 import {renderHistory, renderQueue} from './queue.js';
 
@@ -13,6 +15,7 @@ const jobFor = row => pendingJobs(queue).find(job => job.media_id === row.datase
 function selectionChanged() {
   if (!library) return;
   const selection = selected();
+  $('#tags-selected').disabled = selection.length === 0;
   $('#selection-count').textContent = `${selection.length} selected`;
   $('#compress-selected').disabled = selection.length === 0;
   $('#remove-selected').disabled = mutating || !selection.some(row => jobFor(row)?.status === 'queued');
@@ -94,6 +97,8 @@ async function mutate(action) {
     try { await refreshQueue(); } catch (error) { notify(error.message, true); }
   }
 }
+
+setupTags(() => selected().map(row => ({kind: library.dataset.scope === 'movie' ? 'movie' : 'episode', id: row.dataset.id})));
 
 if (library) {
   const open = compressionModal(library.dataset.scope, refreshQueue);

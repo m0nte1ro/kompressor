@@ -15,7 +15,7 @@ def test_pages_render_and_assets_are_served(client, url, title):
     assert 'href="/movies"' in response.text
 
 
-@pytest.mark.parametrize("asset,content_type", [("app.css", "text/css"), ("app.js", "javascript"), ("compression.js", "javascript"), ("queue.js", "javascript"), ("common.js", "javascript")])
+@pytest.mark.parametrize("asset,content_type", [("app.css", "text/css"), ("app.js", "javascript"), ("compression.js", "javascript"), ("queue.js", "javascript"), ("common.js", "javascript"), ("presets.js", "javascript"), ("tags.js", "javascript")])
 def test_static_assets(client, asset, content_type):
     response = client.get(f"/static/{asset}")
     assert response.status_code == 200

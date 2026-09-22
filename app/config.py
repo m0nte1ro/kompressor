@@ -27,6 +27,8 @@ class Settings(BaseSettings):
 
     media_backend: str = "seed"
 
+    database_path: Path = PROJECT_ROOT / "data" / "kompressor.sqlite3"
+
     seed_media_path: Path = (
         PROJECT_ROOT
         / "fixtures"

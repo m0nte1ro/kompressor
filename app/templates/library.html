@@ -7,7 +7,7 @@
   <div class="card stat"><span>Eligible</span><strong>{{ eligible | length }}</strong><small>Before queue exclusions</small></div>
   <div class="card stat"><span>Blocked</span><strong>{{ rows | length - eligible | length }}</strong><small>Reasons shown below</small></div>
 </section>
-{% if scope == 'show' %}<a class="button back" href="/shows">← All shows</a>{% endif %}
+{% if scope == 'show' %}<a class="button back" href="/shows">← All shows</a> <button data-tag-kind="show" data-tag-id="{{ show.id }}">Manage series tags</button>{% endif %}
 <section id="library" data-scope="{{ scope }}" aria-label="Media library">
   <div class="toolbar">
     <div class="filters">
@@ -22,7 +22,7 @@
         <option value="hardlinked">Hardlinked</option><option value="queued">Queued / active</option>
       </select>
     </div>
-    <div class="actions"><span id="selection-count" class="muted">0 selected</span><button id="compress-selected" class="primary" disabled>Compress selected</button><button id="remove-selected" disabled>Remove queued selected</button></div>
+    <div class="actions"><span id="selection-count" class="muted">0 selected</span><button id="tags-selected" disabled>Tag selected</button><button id="compress-selected" class="primary" disabled>Compress selected</button><button id="remove-selected" disabled>Remove queued selected</button></div>
   </div>
   <p class="muted table-note">Estimates use each row’s suggested preset with audio preserved. Open Review to see blockers or choose another preset.</p>
   <div class="table-wrap">
@@ -44,16 +44,16 @@
         {% set item = row.item %}{% set result = row.eligibility %}
         {% if scope == 'show' and season.number != item.season %}
         {% set season.number = item.season %}
-        <tr class="season" data-season="{{ item.season }}"><th scope="rowgroup" colspan="10">Season {{ item.season }}</th></tr>
+        <tr class="season" data-season="{{ item.season }}"><th scope="rowgroup" colspan="10">Season {{ item.season }} <button class="season-tags" data-tag-kind="season" data-tag-id="{{ show.id }}" data-tag-season="{{ item.season }}">Manage season tags</button></th></tr>
         {% endif %}
         <tr class="media-row" data-id="{{ item.id }}" data-season="{{ item.season if scope == 'show' else '' }}"
-            data-name="{{ row.entry.name }}" data-preset="{{ row.preset.id }}"
+            data-name="{{ row.entry.name }}" data-preset="{{ row.preset.id if row.preset else '' }}"
             data-eligible="{{ 'true' if result.eligible else 'false' }}" data-codec="{{ item.video_codec }}"
             data-resolution="{{ item.resolution }}" data-hdr="{{ item.hdr or '' }}" data-hardlinks="{{ item.hardlinks }}">
           <td><input type="checkbox" class="media-select" aria-label="Select {{ row.entry.name }}"></td>
           <th scope="row" class="media-name">
             {% if scope == 'movie' %}{{ item.name }}{% else %}<span class="episode-code">S{{ '%02d' | format(item.season) }}E{{ '%02d' | format(item.episode) }}</span> {{ item.title or 'Untitled' }}{% endif %}
-            <small>{{ row.preset.name }}</small><span class="job-state"></span>
+            <small>{{ row.preset.name if row.preset else 'No enabled preset' }}</small><span class="job-state"></span>
           </th>
           {% if scope == 'movie' %}<td>{{ item.year or '—' }}</td><td>{{ item.source or '—' }}</td>{% endif %}
           <td><span class="badge">{{ item.resolution }}</span></td><td>{{ item.video_codec | label }}</td>
@@ -64,6 +64,7 @@
             <div class="badges">{% for tag in row.entry.tags %}<span class="badge violet">{{ tag }}</span>{% endfor %}
               {% if not result.eligible %}<span class="badge red">Blocked</span>{% else %}<span class="badge green">Eligible</span>{% endif %}
             </div>
+            <button class="tag-edit" data-tag-kind="{{ 'movie' if scope == 'movie' else 'episode' }}" data-tag-id="{{ item.id }}">Manage tags</button>
             {% for reason in result.reasons %}<small class="reason">{{ reason }}</small>{% endfor %}
           </td>
           <td class="saving numeric">{% if result.eligible %}~{{ result.estimated_saving | size }}<small>{{ '%.0f' | format(result.estimated_saving_percent) }}%</small>{% else %}—{% endif %}</td>
@@ -76,4 +77,4 @@
   </div>
 </section>
 {% endblock %}
-{% block dialogs %}{% include 'compression.html' %}{% endblock %}
+{% block dialogs %}{% include 'compression.html' %}{% include 'tags.html' %}{% endblock %}

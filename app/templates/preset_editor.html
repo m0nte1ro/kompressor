@@ -1,0 +1,25 @@
+<dialog id="preset-editor" aria-labelledby="preset-editor-title">
+  <form id="preset-form">
+    <header class="dialog-head"><h2 id="preset-editor-title">Preset</h2><button type="button" data-preset-close aria-label="Close preset editor">×</button></header>
+    <div class="dialog-body">
+      <p class="notice">These settings apply to new jobs. Jobs already queued retain their saved preset.</p>
+      <div class="field-grid">
+        <label class="field">Name<input name="name" required maxlength="120"></label>
+        <label class="field">Scope<select name="scope"><option value="movie">Movie</option><option value="show">Show</option></select></label>
+        <label class="field">Backend<select name="backend"><option value="cpu">CPU · x265</option><option value="qsv">Intel QSV</option></select></label>
+        <label class="field">Destination codec<select name="destination_codec"><option value="hevc">HEVC</option><option value="av1" disabled>AV1 · unavailable</option></select></label>
+        <label class="field">Target video bitrate (Mbps)<input name="target_video_bitrate" type="number" min="0.001" max="200" step="0.001" required></label>
+        <label class="field">Resolution policy<select name="resolution_policy"><option value="preserve">Preserve source</option><option value="max_1080p">Max 1080p</option><option value="max_720p">Max 720p</option></select></label>
+        <label class="field">Audio policy<select name="audio_policy"><option value="preserve">Preserve all tracks</option><option value="efficient">Efficient E-AC3 / AAC</option></select></label>
+        <label class="field">Target audio bitrate (kbps)<input name="target_audio_bitrate" type="number" min="1" max="10000" step="1"></label>
+        <label class="field">Minimum source bitrate (Mbps)<input name="minimum_source_bitrate" type="number" min="0" max="500" step="0.001" required></label>
+        <label class="field">Minimum expected saving (%)<input name="minimum_expected_saving_percent" type="number" min="0" max="99.9" step="0.1" required></label>
+      </div>
+      <label class="check"><input name="enabled" type="checkbox"> Enabled</label>
+      <label class="check"><input name="preserve_hdr_metadata" type="checkbox"> Preserve HDR metadata</label>
+      <label class="check"><input name="allow_hevc_reencode" type="checkbox"> Allow HEVC reencode</label>
+      <p id="preset-error" class="error" role="alert" hidden></p>
+    </div>
+    <footer class="dialog-foot"><button type="button" data-preset-close>Cancel</button><button type="submit" class="primary">Save preset</button></footer>
+  </form>
+</dialog>

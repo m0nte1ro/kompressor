@@ -1,0 +1,21 @@
+<dialog id="tag-editor" aria-labelledby="tag-title">
+  <form id="tag-form">
+    <header class="dialog-head"><h2 id="tag-title">Manage tags</h2><button type="button" data-tag-close aria-label="Close tag editor">×</button></header>
+    <div class="dialog-body">
+      <div id="tag-inheritance" class="notice"></div>
+      <label class="field" id="tag-operation-label" hidden>Bulk action<select id="tag-operation"><option value="add">Add selected tags</option><option value="remove">Remove selected direct tags</option></select></label>
+      <fieldset id="tag-choices"><legend>Direct tags</legend>
+        {% for tag in ['Preserve A/V', 'Preserve Video', 'Preserve Audio', 'Quality CPU', 'Quality Floor'] %}
+        <label class="check"><input type="checkbox" name="tag" value="{{ tag }}"> {{ tag }}</label>
+        {% endfor %}
+      </fieldset>
+      <div id="quality-floor-fields" class="field-grid" hidden>
+        <label class="field">Minimum output video bitrate (Mbps)<input id="floor-bitrate" type="number" min="0.001" max="200" step="0.001" value="6"></label>
+        <label class="field">Minimum output resolution<select id="floor-height"><option value="480">480p</option><option value="720">720p</option><option value="1080" selected>1080p</option><option value="2160">2160p</option></select></label>
+      </div>
+      <p class="muted">Inherited tags remain effective. Quality Floor uses the highest inherited bitrate and resolution limits. Pending jobs are revalidated; newly blocked jobs appear in History.</p>
+      <p id="tag-error" class="error" role="alert" hidden></p>
+    </div>
+    <footer class="dialog-foot"><button type="button" data-tag-close>Cancel</button><button type="submit" class="primary" id="save-tags">Save tags</button></footer>
+  </form>
+</dialog>

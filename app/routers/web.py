@@ -64,7 +64,7 @@ def movies(request: Request):
 
 @router.get("/shows", response_class=HTMLResponse)
 def shows(request: Request):
-    library = request.app.state.catalog.media.get_library()
+    library = request.app.state.catalog.library()
     cards = []
     for show in library.shows:
         episodes = [e for season in show.seasons for e in season.episodes]
@@ -75,10 +75,10 @@ def shows(request: Request):
 
 @router.get("/shows/{show_id}", response_class=HTMLResponse)
 def episodes(request: Request, show_id: str):
-    show = next((s for s in request.app.state.catalog.media.get_library().shows if s.id == show_id), None)
+    show = next((s for s in request.app.state.catalog.library().shows if s.id == show_id), None)
     if show is None:
         raise HTTPException(404, "Show not found.")
-    return render(request, "library.html", "shows", show.name, scope="show",
+    return render(request, "library.html", "shows", show.name, scope="show", show=show,
                   rows=rows(request, "show", show_id), subtitle="All episodes · series → season → episode policy")
 
 
@@ -97,5 +97,5 @@ def history(request: Request):
 @router.get("/settings", response_class=HTMLResponse)
 def settings(request: Request):
     return render(request, "settings.html", "settings", "Settings",
-                  subtitle="Compression presets · read-only seed configuration",
+                  subtitle="Presets and persistent library preferences",
                   presets=request.app.state.catalog.presets.get_all())

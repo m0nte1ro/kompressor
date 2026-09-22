@@ -1,5 +1,6 @@
 """Process-local fake state, seeded once. Never writes fixtures or media files."""
 import json
+from contextlib import nullcontext
 from pathlib import Path
 
 from app.models.queue import QueueJob
@@ -18,3 +19,9 @@ class FakeQueueRepository:
 
     def remove(self, job_id: str) -> None:
         self.jobs = [job for job in self.jobs if job.id != job_id]
+
+    def save(self, job: QueueJob) -> None:
+        self.jobs = [job if current.id == job.id else current for current in self.jobs]
+
+    def transaction(self):
+        return nullcontext()

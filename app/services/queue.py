@@ -39,7 +39,7 @@ class QueueService:
         )
 
     def snapshot(self) -> dict:
-        with self.lock:
+        with self.lock, self.repository.transaction():
             jobs = self.repository.get_all()
             lanes = []
             for backend in ("cpu", "qsv"):
@@ -60,7 +60,7 @@ class QueueService:
         # evaluated per item by the policy engine and returned as exclusions.
         preset = self.catalog.preset(request.preset_id)
         added, excluded = [], []
-        with self.lock:
+        with self.lock, self.repository.transaction():
             for media_id in dict.fromkeys(request.media_ids):
                 try:
                     entry = self.catalog.find(media_id, request.scope)
@@ -82,6 +82,7 @@ class QueueService:
                     id=str(uuid4()), media_id=media_id, scope=request.scope,
                     name=entry.name, backend=preset.backend, preset=preset.model_copy(deep=True),
                     preserve_audio=result.preserve_audio,
+                    requested_preserve_audio=request.preserve_audio,
                     preserve_subtitles=result.preserve_subtitles,
                     source_size=result.source_size, source_codec=entry.item.video_codec,
                     estimated_output_size=result.estimated_output_size,
@@ -98,14 +99,14 @@ class QueueService:
         return job
 
     def remove(self, job_id: str) -> None:
-        with self.lock:
+        with self.lock, self.repository.transaction():
             job = self._find(job_id)
             if job.status != "queued":
                 raise QueueConflict("Only queued jobs can be removed. Use Stop & Skip for active jobs.")
             self.repository.remove(job_id)
 
     def prioritize(self, job_id: str, priority: Priority | None = None) -> None:
-        with self.lock:
+        with self.lock, self.repository.transaction():
             job = self._find(job_id)
             if job.status != "queued":
                 raise QueueConflict("Only queued jobs can be reordered.")
@@ -115,14 +116,17 @@ class QueueService:
             else:
                 job.priority = priority
                 job.move_next_order = 0
+            self.repository.save(job)
 
     def skip(self, job_id: str) -> None:
-        with self.lock:
+        with self.lock, self.repository.transaction():
             job = self._find(job_id)
             if job.status not in ACTIVE:
                 raise QueueConflict("Only active jobs can be stopped and skipped.")
             job.status = "skipped"
             job.finished_at = now()
+            self.repository.save(job)
+            self.revalidate()
             self._start_idle_lanes()
 
     def _start_idle_lanes(self) -> None:
@@ -134,13 +138,57 @@ class QueueService:
                 job = queued[0]
                 job.status = "encoding"
                 job.started_at = now()
+                self.repository.save(job)
 
     def tick(self, seconds: float) -> None:
         """Called by the fake worker clock, never by GET requests."""
-        with self.lock:
+        with self.lock, self.repository.transaction():
+            self.revalidate()
             for job in self.repository.get_all():
                 if job.status in ACTIVE:
                     self.worker.advance(job, seconds)
                     if job.status == "completed":
                         job.finished_at = now()
+                    self.repository.save(job)
             self._start_idle_lanes()
+
+    def recover(self) -> None:
+        """Restart interrupted simulations from zero; never count downtime as progress."""
+        with self.lock, self.repository.transaction():
+            for job in self.repository.get_all():
+                if job.status in ACTIVE:
+                    job.status = "queued"
+                    job.progress = 0
+                    job.elapsed_seconds = 0
+                    job.started_at = None
+                    self.repository.save(job)
+            self.revalidate()
+
+    def revalidate(self) -> None:
+        """Apply current media protections to preset snapshots before worker execution."""
+        with self.lock, self.repository.transaction():
+            for job in self.repository.get_all():
+                if job.status not in PENDING:
+                    continue
+                before = job.model_dump()
+                try:
+                    entry = self.catalog.find(job.media_id, job.scope)
+                    requested = job.requested_preserve_audio
+                    result = self.catalog.evaluate(entry, job.preset,
+                        job.preserve_audio if requested is None else requested, job.preserve_subtitles)
+                    reasons = list(result.reasons)
+                    if job.status in ACTIVE and result.preserve_audio != job.preserve_audio:
+                        reasons.append("Audio policy changed during simulation. Submit a new job.")
+                except LookupError as error:
+                    reasons = [str(error)]
+                if reasons:
+                    job.status = "blocked"
+                    job.reasons = reasons
+                    job.finished_at = now()
+                elif job.status == "queued":
+                    job.preserve_audio = result.preserve_audio
+                    job.source_size = result.source_size
+                    job.estimated_output_size = result.estimated_output_size
+                    job.estimated_saving = result.estimated_saving
+                if job.model_dump() != before:
+                    self.repository.save(job)
