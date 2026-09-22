@@ -1,5 +1,7 @@
+from typing import cast
+
 from app.services.errors import NotFound
-from app.models.tags import QualityFloor, TagAssignment, TagTarget, TagUpdate
+from app.models.tags import QualityFloor, TagAssignment, TagName, TagTarget, TagUpdate
 from app.repositories.base import MediaRepository, TagRepository
 
 
@@ -53,13 +55,13 @@ class TagService:
         library = self.media.get_library().model_copy(deep=True)
         with self.repository.transaction():
             for movie in library.movies:
-                movie.tags = self.assignment(TagTarget(kind="movie", id=movie.id), movie).tags
+                movie.tags = [str(tag) for tag in self.assignment(TagTarget(kind="movie", id=movie.id), movie).tags]
             for show in library.shows:
-                show.tags = self.assignment(TagTarget(kind="show", id=show.id), show).tags
+                show.tags = [str(tag) for tag in self.assignment(TagTarget(kind="show", id=show.id), show).tags]
                 for season in show.seasons:
-                    season.tags = self.assignment(TagTarget(kind="season", id=show.id, season=season.season), season).tags
+                    season.tags = [str(tag) for tag in self.assignment(TagTarget(kind="season", id=show.id, season=season.season), season).tags]
                     for episode in season.episodes:
-                        episode.tags = self.assignment(TagTarget(kind="episode", id=episode.id), episode).tags
+                        episode.tags = [str(tag) for tag in self.assignment(TagTarget(kind="episode", id=episode.id), episode).tags]
         return library
 
     def update(self, request: TagUpdate) -> list[dict]:
@@ -70,12 +72,12 @@ class TagService:
             for target, item in resolved:
                 current = self.assignment(target, item)
                 if request.operation == "replace":
-                    tags, floor = request.tags, request.quality_floor
+                    tags, floor = list(request.tags), request.quality_floor
                 elif request.operation == "add":
                     tags = list(dict.fromkeys([*current.tags, *request.tags]))
                     floor = request.quality_floor if "Quality Floor" in request.tags else current.quality_floor
                 else:
                     tags = [tag for tag in current.tags if tag not in request.tags]
                     floor = current.quality_floor if "Quality Floor" in tags else None
-                self.repository.save(target.key(), TagAssignment(tags=tags, quality_floor=floor))
+                self.repository.save(target.key(), TagAssignment(tags=list(cast(list[TagName], tags)), quality_floor=floor))
             return [self.describe(target) for target, _ in resolved]

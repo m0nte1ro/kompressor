@@ -212,7 +212,11 @@ class PresetSettings(BaseModel):
                 raise ValueError("Quality mode requires a planning bitrate range, not an encoder target.")
         if (self.planning_video_bitrate_low is None) != (self.planning_video_bitrate_high is None):
             raise ValueError("Supply both planning bitrate bounds.")
-        if self.planning_video_bitrate_low and self.planning_video_bitrate_low > self.planning_video_bitrate_high:
+        if (
+            self.planning_video_bitrate_low is not None
+            and self.planning_video_bitrate_high is not None
+            and self.planning_video_bitrate_low > self.planning_video_bitrate_high
+        ):
             raise ValueError("Planning bitrate range must be ordered.")
         if self.hdr_support == "hdr10_experimental" and (not self.preserve_hdr_metadata or self.output_bit_depth != 10):
             raise ValueError("Experimental HDR10 requires 10-bit output and metadata preservation.")

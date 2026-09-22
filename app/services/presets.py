@@ -42,7 +42,11 @@ class PresetService:
         ensure_supported(payload)
         with self.transaction():
             existing = self._get(preset_id)
-            preset = CompressionPreset(id=preset_id, **payload.model_dump(exclude={"origin"}), origin=existing.origin)
+            preset = CompressionPreset.model_validate({
+                **payload.model_dump(exclude={"origin"}),
+                "id": preset_id,
+                "origin": existing.origin,
+            })
             self.repository.save(preset)
         return preset
 

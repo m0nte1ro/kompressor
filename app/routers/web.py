@@ -29,7 +29,7 @@ def label(value: str | None) -> str:
               "hdr10_experimental": "SDR + HDR10 · experimental", "preserve_source": "Preserve source HDR mode",
               "tone_map_to_sdr": "Tone map HDR to SDR", "hdr10": "HDR10",
               "dolby_vision": "Dolby Vision", "dolby_vision_hdr10": "DV + HDR10"}
-    return labels.get(value, (value or "SDR").replace("_", " ").upper())
+    return labels.get(value or "", (value or "SDR").replace("_", " ").upper())
 
 
 templates.env.filters.update(size=size, bitrate=bitrate, label=label)

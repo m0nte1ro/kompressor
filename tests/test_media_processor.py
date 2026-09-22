@@ -1,4 +1,5 @@
 from contextlib import nullcontext
+from typing import cast
 from unittest.mock import Mock
 
 import pytest
@@ -7,7 +8,7 @@ from fastapi.testclient import TestClient
 from app.config import PROJECT_ROOT
 from app.dependencies import get_media_processor
 from app.main import create_app
-from app.models.media import spatial_resolution
+from app.models.media import Movie, spatial_resolution
 from app.models.preset import PresetSettings
 from app.models.queue import EnqueueRequest, QueueJob
 from app.repositories.preset_seed import SeedPresetRepository
@@ -128,7 +129,8 @@ def test_routes_use_replaceable_dependency(runtime, movie_payload):
 def test_enqueue_delegates_policy_and_never_executes_encoder(movie_payload):
     processor = seed_processor()
     encoder = Mock(wraps=FakeEncoder())
-    processor.queue.worker.encoder = encoder
+    fake_worker = cast(FakeEncoderWorker, processor.queue.worker)
+    fake_worker.encoder = encoder
     policy = Mock(wraps=processor.catalog.policy)
     processor.catalog.policy = policy
     request = EnqueueRequest(**{**movie_payload, 'media_ids': ['movie-king-of-comedy', 'movie-dune-part-two']})
@@ -158,7 +160,9 @@ def test_preset_delegation_and_snapshot_independence(movie_payload):
     edited = PresetSettings(**duplicate.model_dump(exclude={'id'})).model_copy(update={'name': 'My own name'})
     updated = processor.update_preset(duplicate.id, edited)
     processor.presets.update.assert_called_once_with(duplicate.id, edited)
-    assert service.repository.get_by_id(updated.id).name == 'My own name'
+    stored = service.repository.get_by_id(updated.id)
+    assert stored is not None
+    assert stored.name == 'My own name'
     assert processor.get_queue()['lanes'][0]['queued'][0]['preset'] == job['preset']
     assert updated.origin == 'custom'
 
@@ -183,10 +187,10 @@ def test_fake_discovery_contracts_do_not_touch_media():
     assert isinstance(processor.scanner, MediaScanner)
     library = processor.scan_library()
     source = library.movies[1]
-    probed = processor.probe.inspect(source.path)
+    probed = cast(Movie, processor.probe.inspect(source.path))
     assert probed == source and probed is not source
     probed.name = 'Changed locally'
-    assert processor.probe.inspect(source.path).name == source.name
+    assert cast(Movie, processor.probe.inspect(source.path)).name == source.name
     with pytest.raises(NotFound):
         processor.probe.inspect('/media/not-in-seed.mkv')
 

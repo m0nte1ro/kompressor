@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from typing import Protocol
 
 from app.models.media import MediaLibrary
@@ -32,7 +33,7 @@ class QueueRepository(Protocol):
 
     def save(self, job: QueueJob) -> None: ...
 
-    def transaction(self): ...
+    def transaction(self) -> AbstractContextManager[object]: ...
 
 
 class TagRepository(Protocol):
@@ -40,4 +41,4 @@ class TagRepository(Protocol):
 
     def save(self, key: str, assignment: TagAssignment) -> None: ...
 
-    def transaction(self): ...
+    def transaction(self) -> AbstractContextManager[object]: ...

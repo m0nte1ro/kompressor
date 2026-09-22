@@ -63,7 +63,7 @@ class CatalogService:
         return preset
 
     def evaluate(self, entry: MediaEntry, preset: CompressionPreset,
-                 preserve_audio: bool = True,
+                 preserve_audio: bool | None = None,
                  preserve_subtitles: bool = True) -> EligibilityResult:
         return self.policy.evaluate(
             item=entry.item, scope=entry.scope, preset=preset,
@@ -90,6 +90,7 @@ class CatalogService:
             fallback = fallback or (preset, result)
             if result.eligible:
                 return preset, result
+        assert fallback is not None
         return fallback
 
     def summary(self) -> dict:

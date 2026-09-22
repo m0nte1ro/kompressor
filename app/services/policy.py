@@ -59,8 +59,11 @@ class PolicyEngine:
                     reasons.append("Output resolution is below the inherited Quality Floor.")
                 if preset.rate_control != "abr":
                     reasons.append("Quality Floor bitrate cannot be guaranteed by CRF/ICQ. Use a bitrate preset or revise the tag.")
-                elif preset.target_video_bitrate < quality_floor.minimum_video_bitrate:
-                    reasons.append("Target video bitrate is below the inherited Quality Floor.")
+                else:
+                    # Preset validation requires a target bitrate for ABR.
+                    assert preset.target_video_bitrate is not None
+                    if preset.target_video_bitrate < quality_floor.minimum_video_bitrate:
+                        reasons.append("Target video bitrate is below the inherited Quality Floor.")
 
         if preset.scope != scope:
             reasons.append(

@@ -4,9 +4,11 @@ from app.models.preset import PresetSettings
 from app.models.queue import EnqueueRequest, Priority
 from app.models.tags import TAG_NAMES, TagTarget, TagUpdate
 from app.services.catalog import CatalogService
+from app.services.errors import InvalidOperation
 from app.services.presets import PresetService
 from app.services.queue import QueueService
 from app.services.discovery import MediaScanner, ProbeService
+from app.services.tags import TagService
 
 
 class MediaProcessor:
@@ -74,13 +76,18 @@ class MediaProcessor:
     def stop_job(self, job_id: str):
         self.queue.skip(job_id)
 
+    def _tagger(self) -> TagService:
+        if self.catalog.tagger is None:
+            raise InvalidOperation("Tag service is unavailable.")
+        return self.catalog.tagger
+
     def get_tags(self, target: TagTarget):
-        return {"available": TAG_NAMES, **self.catalog.tagger.describe(target)}
+        return {"available": TAG_NAMES, **self._tagger().describe(target)}
 
     def update_tags(self, payload: TagUpdate):
         # Preserve atomic tag edits + revalidation, with the scheduler excluded.
         with self.queue.lock, self.queue.repository.transaction():
-            updated = self.catalog.tagger.update(payload)
+            updated = self._tagger().update(payload)
             self.queue.revalidate()
         return {"updated": updated}
 

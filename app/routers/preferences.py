@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import ValidationError
 
@@ -31,7 +33,7 @@ def delete_preset(processor: Processor, preset_id: str) -> Response:
 
 
 @router.get("/tags")
-def get_tags(processor: Processor, kind: str, id: str, season: int | None = None):
+def get_tags(processor: Processor, kind: Literal["movie", "show", "season", "episode"], id: str, season: int | None = None):
     try:
         target = TagTarget(kind=kind, id=id, season=season)
     except ValidationError as error:
