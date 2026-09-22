@@ -5,6 +5,7 @@ from typing import Protocol
 from app.models.media import MediaLibrary
 from app.models.preset import CompressionPreset
 from app.models.queue import QueueJob
+from app.models.tags import TagAssignment
 
 
 class MediaRepository(Protocol):
@@ -17,6 +18,8 @@ class PresetRepository(Protocol):
 
     def get_by_id(self, preset_id: str) -> CompressionPreset | None: ...
 
+    def save(self, preset: CompressionPreset) -> None: ...
+
     def delete(self, preset_id: str) -> None: ...
 
 
@@ -28,5 +31,13 @@ class QueueRepository(Protocol):
     def remove(self, job_id: str) -> None: ...
 
     def save(self, job: QueueJob) -> None: ...
+
+    def transaction(self): ...
+
+
+class TagRepository(Protocol):
+    def get(self, key: str) -> TagAssignment | None: ...
+
+    def save(self, key: str, assignment: TagAssignment) -> None: ...
 
     def transaction(self): ...

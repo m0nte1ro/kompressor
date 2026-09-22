@@ -121,3 +121,15 @@ class MediaLibrary(BaseModel):
     shows: list[Show] = Field(
         default_factory=list,
     )
+
+
+def spatial_resolution(item: Movie | Episode) -> str:
+    """Canonical applicability label, independent of progressive/interlaced scan.
+
+    Keep the source's display label and separate interlaced flag intact. Do not
+    infer a new resolution from height: cropped 1080 sources can be shorter.
+    """
+    label = item.resolution.lower()
+    if label.endswith("i") and label[:-1].isdigit():
+        return label[:-1] + "p"
+    return label

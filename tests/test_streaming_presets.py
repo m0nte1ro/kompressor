@@ -97,16 +97,16 @@ def test_hdr10_source_preserves_hdr_mode_without_tone_mapping(streaming):
     app, _ = streaming
     item = next(
         episode
-        for show in app.state.catalog.media.get_library().shows
+        for show in app.state.media_processor.catalog.media.get_library().shows
         for season in show.seasons
         for episode in season.episodes
         if episode.id == "hotd-s01e01"
     )
     item.video_codec = "h264"
-    result = app.state.catalog.policy.evaluate(
+    result = app.state.media_processor.catalog.policy.evaluate(
         item=item,
         scope="show",
-        preset=app.state.catalog.preset("show-preserve-quality"),
+        preset=app.state.media_processor.catalog.preset("show-preserve-quality"),
         effective_tags=item.tags + ["Quality CPU"],
         preserve_audio=True,
         preserve_subtitles=True,
@@ -184,7 +184,7 @@ def test_quality_preset_planning_defaults_follow_intent(streaming):
 
 def test_king_of_comedy_is_eligible_for_movie_streaming(streaming):
     app, client = streaming
-    app.state.catalog.find("movie-king-of-comedy", "movie").item.source = "BluRay REMUX"
+    app.state.media_processor.catalog.find("movie-king-of-comedy", "movie").item.source = "BluRay REMUX"
     result = client.post("/api/eligibility", json={
         "scope": "movie", "media_id": "movie-king-of-comedy", "preset_id": "movie-streaming-quality",
     }).json()
@@ -259,12 +259,12 @@ def test_preserve_audio_default_and_tag_override(streaming):
 
 def test_efficient_audio_rules_retain_tracks_and_channels(streaming):
     app, _ = streaming
-    item = app.state.catalog.find("movie-king-of-comedy", "movie").item
+    item = app.state.media_processor.catalog.find("movie-king-of-comedy", "movie").item
     item.audio = [AudioTrack(codec=codec, channels=channels, bitrate=bitrate) for codec, channels, bitrate in [
         ("dts", 2, 1500000), ("truehd", 6, 3000000), ("aac", 2, 128000),
         ("truehd", 8, 4000000), ("ac3", 6, None),
     ]]
-    preset = app.state.catalog.preset("show-streaming-efficient-audio")
+    preset = app.state.media_processor.catalog.preset("show-streaming-efficient-audio")
     plan = audio_plan(item, preset, False)
     assert [p["action"] for p in plan] == ["encode", "encode", "copy", "encode", "copy"]
     assert [p["channels"] for p in plan] == [2, 6, 2, 8, 6]
@@ -358,8 +358,8 @@ def test_output_options_are_separate_from_presets(tmp_path, replace):
         assert job["planning_saving"] is not None
     app = create_app(path, start_workers=False)
     with TestClient(app) as client:
-        app.state.queue_service.tick(0)
-        app.state.queue_service.tick(185)
+        app.state.media_processor.queue.tick(0)
+        app.state.media_processor.queue.tick(185)
         history = client.get("/api/queue").json()["history"]
         assert history[0]["replace_source"] is replace
         assert history[0]["status"] == "completed"
@@ -418,7 +418,7 @@ def test_legacy_audio_rule_field_loads_from_sqlite(tmp_path):
 
 def test_legacy_resolution_policy_loads_as_target_resolution(streaming):
     app, _ = streaming
-    preset = app.state.catalog.preset("show-streaming-quality")
+    preset = app.state.media_processor.catalog.preset("show-streaming-quality")
     legacy = preset.model_dump()
     legacy.pop("target_resolution")
     legacy["resolution_policy"] = "max_720p"
@@ -509,15 +509,15 @@ def test_efficient_audio_builtin_migration_restores_conversion_defaults(tmp_path
 
 def test_estimates_are_not_clamped_to_source_size(streaming):
     app, _ = streaming
-    item = app.state.catalog.find("movie-king-of-comedy", "movie").item
-    preset = app.state.catalog.preset("movie-streaming-quality").model_copy(update={
+    item = app.state.media_processor.catalog.find("movie-king-of-comedy", "movie").item
+    preset = app.state.media_processor.catalog.preset("movie-streaming-quality").model_copy(update={
         "planning_video_bitrate_low": 30000000, "planning_video_bitrate_high": 40000000,
     })
     result = estimate(item, preset, True)
     assert result["estimated_output_size"] is None
     assert result["estimated_output_size_low"] > item.size
     assert result["planning_saving"] == 0
-    eligibility = app.state.catalog.policy.evaluate(item=item, scope="movie", preset=preset,
+    eligibility = app.state.media_processor.catalog.policy.evaluate(item=item, scope="movie", preset=preset,
         effective_tags=[], preserve_audio=True, preserve_subtitles=True)
     assert eligibility.eligible
     assert any("minimum saving" in warning for warning in eligibility.warnings)

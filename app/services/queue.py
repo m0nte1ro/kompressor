@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from threading import RLock
 from uuid import uuid4
 
+from app.services.errors import Conflict, NotFound
 from app.models.queue import EnqueueRequest, Priority, QueueJob
 from app.repositories.base import QueueRepository
 from app.services.catalog import CatalogService
@@ -18,7 +19,7 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class QueueConflict(ValueError):
+class QueueConflict(Conflict):
     pass
 
 
@@ -102,7 +103,7 @@ class QueueService:
     def _find(self, job_id: str) -> QueueJob:
         job = next((j for j in self.repository.get_all() if j.id == job_id), None)
         if job is None:
-            raise LookupError("Job not found.")
+            raise NotFound("Job not found.")
         return job
 
     def remove(self, job_id: str) -> None:
@@ -130,6 +131,7 @@ class QueueService:
             job = self._find(job_id)
             if job.status not in ACTIVE:
                 raise QueueConflict("Only active jobs can be stopped and skipped.")
+            self.worker.stop(job.id)
             job.status = "skipped"
             job.finished_at = now()
             self.repository.save(job)
@@ -189,6 +191,8 @@ class QueueService:
                 except LookupError as error:
                     reasons = [str(error)]
                 if reasons:
+                    if job.status in ACTIVE:
+                        self.worker.stop(job.id)
                     job.status = "blocked"
                     job.reasons = reasons
                     job.finished_at = now()

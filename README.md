@@ -110,6 +110,11 @@ applying these assignments to real files. Changing a path must not guess identit
 
 ## Architecture
 
+HTTP and Jinja routes resolve one `MediaProcessor` per application lifespan.
+`app/container.py` assembles its catalog, preset management, queue and seed
+scanner/probe dependencies. Tests may inject a processor or override the FastAPI
+dependency. Application exceptions are mapped to HTTP responses centrally.
+
 The existing `PolicyEngine` remains the source of eligibility decisions.
 `CatalogService` shares media lookup and tag inheritance between the API, views
 and scheduler. Server-rendered estimates use the first eligible scoped preset,
@@ -119,8 +124,11 @@ suggested preset and calls the eligibility API again when inputs change.
 `QueueService` coordinates ordering, state transitions and duplicate prevention
 under a lock. SQLite repositories own persisted state; `FakeEncoderWorker` advances
 progress independently of browser polling through the application lifespan.
-Repository/worker protocols provide the future filesystem and encoder adapter
-boundaries. There are no development-mode branches, authentication,
+Repository, scanner, probe and encoder protocols provide the adapter boundaries.
+`FakeEncoder` implements encode/progress/stop without touching files; the fake
+worker supplies the existing clock and validation simulation. A future
+`FFmpegEncoder` owns encoder/process details, while `FFprobeService` owns probing.
+Real execution must run outside HTTP requests and scheduler transactions. There are no development-mode branches, authentication,
 media scans, hardware checks or ffmpeg dependencies.
 
 SQLite uses the Python standard library with parameterized statements and

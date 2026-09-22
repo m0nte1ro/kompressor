@@ -1,10 +1,10 @@
+from app.services.errors import NotFound
 from app.models.tags import QualityFloor, TagAssignment, TagTarget, TagUpdate
-from app.repositories.base import MediaRepository
-from app.repositories.sqlite import SQLiteTagRepository
+from app.repositories.base import MediaRepository, TagRepository
 
 
 class TagService:
-    def __init__(self, media: MediaRepository, repository: SQLiteTagRepository):
+    def __init__(self, media: MediaRepository, repository: TagRepository):
         self.media = media
         self.repository = repository
 
@@ -27,13 +27,13 @@ class TagService:
                 for episode in season.episodes:
                     if target.kind == "episode" and episode.id == target.id:
                         return [*season_chain, (target, episode, f"{show.name} · S{episode.season:02}E{episode.episode:02}")]
-        raise LookupError("Tag target not found.")
+        raise NotFound("Tag target not found.")
 
     def assignment(self, target: TagTarget, item) -> TagAssignment:
         return self.repository.get(target.key()) or TagAssignment(tags=item.tags)
 
     def describe(self, target: TagTarget) -> dict:
-        with self.repository.database.transaction():
+        with self.repository.transaction():
             chain = self._chain(target)
             assignments = [(name, self.assignment(key, item)) for key, item, name in chain]
             floors = [assignment.quality_floor for _, assignment in assignments if assignment.quality_floor]
@@ -51,7 +51,7 @@ class TagService:
 
     def library(self):
         library = self.media.get_library().model_copy(deep=True)
-        with self.repository.database.transaction():
+        with self.repository.transaction():
             for movie in library.movies:
                 movie.tags = self.assignment(TagTarget(kind="movie", id=movie.id), movie).tags
             for show in library.shows:
@@ -63,7 +63,7 @@ class TagService:
         return library
 
     def update(self, request: TagUpdate) -> list[dict]:
-        with self.repository.database.transaction():
+        with self.repository.transaction():
             # Resolve all targets before writing; an invalid bulk request changes nothing.
             targets = {t.key(): t for t in request.targets}.values()
             resolved = [(t, self._chain(t)[-1][1]) for t in targets]

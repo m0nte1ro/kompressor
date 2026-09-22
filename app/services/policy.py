@@ -4,6 +4,7 @@ from app.models.media import (
     Episode,
     Movie,
 )
+from app.models.media import spatial_resolution
 from app.models.policy import EligibilityResult
 from app.models.preset import CompressionPreset
 from app.models.tags import QualityFloor
@@ -27,7 +28,7 @@ class PolicyEngine:
     ) -> EligibilityResult:
         reasons: list[str] = []
         warnings: list[str] = []
-        if item.resolution not in preset.source_resolutions:
+        if spatial_resolution(item) not in preset.source_resolutions:
             reasons.append("Source resolution is not supported by this preset. Configure explicit applicability.")
         if item.hdr and preset.hdr_support == "sdr_only":
             reasons.append("This preset supports SDR sources only.")
@@ -107,7 +108,7 @@ class PolicyEngine:
 
         if item.interlaced:
             reasons.append(
-                "Interlaced content is blocked."
+                "Interlaced source requires deinterlacing, which is not currently supported."
             )
 
         if (

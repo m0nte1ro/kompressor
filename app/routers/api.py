@@ -1,9 +1,10 @@
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.config import settings
+from app.dependencies import Processor
 
 
 router = APIRouter()
@@ -23,29 +24,20 @@ def healthz():
 
 
 @router.get("/api/library")
-def get_library(request: Request):
-    return request.app.state.catalog.library().model_dump()
+def get_library(processor: Processor):
+    return processor.get_library()
 
 
 @router.get("/api/summary")
-def get_summary(request: Request):
-    library = request.app.state.catalog.library()
-    episodes = [e for show in library.shows for season in show.seasons for e in season.episodes]
-    return {"movies": len(library.movies), "shows": len(library.shows), "episodes": len(episodes),
-            "movie_bytes": sum(m.size for m in library.movies), "show_bytes": sum(e.size for e in episodes)}
+def get_summary(processor: Processor):
+    return processor.get_summary()
 
 
 @router.get("/api/presets")
-def get_presets(request: Request, scope: Literal["movie", "show"] | None = None):
-    return [p.model_dump() for p in request.app.state.catalog.presets.get_all() if scope is None or p.scope == scope]
+def get_presets(processor: Processor, scope: Literal["movie", "show"] | None = None):
+    return processor.get_presets(scope)
 
 
 @router.post("/api/eligibility")
-def evaluate_eligibility(request: Request, payload: EligibilityRequest):
-    catalog = request.app.state.catalog
-    try:
-        preset = catalog.preset(payload.preset_id)
-        entry = catalog.find(payload.media_id, payload.scope)
-    except LookupError as error:
-        raise HTTPException(404, str(error)) from error
-    return catalog.evaluate(entry, preset, payload.preserve_audio, payload.preserve_subtitles).model_dump()
+def evaluate_eligibility(processor: Processor, payload: EligibilityRequest):
+    return processor.evaluate_compression(**payload.model_dump())

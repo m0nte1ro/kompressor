@@ -29,9 +29,9 @@ def test_restart_preserves_preferences_queue_order_and_history(tmp_path, legacy_
         # Produce history on the other lane, then queue another job there.
         show_payload = {"scope": "show", "preset_id": "show-streaming-quality", "media_ids": ["modern-family-s03e04"]}
         client.post("/api/queue", json=show_payload)
-        app.state.queue_service.tick(0)
-        app.state.queue_service.tick(30)
-        active_qsv = app.state.queue_service.snapshot()["lanes"][1]["active"]
+        app.state.media_processor.queue.tick(0)
+        app.state.media_processor.queue.tick(30)
+        active_qsv = app.state.media_processor.queue.snapshot()["lanes"][1]["active"]
         client.post(f"/api/queue/{active_qsv['id']}/skip")
         client.post("/api/queue", json=show_payload)
     second = create_app(path, start_workers=False, initial_presets=legacy_defaults)
@@ -53,9 +53,9 @@ def test_restart_preserves_preferences_queue_order_and_history(tmp_path, legacy_
         assert recovered["priority"] == "urgent" and recovered["move_next_order"] > 0
         assert recovered["progress"] == 0 and recovered["elapsed_seconds"] == 0
         assert recovered["started_at"] is None
-        second.state.queue_service.tick(0)
-        second.state.queue_service.tick(185)
-        assert all(lane["active"] is None for lane in second.state.queue_service.snapshot()["lanes"])
+        second.state.media_processor.queue.tick(0)
+        second.state.media_processor.queue.tick(185)
+        assert all(lane["active"] is None for lane in second.state.media_processor.queue.snapshot()["lanes"])
     with TestClient(create_app(path, start_workers=False, initial_presets=legacy_defaults)) as client:
         history = client.get("/api/queue").json()["history"]
         assert sum(j["status"] == "completed" for j in history) == 2

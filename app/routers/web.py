@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from app.config import PROJECT_ROOT
+from app.dependencies import Processor
 
 
 router = APIRouter(include_in_schema=False)
@@ -40,50 +41,29 @@ def render(request: Request, template: str, page: str, title: str, **context):
     })
 
 
-def rows(request: Request, scope: str, show_id: str | None = None) -> list[dict]:
-    catalog = request.app.state.catalog
-    result = []
-    for entry in catalog.entries():
-        if entry.scope != scope or (show_id is not None and entry.show_id != show_id):
-            continue
-        try:
-            preset, eligibility = catalog.preview(entry)
-        except LookupError as error:
-            raise HTTPException(503, str(error)) from error
-        result.append({"entry": entry, "item": entry.item,
-                       "preset": preset, "eligibility": eligibility})
-    return result
-
-
 @router.get("/")
 def index():
     return RedirectResponse("/movies", status_code=307)
 
 
 @router.get("/movies", response_class=HTMLResponse)
-def movies(request: Request):
+def movies(request: Request, processor: Processor):
     return render(request, "library.html", "movies", "Movies", scope="movie",
-                  rows=rows(request, "movie"), subtitle="Media inventory and compression policies")
+                  rows=processor.get_movies(), subtitle="Media inventory and compression policies")
 
 
 @router.get("/shows", response_class=HTMLResponse)
-def shows(request: Request):
-    library = request.app.state.catalog.library()
-    cards = []
-    for show in library.shows:
-        episodes = [e for season in show.seasons for e in season.episodes]
-        cards.append({"show": show, "count": len(episodes), "size": sum(e.size for e in episodes)})
+def shows(request: Request, processor: Processor):
+    cards = processor.get_shows()
     return render(request, "shows.html", "shows", "Shows", cards=cards,
                   subtitle="Series inventory · inherited series, season and episode tags")
 
 
 @router.get("/shows/{show_id}", response_class=HTMLResponse)
-def episodes(request: Request, show_id: str):
-    show = next((s for s in request.app.state.catalog.library().shows if s.id == show_id), None)
-    if show is None:
-        raise HTTPException(404, "Show not found.")
-    return render(request, "library.html", "shows", show.name, scope="show", show=show,
-                  rows=rows(request, "show", show_id), subtitle="All episodes · series → season → episode policy")
+def episodes(request: Request, show_id: str, processor: Processor):
+    detail = processor.get_show(show_id)
+    return render(request, "library.html", "shows", detail["show"].name, scope="show", **detail,
+                  subtitle="All episodes · series → season → episode policy")
 
 
 @router.get("/queue", response_class=HTMLResponse)
@@ -99,7 +79,7 @@ def history(request: Request):
 
 
 @router.get("/settings", response_class=HTMLResponse)
-def settings(request: Request):
+def settings(request: Request, processor: Processor):
     return render(request, "settings.html", "settings", "Settings",
                   subtitle="Presets and persistent library preferences",
-                  presets=request.app.state.catalog.presets.get_all())
+                  presets=processor.get_presets())

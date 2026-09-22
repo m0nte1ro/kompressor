@@ -37,12 +37,12 @@ def runtime(tmp_path, legacy_defaults):
 
 @pytest.fixture
 def catalog(runtime):
-    return runtime[0].state.catalog
+    return runtime[0].state.media_processor.catalog
 
 
 @pytest.fixture
 def queue(runtime):
-    return runtime[0].state.queue_service
+    return runtime[0].state.media_processor.queue
 
 
 @pytest.fixture

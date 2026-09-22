@@ -1,6 +1,8 @@
 """Shared media lookup and policy evaluation for the API, views and scheduler."""
 from dataclasses import dataclass
 
+from app.models.media import spatial_resolution
+from app.services.errors import NotFound
 from app.models.media import Episode, Movie
 from app.models.policy import EligibilityResult
 from app.models.preset import CompressionPreset
@@ -52,12 +54,12 @@ class CatalogService:
         for entry in self.entries():
             if entry.item.id == media_id and entry.scope == scope:
                 return entry
-        raise LookupError("Movie not found." if scope == "movie" else "Episode not found.")
+        raise NotFound("Movie not found." if scope == "movie" else "Episode not found.")
 
     def preset(self, preset_id: str) -> CompressionPreset:
         preset = self.presets.get_by_id(preset_id)
         if preset is None:
-            raise LookupError("Preset not found.")
+            raise NotFound("Preset not found.")
         return preset
 
     def evaluate(self, entry: MediaEntry, preset: CompressionPreset,
@@ -80,7 +82,7 @@ class CatalogService:
                 source_size=entry.item.size, estimated_output_size=None, estimated_saving=None,
                 estimated_saving_percent=None, preserve_audio=True, preserve_subtitles=True,
             )
-        presets.sort(key=lambda p: (entry.item.resolution not in p.source_resolutions,
+        presets.sort(key=lambda p: (spatial_resolution(entry.item) not in p.source_resolutions,
                                     bool(entry.item.hdr) and p.hdr_support == "sdr_only"))
         fallback = None
         for preset in presets:
@@ -89,3 +91,31 @@ class CatalogService:
             if result.eligible:
                 return preset, result
         return fallback
+
+    def summary(self) -> dict:
+        library = self.library()
+        episodes = [e for s in library.shows for season in s.seasons for e in season.episodes]
+        return {"movies": len(library.movies), "shows": len(library.shows), "episodes": len(episodes),
+                "movie_bytes": sum(m.size for m in library.movies), "show_bytes": sum(e.size for e in episodes)}
+
+    def previews(self, scope: str, show_id: str | None = None) -> list[dict]:
+        result = []
+        for entry in self.entries():
+            if entry.scope != scope or (show_id is not None and entry.show_id != show_id):
+                continue
+            preset, eligibility = self.preview(entry)
+            result.append({"entry": entry, "item": entry.item, "preset": preset, "eligibility": eligibility})
+        return result
+
+    def shows(self) -> list[dict]:
+        cards = []
+        for show in self.library().shows:
+            episodes = [e for season in show.seasons for e in season.episodes]
+            cards.append({"show": show, "count": len(episodes), "size": sum(e.size for e in episodes)})
+        return cards
+
+    def show_detail(self, show_id: str) -> dict:
+        show = next((s for s in self.library().shows if s.id == show_id), None)
+        if show is None:
+            raise NotFound("Show not found.")
+        return {"show": show, "rows": self.previews("show", show_id)}

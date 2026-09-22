@@ -37,6 +37,9 @@ class SQLiteTagRepository:
     def __init__(self, database: Database):
         self.database = database
 
+    def transaction(self):
+        return self.database.transaction()
+
     def get(self, key: str) -> TagAssignment | None:
         with self.database.transaction() as connection:
             row = connection.execute("SELECT payload FROM tags WHERE id = ?", (key,)).fetchone()

@@ -52,6 +52,51 @@ Movies are treated significantly more conservatively than TV shows.
 
 ---
 
+## Application boundary and composition
+
+```text
+Frontend → HTTP/JSON API → thin FastAPI routes → MediaProcessor
+                                                ↓
+                             services / repositories / adapters
+```
+
+`app/services/media_processor.py` is the application facade. It delegates to
+CatalogService, PresetService and QueueService; PolicyEngine remains the sole
+eligibility engine. Jinja rendering is still supported. Routes resolve the facade
+through `get_media_processor` and contain only HTTP parsing/response concerns.
+Application errors are mapped to HTTP 404/409/422 at that boundary.
+
+`app/container.py:build_media_processor` centrally assembles dependencies once
+per FastAPI application lifespan. The instance lives in
+`app.state.media_processor`, with explicit processor injection and dependency
+overrides available for tests. Run one application process for the existing
+single scheduler; multiple processes sharing the queue are not supported.
+
+Today the composition uses seed media, SQLite presets/tags/jobs, FakeMediaScanner,
+FakeProbeService and FakeEncoder behind the elapsed-time FakeEncoderWorker.
+Discovery/probing return domain models and never inspect actual media paths.
+There is no public scan endpoint yet. The encoder contract is
+`encode(job, progress_callback) -> EncodeResult` plus `stop(job_id)`.
+Fake encoding is instantaneous; the fake worker provides pacing and simulated
+validation. Submitting a job only evaluates policy and enqueues a preset snapshot.
+CPU/QSV scheduling remains in QueueService, outside HTTP encode execution.
+
+Later, the composition root will select FilesystemMediaRepository,
+FilesystemMediaScanner, FFprobeService and FFmpegEncoder. FFprobeService owns
+probing and domain-model translation. One FFmpegEncoder adapter owns all ffmpeg
+arguments, stream mapping, CPU/QSV configuration, HDR/audio/container handling,
+progress and process termination. Real workers must execute long-running encodes
+outside HTTP requests **and outside scheduler/database locks**, then validate and
+record completion. The existing fake tick loop is not a production executor.
+No real adapter, file replacement or deinterlacing is implemented here.
+
+For compatibility, job-level `keep_output` remains represented by
+`replace_source: false` in the API and persistence; `true` records replacement
+intent only. Preset names, schemas and frontend contracts remain unchanged.
+Spatial applicability normalizes 1080i to the 1080p resolution class while keeping
+the display label and separate interlaced flag. Interlaced media is blocked for
+unsupported deinterlacing, not merely because its label ends in `i`.
+
 # 3. Development Environment
 
 Development must NOT depend on the production homelab.
