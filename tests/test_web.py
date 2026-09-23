@@ -94,3 +94,10 @@ def test_blocked_media_still_shows_saving_estimate(client):
     assert "Blocked" in row
     assert "Planning range" in row
     assert "Estimate unavailable" not in row
+
+
+def test_summary_includes_blocked_media_estimates(client):
+    html = client.get("/movies").text
+    assert "Estimated saving" in html
+    assert "Planning midpoint · not measured" in html
+    assert "~" in html
