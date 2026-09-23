@@ -13,7 +13,7 @@ templates = Jinja2Templates(directory=PROJECT_ROOT / "app" / "templates")
 def size(value: int | None) -> str:
     if value is None:
         return "—"
-    return f"{value / 1_000_000_000:.1f} GB"
+    return f"{value / (1024 ** 3):.1f} GiB"
 
 
 def bitrate(value: int | None) -> str:
