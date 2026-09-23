@@ -94,14 +94,14 @@ See the [full Settings audit](docs/SETTINGS_AUDIT.md) and
   Movies and Shows library paths in SQLite; these paths are currently stored for
   the filesystem scanner; saving alone does not trigger a scan.
   Built-in display names are user-owned: Just convert to HEVC, Tone it down a bit
-  + HEVC, and Tone it down a bit + HEVC + Efficient Audio. Intent is stored
-  separately from those names. All preserve source resolution. Existing jobs keep
-  a complete preset snapshot, even if that preset is later edited, moved to
-  another scope or disabled. Disable affects new submissions. The catalogue
-  upgrade inserts missing current presets and disables untouched legacy defaults
-  once; user edits and queued snapshots are preserved. Legacy custom presets
-  retain explicit source applicability rules, while target resolution is
-  configured separately.
+  - HEVC, and Tone it down a bit + HEVC + Efficient Audio. Intent is stored
+    separately from those names. All preserve source resolution. Existing jobs keep
+    a complete preset snapshot, even if that preset is later edited, moved to
+    another scope or disabled. Disable affects new submissions. The catalogue
+    upgrade inserts missing current presets and disables untouched legacy defaults
+    once; user edits and queued snapshots are preserved. Legacy custom presets
+    retain explicit source applicability rules, while target resolution is
+    configured separately.
 - Movies and episodes have Manage tags; episode pages also expose series and
   season tags. Select multiple rows to add/remove tags without replacing unrelated
   direct tags. The editor shows direct tags, inherited tags and their origin.
