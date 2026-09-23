@@ -35,6 +35,59 @@ def legacy_state(tmp_path):
     return repository.load()
 
 
+def test_large_unsigned_inode_migrates_and_round_trips_exactly(tmp_path):
+    state = legacy_state(tmp_path)
+    huge_inode = 2**63 + 12345
+    file_id, record = next(iter(state.files.items()))
+    revision_id = record.revision_id
+    state.files[file_id] = record.model_copy(
+        update={'observation': record.observation.model_copy(update={'inode': huge_inode})})
+    revision = state.revisions[revision_id]
+    state.revisions[revision_id] = revision.model_copy(
+        update={'observation': revision.observation.model_copy(update={'inode': huge_inode})})
+
+    path = tmp_path / 'legacy-large-inode.sqlite3'
+    legacy_database(path, state.model_dump_json())
+    database = Database(path)
+    repository = SQLiteInventoryRepository(database)
+
+    restored = repository.get_file(file_id)
+    assert restored is not None
+    assert restored.observation.inode == huge_inode
+    restored_revision = repository.get_revision(revision_id)
+    assert restored_revision is not None
+    assert restored_revision.observation.inode == huge_inode
+    with database.read() as connection:
+        rows = connection.execute(
+            "SELECT inode, typeof(inode) AS storage_type FROM observations WHERE inode IS NOT NULL"
+        ).fetchall()
+        assert rows
+        assert all(str(row['inode']).startswith('u:') for row in rows)
+        assert all(row['storage_type'] == 'text' for row in rows)
+
+
+def test_large_unsigned_inode_persists_on_fresh_reconciliation(tmp_path):
+    huge_inode = 2**63 + 54321
+    repository = SQLiteInventoryRepository(Database(tmp_path / 'fresh.sqlite3'))
+    snapshot = read_snapshot(PROJECT_ROOT / 'fixtures/reconciliation/initial.json')
+    observation = snapshot.files[0].model_copy(update={'inode': huge_inode})
+    result = ReconciliationService(repository).reconcile(
+        snapshot.model_copy(update={'files': [observation]}))
+
+    restored = repository.get_file(result.created[0])
+    assert restored is not None
+    assert restored.observation.inode == huge_inode
+    assert restored.observation.physical_key() == (
+        observation.filesystem_id, huge_inode, observation.generation)
+    with repository.database.read() as connection:
+        row = connection.execute(
+            "SELECT inode, typeof(inode) AS storage_type FROM observations WHERE observation_id=?",
+            ('file:' + restored.file_id,),
+        ).fetchone()
+        assert row['inode'] == f'u:{huge_inode}'
+        assert row['storage_type'] == 'text'
+
+
 def test_schema_one_migration_preserves_inventory_and_other_state(tmp_path):
     state = legacy_state(tmp_path)
     path = tmp_path / 'legacy.sqlite3'

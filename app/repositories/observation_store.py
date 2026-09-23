@@ -10,6 +10,21 @@ STREAM_FIELDS = ('kind', 'codec', 'language', 'title', 'bitrate', 'width', 'heig
                  'scan_type', 'field_order', 'frame_rate', 'pixel_format', 'channels', 'channel_layout', 'sample_rate')
 
 
+def _stored_inode(value: int | None) -> str | None:
+    """Persist ino_t losslessly even when it exceeds SQLite's signed 64-bit INTEGER."""
+    return None if value is None else f'u:{value}'
+
+
+def _loaded_inode(value: object) -> int | None:
+    """Read both legacy SQLite INTEGER values and the lossless tagged text form."""
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value)
+    return int(text[2:] if text.startswith('u:') else text)
+
+
 def store_observation(connection: sqlite3.Connection, key: str, observation: FileObservation) -> None:
     connection.execute('INSERT INTO media_items VALUES (?,?) ON CONFLICT DO NOTHING',
                        (observation.media_id, observation.scope))
@@ -17,6 +32,7 @@ def store_observation(connection: sqlite3.Connection, key: str, observation: Fil
     if scope != observation.scope:
         raise ValueError('A semantic media identity cannot change scope.')
     facts = observation.model_dump(mode='json')
+    facts['inode'] = _stored_inode(observation.inode)
     probe = observation.probe
     fields = ['observation_id', *OBSERVATION_FIELDS, 'fingerprints', 'container', 'container_bitrate', 'duration_seconds', 'probe_metadata']
     values = [key, *(facts[field] for field in OBSERVATION_FIELDS), json.dumps(facts['fingerprints']),
@@ -51,6 +67,7 @@ def observations(connection: sqlite3.Connection, keys: list[str]) -> dict[str, F
         for row in rows:
             data = dict(row)
             key = data.pop('observation_id')
+            data['inode'] = _loaded_inode(data['inode'])
             data['fingerprints'] = json.loads(data['fingerprints'])
             container = data.pop('container')
             header = {'container': container, 'container_bitrate': data.pop('container_bitrate'),
