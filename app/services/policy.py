@@ -170,6 +170,20 @@ class PolicyEngine:
             )
 
         estimates = estimate(item, preset, effective_preserve_audio)
+        if "Preserve A/V" in effective_tags:
+            estimates.update(
+                estimated_output_size=None,
+                estimated_saving=None,
+                estimated_saving_percent=None,
+                estimated_output_size_low=None,
+                estimated_output_size_high=None,
+                estimated_saving_low=None,
+                estimated_saving_high=None,
+                estimate_basis="unknown",
+                planning_output_size=None,
+                planning_saving=None,
+                planning_saving_percent=None,
+            )
         saving_percent = estimates["estimated_saving_percent"]
         if saving_percent is None:
             saving_percent = estimates["planning_saving_percent"]
