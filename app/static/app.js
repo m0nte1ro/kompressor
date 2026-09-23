@@ -41,15 +41,15 @@ function sortRows(table) {
 }
 
 function setupSortableTables() {
-  $$('table[data-sortable]').forEach(table => {
-    table.addEventListener('click', event => {
-      const button = event.target.closest('[data-sort-key]');
-      if (!button || !table.contains(button)) return;
-      const same = table.dataset.sortKey === button.dataset.sortKey;
-      table.dataset.sortKey = button.dataset.sortKey;
-      table.dataset.sortDirection = same && table.dataset.sortDirection === 'asc' ? 'desc' : 'asc';
-      sortRows(table);
-    });
+  document.addEventListener('click', event => {
+    const button = event.target.closest('table[data-sortable] [data-sort-key]');
+    if (!button) return;
+    const table = button.closest('table[data-sortable]');
+    if (!table) return;
+    const same = table.dataset.sortKey === button.dataset.sortKey;
+    table.dataset.sortKey = button.dataset.sortKey;
+    table.dataset.sortDirection = same && table.dataset.sortDirection === 'asc' ? 'desc' : 'asc';
+    sortRows(table);
   });
 }
 

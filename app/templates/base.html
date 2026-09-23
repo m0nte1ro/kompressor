@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }} · {{ request.app.title }}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
-  <script type="module" src="{{ url_for('static', path='app.js') }}"></script>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=2">
+  <script type="module" src="{{ url_for('static', path='app.js') }}?v=2"></script>
 </head>
 <body data-page="{{ page }}">
   <a class="skip-link" href="#content">Skip to content</a>
