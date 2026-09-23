@@ -1,5 +1,7 @@
 import pytest
 
+from app.routers.web import size
+
 
 @pytest.mark.parametrize("url,title", [
     ("/movies", "Movies"), ("/shows", "Shows"),
@@ -79,3 +81,7 @@ def test_not_found_and_home(client):
     response = client.get("/", follow_redirects=False)
     assert response.status_code == 307
     assert response.headers["location"] == "/movies"
+
+
+def test_size_uses_binary_units():
+    assert size(81_093_483_589) == "75.5 GiB"
