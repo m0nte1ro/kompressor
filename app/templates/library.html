@@ -60,7 +60,7 @@
             data-sort-bitrate="{{ item.video_bitrate if item.video_bitrate is not none else -1 }}"
             data-sort-size="{{ item.size }}" data-sort-audio="{{ item.audio | length }}"
             data-sort-policy="{{ 'eligible' if result.eligible else 'blocked' }}"
-            data-sort-saving="{{ result.planning_saving or result.estimated_saving or -1 }}">
+            data-sort-saving="{{ result.planning_saving if result.planning_saving is not none else result.estimated_saving if result.estimated_saving is not none else -1 }}">
           <td><input type="checkbox" class="media-select" aria-label="Select {{ row.entry.name }}"></td>
           <th scope="row" class="media-name">
             {% if scope == 'movie' %}{{ item.name }}{% else %}<span class="episode-code">S{{ '%02d' | format(item.season) }}E{{ '%02d' | format(item.episode) }}</span> {{ item.title or 'Untitled' }}{% endif %}
@@ -82,7 +82,7 @@
             <button class="tag-edit" data-tag-kind="{{ 'movie' if scope == 'movie' else 'episode' }}" data-tag-id="{{ item.id }}">Manage tags</button>
             {% for reason in result.reasons %}<small class="reason">{{ reason }}</small>{% endfor %}
           </td>
-          <td class="saving numeric">{% if result.eligible %}{% if result.estimate_basis == 'planning_range' %}{{ result.estimated_saving_low | size }}–{{ result.estimated_saving_high | size }}<small>Planning range</small>{% else %}~{{ result.estimated_saving | size }}<small>{{ '%.0f' | format(result.estimated_saving_percent) }}%</small>{% endif %}{% else %}—{% endif %}</td>
+          <td class="saving numeric">{% if result.estimate_basis == 'planning_range' and result.estimated_saving_low is not none and result.estimated_saving_high is not none %}{{ result.estimated_saving_low | size }}–{{ result.estimated_saving_high | size }}<small>Planning range</small>{% elif result.estimated_saving is not none %}~{{ result.estimated_saving | size }}{% if result.estimated_saving_percent is not none %}<small>{{ '%.0f' | format(result.estimated_saving_percent) }}%</small>{% endif %}{% elif result.planning_saving is not none %}~{{ result.planning_saving | size }}{% if result.planning_saving_percent is not none %}<small>{{ '%.0f' | format(result.planning_saving_percent) }}% planning</small>{% endif %}{% else %}—<small>Estimate unavailable</small>{% endif %}</td>
           <td class="row-action"><button data-action="compress" aria-label="Review compression for {{ row.entry.name }}">{{ 'Compress' if result.eligible else 'Review' }}</button></td>
         </tr>
         {% else %}<tr><td colspan="{{ 13 if scope == 'movie' else 10 }}" class="empty">No media in this library.</td></tr>{% endfor %}
