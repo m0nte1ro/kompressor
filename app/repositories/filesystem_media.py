@@ -38,7 +38,7 @@ def source_video_bitrate(record: LibraryFile, probe, video: StreamFacts | None) 
     return (int(estimated), True) if estimated > 0 else (None, False)
 
 
-def media_fields(record: LibraryFile, root: Path) -> dict:
+def media_fields(record: LibraryFile, root: Path, encoding_enabled: bool = False) -> dict:
     probe = record.observation.probe
     videos = [s for s in probe.streams if s.kind == 'video' and not s.dispositions.get('attached_pic')] if probe else []
     video: StreamFacts | None = videos[0] if videos else None
@@ -70,13 +70,15 @@ def media_fields(record: LibraryFile, root: Path) -> dict:
                 duration_seconds=probe.duration_seconds if probe else None, hdr=hdr,
                 interlaced=True if scan in {'interlaced', 'mixed'} else False if scan == 'progressive' else None,
                 hardlinks=record.observation.hardlinks, audio=audio, probe=probe,
-                processing_supported=False)
+                processing_supported=encoding_enabled)
 
 
 class FilesystemMediaRepository:
-    def __init__(self, inventory: InventoryRepository, roots: Callable[[], dict[str, Path]]):
+    def __init__(self, inventory: InventoryRepository, roots: Callable[[], dict[str, Path]],
+                 encoding_enabled: bool = False):
         self.inventory = inventory
         self.roots = roots
+        self.encoding_enabled = encoding_enabled
 
     def root_ids(self) -> list[str]:
         return [root_identity('movie' if scope == 'movie' else 'show', root) for scope, root in self.roots().items()]
@@ -124,7 +126,7 @@ class FilesystemMediaRepository:
         for record in self.inventory.files(roots=list(locations), present=True, scope=scope, show_id=show_id, file_id=file_id):
             if record.presence != 'present' or record.root_id not in locations:
                 continue
-            fields = media_fields(record, locations[record.root_id])
+            fields = media_fields(record, locations[record.root_id], self.encoding_enabled)
             relative = Path(record.relative_path)
             if record.scope == 'movie':
                 name = relative.stem

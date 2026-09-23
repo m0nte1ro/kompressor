@@ -35,7 +35,7 @@ def replace_observation(snapshot: ScanSnapshot, **changes) -> ScanSnapshot:
 
 @pytest.mark.parametrize('boundary', ['before_processing', 'before_replacement'])
 @pytest.mark.parametrize('changes', [
-    {'hardlinks': 2}, {'hardlinks': None}, {'size': 0}, {'mtime_ns': 44},
+    {'hardlinks': 2}, {'hardlinks': None}, {'size': 0}, {'mtime_ns': 44}, {'ctime_ns': 45},
     {'inode': 111}, {'generation': 'reused'}, {'filesystem_id': None},
 ])
 def test_both_boundaries_require_fresh_revision_and_hardlinks(scenario, boundary, changes):

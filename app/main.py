@@ -40,10 +40,15 @@ def create_app(database_path: Path | None = None, *, media: MediaRepository | No
             configuration, database_path, media=media, initial_presets=initial_presets)
         application.state.media_processor = composed
         queue = composed.queue
+        real_worker = queue.worker if hasattr(queue.worker, "shutdown") and hasattr(queue.worker, "filesystem_mode") else None
+        if start_workers and real_worker is not None:
+            real_worker.start()
         task = asyncio.create_task(run_fake_workers(queue)) if start_workers and composed.discovery is None else None
         try:
             yield
         finally:
+            if real_worker is not None:
+                await asyncio.to_thread(real_worker.shutdown)
             if composed.discovery:
                 await asyncio.to_thread(composed.discovery.close)
             if task:

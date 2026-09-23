@@ -4,7 +4,7 @@ from app.dependencies import Processor
 from app.models.queue import EnqueueRequest, PriorityRequest
 
 
-router = APIRouter(prefix="/api/queue", tags=["Fake queue"])
+router = APIRouter(prefix="/api/queue", tags=["Queue"])
 
 
 @router.get("")

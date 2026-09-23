@@ -5,10 +5,16 @@ function planningSaving(job) {
 }
 
 function jobDetails(job) {
+  const estimate = job.estimate_basis === 'planning_range'
+    ? `${esc(size(job.estimated_saving_low))} – ${esc(size(job.estimated_saving_high))} planning estimate`
+    : `~${esc(size(job.estimated_saving))} estimated reduction`;
+  const source = job.execution_mode === 'real'
+    ? `Keep original · output ${esc(job.output_path || 'in workspace after validation')}`
+    : job.replace_source ? 'Replace after validation · simulated only' : 'Keep original · simulated test copy';
   return `<div class="job-name">${esc(job.name)}</div>
     <p class="job-meta">${esc(job.preset.name)} · ${esc(label(job.backend))} · ${esc(label(job.preset.destination_codec))}</p>
-    <p class="saving">${job.estimate_basis === 'planning_range' ? `${esc(size(job.estimated_saving_low))} – ${esc(size(job.estimated_saving_high))} planning reduction` : `~${esc(size(job.estimated_saving))} estimated reduction`}</p>
-    <p class="job-meta">${job.replace_source ? 'Replace after validation · simulated only' : 'Keep original · test copy · no storage reclaimed'}</p>`;
+    <p class="saving">${job.measured_saving !== null && job.measured_saving !== undefined ? `${esc(size(job.measured_saving))} measured saving` : estimate}</p>
+    <p class="job-meta">${source}</p>`;
 }
 
 export function renderQueue(queue) {
@@ -20,15 +26,18 @@ export function renderQueue(queue) {
       active.dataset.job = lane.active?.id ?? 'idle';
       active.innerHTML = lane.active ? `<article class="active-job" data-job="${esc(lane.active.id)}">
         <span class="badge green active-status"></span>${jobDetails(lane.active)}
-        <progress max="100" value="0" aria-label="Simulated encoding progress"></progress>
+        <progress max="100" value="0" aria-label="Encoding progress"></progress>
         <p class="job-meta"><span class="progress-text"></span> · Priority: ${esc(lane.active.priority)}</p>
         <div class="job-controls"><button class="danger" data-queue-action="skip">Stop &amp; Skip</button></div>
       </article>` : '<p class="empty">Worker idle · add a job from the library</p>';
     }
     if (lane.active) {
       $('progress', active).value = lane.active.progress;
-      $('.progress-text', active).textContent = `${lane.active.progress.toFixed(1)}% · ${Math.floor(lane.active.elapsed_seconds)}s simulated`;
-      $('.active-status', active).textContent = lane.active.status.toUpperCase();
+      const progress = lane.active.progress > 0 ? `${lane.active.progress.toFixed(1)}%` : 'Progress unavailable';
+      const elapsed = `${Math.floor(lane.active.elapsed_seconds)}s elapsed`;
+      const clock = lane.active.execution_mode === 'real' ? elapsed : `${Math.floor(lane.active.elapsed_seconds)}s simulated`;
+      $('.progress-text', active).textContent = `${progress} · ${clock}`;
+      $('.active-status', active).textContent = lane.active.status === 'validating' ? 'VALIDATING' : lane.active.status.toUpperCase();
     }
     $('.queued-count', section).textContent = lane.queued.length;
     const list = $('.queued-list', section);
@@ -52,28 +61,45 @@ export function renderHistory(queue) {
   if (rows.dataset.rendered === key) return;
   rows.dataset.rendered = key;
   const completed = queue.history.filter(j => j.status === 'completed');
-  const saving = completed.reduce((sum, j) => sum + planningSaving(j), 0);
+  const realCompleted = completed.filter(j => j.execution_mode === 'real');
+  const realSaving = realCompleted.reduce((sum, j) => sum + (j.measured_saving ?? 0), 0);
+  const estimatedCompleted = completed.filter(j => j.execution_mode !== 'real');
+  const estimatedSaving = estimatedCompleted.reduce((sum, j) => sum + planningSaving(j), 0);
   $('#history-stats').innerHTML = [
-    ['Planning / estimated reduction', `~${size(saving)}`], ['Completed simulations', completed.length],
-    ['CPU / QSV completed', `${completed.filter(j => j.backend === 'cpu').length} / ${completed.filter(j => j.backend === 'qsv').length}`],
-    ['Skipped / blocked', queue.history.filter(j => ['skipped', 'blocked'].includes(j.status)).length],
+    ['Measured real saving', size(realSaving)], ['Real encodes completed', realCompleted.length],
+    ['Estimated simulation reduction', `~${size(estimatedSaving)}`], ['Failed / skipped / blocked', queue.history.filter(j => ['failed', 'skipped', 'blocked'].includes(j.status)).length],
   ].map(([title, value]) => `<div class="card stat"><span>${esc(title)}</span><strong>${esc(value)}</strong></div>`).join('');
   rows.innerHTML = queue.history.map(job => {
-    const output = job.estimate_basis === 'planning_range'
+    const outputEstimate = job.estimate_basis === 'planning_range'
       ? ((job.estimated_output_size_low ?? 0) + (job.estimated_output_size_high ?? 0)) / 2
       : job.estimated_output_size ?? 0;
+    const isReal = job.execution_mode === 'real';
+    const actualOutput = isReal && job.status === 'completed' && job.output_size !== null;
+    const actualSaving = isReal && job.status === 'completed' && job.measured_saving !== null;
+    const savingText = actualSaving
+      ? `${esc(size(job.measured_saving))} (${job.source_size ? (100 * job.measured_saving / job.source_size).toFixed(1) : '0.0'}%) measured`
+      : job.status === 'completed' ? job.estimate_basis === 'planning_range'
+        ? `${esc(size(job.estimated_saving_low))} – ${esc(size(job.estimated_saving_high))} planning`
+        : `~${esc(size(job.estimated_saving))} estimated`
+        : '—';
+    const error = [job.error_message, ...(job.validation_errors ?? [])].filter(Boolean)
+      .map(message => `<small class="reason">${esc(message)}</small>`).join('');
+    const outputPath = job.output_path ? `<small><code>${esc(job.output_path)}</code></small>` : '';
+    const finished = job.finished_at ? new Date(job.finished_at).toLocaleString() : '—';
     return `<tr data-sort-name="${esc(job.name)}" data-sort-status="${esc(job.status)}"
       data-sort-preset="${esc(job.preset.name)}" data-sort-source="${job.source_size ?? 0}"
-      data-sort-output="${output}" data-sort-saving="${planningSaving(job)}"
+      data-sort-output="${actualOutput ? job.output_size : outputEstimate}" data-sort-saving="${actualSaving ? job.measured_saving : planningSaving(job)}"
       data-sort-video="${esc(job.source_codec)}" data-sort-elapsed="${job.elapsed_seconds ?? 0}"
       data-sort-finished="${job.finished_at ? new Date(job.finished_at).getTime() : 0}">
-    <th scope="row">${esc(job.name)}${(job.reasons ?? []).map(reason => `<small class="reason">${esc(reason)}</small>`).join('')}</th><td><span class="badge ${job.status === 'completed' ? 'green' : 'red'}">${esc(job.status)}</span></td>
-    <td>${esc(job.preset.name)}<small>${job.replace_source ? "Replace after validation · simulated" : "Keep original · no storage reclaimed"}</small><small>${esc(label(job.backend))}</small></td><td>${esc(size(job.source_size))}</td>
-    <td>${job.status === 'completed' ? job.estimate_basis === 'planning_range' ? `${esc(size(job.estimated_output_size_low))} – ${esc(size(job.estimated_output_size_high))} planning` : `~${esc(size(job.estimated_output_size))}` : '—'}</td>
-    <td class="saving">${job.status === 'completed' ? job.estimate_basis === 'planning_range' ? `${esc(size(job.estimated_saving_low))} – ${esc(size(job.estimated_saving_high))} planning` : `~${esc(size(job.estimated_saving))} (${(100 * job.estimated_saving / job.source_size).toFixed(1)}%)` : '—'}</td>
+    <th scope="row">${esc(job.name)}${(job.reasons ?? []).map(reason => `<small class="reason">${esc(reason)}</small>`).join('')}${error}</th>
+    <td><span class="badge ${job.status === 'completed' ? 'green' : job.status === 'failed' ? 'red' : 'blue'}">${esc(job.status)}</span></td>
+    <td>${esc(job.preset.name)}<small>${isReal ? 'CPU · libx265 · source kept' : 'Simulation · source unchanged'}</small><small>${esc(label(job.backend))}</small></td>
+    <td>${esc(size(job.source_size))}</td>
+    <td>${actualOutput ? esc(size(job.output_size)) : job.status === 'completed' ? job.estimate_basis === 'planning_range' ? `${esc(size(job.estimated_output_size_low))} – ${esc(size(job.estimated_output_size_high))} planning` : `~${esc(size(job.estimated_output_size))} estimate` : '—'}${outputPath}</td>
+    <td class="saving">${savingText}</td>
     <td>${esc(label(job.source_codec))} → ${esc(label(job.preset.destination_codec))}</td>
-    <td>${Math.round(job.elapsed_seconds)}s</td><td>${esc(new Date(job.finished_at).toLocaleString())}</td>
+    <td>${Math.round(job.elapsed_seconds)}s</td><td>${esc(finished)}</td>
   </tr>`;
-  }).join('') || '<tr><td colspan="9" class="empty">No simulations finished yet. Add jobs from Movies or Shows to get started.</td></tr>';
+  }).join('') || '<tr><td colspan="9" class="empty">No completed or stopped jobs yet. Add jobs from Movies or Shows to get started.</td></tr>';
   window.dispatchEvent(new CustomEvent('table-updated', {detail: {table: rows.closest('table')}}));
 }

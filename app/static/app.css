@@ -172,3 +172,8 @@ legend { color: var(--muted); padding: 0 5px; }
   .field-grid, .preset-grid, .show-grid { grid-template-columns: 1fr; }
   .content { padding: 13px; } .impact strong { font-size: 16px; }
 }
+
+.runtime-facts { display: grid; grid-template-columns: minmax(140px, 190px) minmax(0, 1fr); gap: 8px 14px; margin: 16px 0; }
+.runtime-facts dt { color: var(--muted); }
+.runtime-facts dd { margin: 0; overflow-wrap: anywhere; }
+.lane-disabled { opacity: .68; }

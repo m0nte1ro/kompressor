@@ -98,9 +98,20 @@ class LibraryFile(BaseModel):
 
 
 class SourceReference(BaseModel):
+    """Identity plus the physical/stat evidence captured when a job is queued."""
     model_config = ConfigDict(frozen=True)
     file_id: str
     revision_id: str
+    captured: bool = False
+    root_id: str | None = None
+    relative_path: str | None = None
+    filesystem_id: str | None = None
+    inode: int | None = Field(default=None, ge=0)
+    generation: str | None = None
+    size: int | None = Field(default=None, ge=0)
+    mtime_ns: int | None = Field(default=None, ge=0)
+    ctime_ns: int | None = Field(default=None, ge=0)
+    hardlinks: int | None = Field(default=None, ge=1)
 
 
 class OutputArtifact(BaseModel):

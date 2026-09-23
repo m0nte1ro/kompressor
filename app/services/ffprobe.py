@@ -141,6 +141,18 @@ def parse_ffprobe(payload: dict) -> MediaProbeResult:
 
 
 class FFprobeService:
+    @staticmethod
+    def runtime_check(binary: str) -> tuple[bool, str | None]:
+        try:
+            result = subprocess.run([binary, '-version'], stdin=subprocess.DEVNULL,
+                                    capture_output=True, text=True, timeout=5, check=False)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return False, f'Could not run ffprobe version check: {error}'
+        version_output = (result.stdout + result.stderr)[:200].lower()
+        if result.returncode != 0 or 'ffprobe version' not in version_output:
+            return False, 'Configured ffprobe did not return a valid version response.'
+        return True, None
+
     def __init__(self, binary: str = 'ffprobe', timeout: float = 30):
         self.binary = binary
         self.timeout = timeout

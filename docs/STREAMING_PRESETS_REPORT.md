@@ -85,16 +85,18 @@ leaves queued preset snapshots unchanged.
 
 ## Output handling
 
-Output handling is a job option, separate from presets. Development defaults to
-keeping the source untouched and retaining a test output in the Kompressor
-workspace. Replacement intent can be recorded, but this project does not yet
-implement real ffmpeg, filesystem replacement, or media scanning.
+Output handling is a job option, separate from presets. Seed mode simulates the
+selected intent without creating files. Filesystem mode's first real CPU slice
+accepts keep-output only and writes validated MKV artifacts to the dedicated
+workspace; it never replaces the source. See [real CPU encoding](REAL_ENCODING.md)
+for its conservative SDR/progressive/HEVC limits.
 
-Real-media validation is still required for CRF values, QSV ICQ behavior, speed
-settings, HDR handling, player compatibility, frame and grain sensitivity,
-audio codec support, and actual output-size savings.
+Broader real-media validation is still required for perceptual CRF quality,
+QSV ICQ behavior, speed settings, HDR handling, player compatibility, frame and
+grain sensitivity, audio conversion, and output-size expectations.
 
-HDR10 sources remain HDR10 when encoded to HEVC. SDR sources remain SDR. No
-default preset tone maps HDR to SDR. HDR10 output must eventually preserve and
+The broader preset model keeps HDR10 intent separate from SDR intent; it does
+not implicitly tone-map. The current real CPU worker accepts confirmed SDR only,
+so HDR10 encode support remains unavailable. A future HDR path must preserve and
 validate colour primaries, PQ transfer characteristics, matrix coefficients,
 mastering display metadata, MaxCLL, MaxFALL and related signalling.

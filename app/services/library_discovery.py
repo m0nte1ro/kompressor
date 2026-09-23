@@ -3,8 +3,8 @@ from collections.abc import Callable
 from pathlib import Path
 from threading import Event, Lock, Thread
 from copy import deepcopy
-from uuid import uuid4
 from time import monotonic
+from uuid import uuid4
 
 from app.models.preferences import LibraryPaths
 from app.models.inventory import ScanSnapshot
@@ -121,8 +121,25 @@ class LibraryDiscoveryService:
                 pending.append((root, snapshot, by_path, report))
                 self._publish(roots=reports, discovered_so_far=0)
             self._publish(phase='probing')
-            last_publish = monotonic()
             for root, snapshot, by_path, report in pending:
+                probe_updates = []
+                last_probe_flush = monotonic()
+
+                def flush_probe_updates():
+                    nonlocal last_probe_flush
+                    if not probe_updates:
+                        return
+                    attached = 0
+                    # Keep ffprobe IO outside SQLite transactions, then persist a
+                    # small group together to avoid one durable commit per file.
+                    with self.reconciliation.repository.transaction():
+                        for file_id, revision_id, observation in probe_updates:
+                            attached += self.reconciliation.repository.attach_probe(
+                                file_id, revision_id, observation)
+                    report['probed'] += attached
+                    probe_updates.clear()
+                    last_probe_flush = monotonic()
+
                 for item in snapshot.files:
                     if self.stop.is_set():
                         break
@@ -139,11 +156,13 @@ class LibraryDiscoveryService:
                                 int(item.filesystem_id or -1), item.inode, item.size, item.mtime_ns):
                             raise InvalidOperation('File changed during probing; retry the scan.')
                         observed = record.observation.model_copy(update={'probe': facts, 'hardlinks': after.st_nlink})
-                        if self.reconciliation.repository.attach_probe(record.file_id, record.revision_id, observed):
-                            report['probed'] += 1
+                        probe_updates.append((record.file_id, record.revision_id, observed))
+                        if len(probe_updates) >= 5 or monotonic() - last_probe_flush >= 1:
+                            flush_probe_updates()
                     except (InvalidOperation, OSError) as error:
                         report['errors'].append(f'{item.relative_path}: {error}')
                     self._publish(roots=reports, discovered_so_far=0)
+                flush_probe_updates()
             self._publish(state='cancelled' if self.stop.is_set() else 'completed', phase='idle', roots=reports)
             return self.status()
         except Exception as error:

@@ -1,5 +1,6 @@
 """Central adapter selection: seed simulation or read-only filesystem discovery."""
 from pathlib import Path
+from app.services.encoding_runtime import capability_status
 
 from app.config import Settings
 from app.models.preferences import LibraryPaths
@@ -24,6 +25,11 @@ from app.workers.fake import FakeEncoderWorker
 from app.workers.encoder import FakeEncoder
 from app.services.discovery import FakeMediaScanner, FakeProbeService
 from app.services.media_processor import MediaProcessor
+from app.services.filesystem_source import FilesystemObservationSource
+from app.services.encoding_capability import CPUEncodeCapability
+from app.services.source_guard import SourceGuard
+from app.workers.ffmpeg import FFmpegEncoder
+from app.workers.real import RealEncoderWorker
 from app.services.presets import PresetService
 
 
@@ -40,13 +46,21 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
     reconciliation = ReconciliationService(inventory_repository)
     discovery: LibraryDiscoveryService | None = None
     media_repository: MediaRepository
+    worker = None
+    runtime = None
     if config.media_backend == "filesystem" and media is None:
         def roots() -> dict[str, Path]:
             return configured_roots(preferences.get_library_paths(), db_path)
         roots()
-        media_repository = FilesystemMediaRepository(inventory_repository, roots)
-        discovery = LibraryDiscoveryService(FilesystemScanner(),
-            FFprobeService(config.ffprobe_binary, config.ffprobe_timeout), reconciliation, roots, db_path)
+        runtime = capability_status(config.ffmpeg_binary, config.ffprobe_binary, config.workspace_root, roots())
+        ffprobe = FFprobeService(config.ffprobe_binary, config.ffprobe_timeout)
+        source = FilesystemObservationSource(inventory_repository, roots)
+        worker = RealEncoderWorker(enabled=runtime["available"], unavailable_reason=runtime["unavailable_reason"],
+            encoder=FFmpegEncoder(config.ffmpeg_binary, config.workspace_root),
+            source=source, guard=SourceGuard(inventory_repository, source),
+            capability=CPUEncodeCapability(), probe=ffprobe)
+        media_repository = FilesystemMediaRepository(inventory_repository, roots, encoding_enabled=worker.enabled)
+        discovery = LibraryDiscoveryService(FilesystemScanner(), ffprobe, reconciliation, roots, db_path)
     else:
         media_repository = media if media is not None else SeedMediaRepository(config.seed_media_path)
     presets = SQLitePresetRepository(
@@ -58,7 +72,20 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
         upgrade_streaming_presets(database, SeedPresetRepository(config.seed_presets_path).get_all())
     tagger = TagService(media_repository, SQLiteTagRepository(database))
     catalog = CatalogService(media_repository, presets, PolicyEngine(), tagger)
-    queue = QueueService(SQLiteQueueRepository(database), catalog, FakeEncoderWorker(FakeEncoder()))
+    if worker is None:
+        worker = FakeEncoderWorker(FakeEncoder())
+    queue = QueueService(SQLiteQueueRepository(database), catalog, worker)
+    if isinstance(worker, RealEncoderWorker):
+        worker.bind(queue, catalog)
+        diagnostics = worker.diagnostics(runtime)
+    else:
+        diagnostics = {"ffmpeg_binary": config.ffmpeg_binary, "ffprobe_binary": config.ffprobe_binary,
+                       "ffmpeg_available": None, "ffprobe_available": None, "libx265_available": None,
+                       "workspace_root": str(config.workspace_root), "encoding_enabled": False,
+                       "encoder_mode": "seed fake simulation" if discovery is None else "disabled",
+                       "supported_backends": ["cpu", "qsv"] if discovery is None else [],
+                       "workspace_writable": bool(runtime and runtime["workspace_writable"]),
+                       "unavailable_reason": runtime["unavailable_reason"] if runtime else None}
     queue.recover()
     return MediaProcessor(
         catalog,
@@ -70,5 +97,5 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
         inventory=reconciliation,
         discovery=discovery,
         runtime_settings={"media_backend": "filesystem" if discovery else "seed", "database_path": str(db_path),
-                          "ffprobe_binary": config.ffprobe_binary, "ffprobe_timeout": config.ffprobe_timeout},
+                          "ffprobe_timeout": config.ffprobe_timeout, **diagnostics},
     )

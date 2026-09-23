@@ -1,12 +1,11 @@
 # Runtime settings audit
 
-This audit covers the current application, not the eventual encoder. **Is every
-setting shown in the UI currently being read and applied? No, not as an encoding
-operation.** Editable paths, preset CRUD, eligibility controls, tags and fake queue
-controls are wired. Encoder quality/effort, output format/resolution, HDR output
-requirements and preservation options are validated and saved in job plans, but
-there is no real encoder, output validation or replacement. Settings and the
-preset editor now state this explicitly. Filesystem mode remains read-only.
+This audit tracks the runtime effect of editable and environment settings. It
+predates the separate [real CPU encoding slice](REAL_ENCODING.md), which now
+consumes a safe subset of preset/job fields and validates keep-output files. The
+encoder remains CPU/libx265, confirmed SDR, progressive, copied-audio and
+keep-output only; unsupported preset settings are refused instead of silently
+ignored. Filesystem source roots remain read-only.
 
 ## Precedence and timing
 
@@ -45,29 +44,31 @@ checks in `services/presets.py`. API-only nested controls are included.
 | `movies_root`, `shows_root` | `config.py` | Startup defaults overridden by saved paths | Env/config only | Preferences defaults, root validation | Restart to change unsaved defaults | RESTART REQUIRED |
 | `movies_path`, `shows_path` | `models/preferences.py`, Settings form | Saved object > root defaults, including empty values | SQLite metadata | `configured_roots`, scanner, filesystem projection | Query visibility immediately; next scan | WIRED |
 | `database_path` | `config.py` | Explicit app/factory override > startup config | Env/config only | Shared Database; root exclusion validation | Restart | RESTART REQUIRED |
-| `ffprobe_binary` | `config.py` | Startup precedence; nonempty string | Env/config only | `FFprobeService.inspect` subprocess argument 0 | Restart | RESTART REQUIRED |
+| `ffprobe_binary` | `config.py` | Startup precedence; nonempty string | Env/config only | `FFprobeService.inspect` subprocess argument 0 and runtime diagnostics | Restart | RESTART REQUIRED |
+| `ffmpeg_binary` | `config.py` | Startup precedence; nonempty string | Env/config only | Startup `-encoders` capability check and real `FFmpegEncoder` subprocess | Restart | RESTART REQUIRED |
+| `workspace_root` | `config.py` | Startup precedence; absolute path | Env/config only | Runtime writable/overlap check and per-job output paths | Restart | RESTART REQUIRED |
 | `ffprobe_timeout` | `config.py` | Startup precedence; >0 and ≤600 seconds | Env/config only | `subprocess.run(timeout=...)` | Restart | RESTART REQUIRED |
 | `seed_media_path` | `config.py` | Startup precedence | Env/config only | `SeedMediaRepository` in seed mode | Restart for path; fixture content read on requests | RESTART REQUIRED |
 | `seed_presets_path` | `config.py` | Startup precedence; existing SQLite preset edits take precedence after catalogue migrations | Env/config only; resulting presets in SQLite | Seed loader and catalogue migration | Startup/initialization, not a live override | RESTART REQUIRED |
-| `start_workers` (factory argument, not UI/env) | `main.py` | Explicit argument > `True` | No | Lifespan starts fake tick task only in seed mode | App construction | WIRED |
+| `start_workers` (factory argument, not UI/env) | `main.py` | Explicit argument > `True` | No | Lifespan starts fake tick task in seed mode or real CPU thread in ready filesystem mode | App construction | WIRED |
 | Preset `name` | P / editor | Persisted edit > seed | Yes | Lists, modal, queued snapshot | Immediately; new jobs | WIRED |
 | Preset `scope` | P / editor | Persisted edit > seed | Yes | Scoped choices and Policy mismatch block | Immediately; new jobs | WIRED |
 | Preset `intent` | P / editor | Persisted edit > seed; changing UI intent fills defaults | Yes | UI defaults; model planning defaults when bounds omitted; snapshot | New preset/edit; does not overwrite supplied bounds | WIRED |
 | Preset `origin` | P; service-owned | Creation/duplicate forces custom; update retains existing origin | Yes | Delete restrictions, built-in HDR validation, catalogue migrations | Immediately | WIRED |
 | Preset `enabled` | P / editor/toggle | Persisted edit > seed | Yes | Preview/modal filtering, Policy, supported-codec validation | Immediately; existing job snapshot unchanged | WIRED |
 | Preset `backend` | P / editor | Persisted edit > seed | Yes | Lane selection, Quality CPU tag, CRF/ICQ validation, warnings | New jobs | WIRED |
-| Preset `destination_codec` | P / editor | Persisted edit > seed | Yes | Validation, eligibility response, snapshot; enabled AV1 rejected | New jobs; no encoding | PARTIALLY WIRED |
-| `rate_control` | P / editor | Persisted edit > seed | Yes | Validation, Policy floor/saving semantics, E estimate selection | Eligibility/new jobs | WIRED |
-| `target_video_bitrate` | P / editor | ABR requires positive value; quality modes require null | Yes | E output estimate, inherited bitrate floor | Eligibility/new jobs | WIRED |
-| `quality_value` | P / editor | Persisted edit; ICQ integer practical range 18–30 | Yes | Validation, display, snapshot; no encoder consumes it yet | New job plan | PARTIALLY WIRED |
-| `encoder_preset` | P / editor (CPU) | Persisted edit > seed | Yes | Validation, display, snapshot; no x265 invocation | New job plan | PARTIALLY WIRED |
-| `output_bit_depth` | P / editor | 8/10; HDR10 requires 10 | Yes | HDR validation, display, snapshot | New job plan | PARTIALLY WIRED |
+| Preset `destination_codec` | P / editor | Persisted edit > seed | Yes | Validation, eligibility, snapshot; real worker accepts HEVC and rejects AV1 | New jobs | PARTIALLY WIRED |
+| `rate_control` | P / editor | Persisted edit > seed | Yes | CPU CRF/ABR are consumed by x265; QSV ICQ remains planning-only | Eligibility/new jobs | PARTIALLY WIRED |
+| `target_video_bitrate` | P / editor | ABR requires positive value; quality modes require null | Yes | E estimate/floor; CPU ABR passes bitrate to x265 | Eligibility/new jobs | PARTIALLY WIRED |
+| `quality_value` | P / editor | Persisted edit; ICQ integer practical range 18–30 | Yes | CPU CRF value is passed to x265; QSV ICQ remains planning-only | New job plan | PARTIALLY WIRED |
+| `encoder_preset` | P / editor (CPU) | Persisted edit > seed | Yes | Validated preset (`fast`, `medium`, `slow`, `slower`) is passed to x265 | New job plan | WIRED for CPU |
+| `output_bit_depth` | P / editor | 8/10; HDR10 requires 10 | Yes | Selects x265 output pixel format; real worker does not yet assert output bit depth | New job plan | PARTIALLY WIRED |
 | `source_resolutions` | P / API, retained by UI edits | Explicit values > all supported defaults | Yes | Policy source applicability; enabled empty list rejected | Eligibility/new jobs | WIRED |
-| `target_resolution` (legacy `resolution_policy` accepted) | P / editor | Explicit target > migrated legacy value > keep | Yes | Inherited resolution-floor check, display, snapshot; no scaler or dimension-aware encoder | Eligibility/new job plan | PARTIALLY WIRED |
+| `target_resolution` (legacy `resolution_policy` accepted) | P / editor | Explicit target > migrated legacy value > keep | Yes | Inherited resolution-floor check; real worker accepts `keep` and refuses scaling | Eligibility/new job plan | PARTIALLY WIRED |
 | `planning_video_bitrate_low`, `planning_video_bitrate_high` | P / API; hidden editor state | Explicit bounds > scope/intent defaults | Yes | E quality-mode ranges and queue savings order | Eligibility/new jobs | WIRED |
 | `hdr_support` | P / editor | Persisted edit > seed | Yes | SDR-only input block, HDR10 validation/warnings | Eligibility/new jobs | WIRED |
 | `hdr_policy` | P / editor | Persisted edit > preserve source default | Yes | Policy blocks tone mapping; model cross-field checks | Eligibility/new job plan | PARTIALLY WIRED |
-| `preserve_hdr_metadata` | P / editor | Persisted edit > default true | Yes | HDR10 validation, snapshot; no output verification yet | New job plan | PARTIALLY WIRED |
+| `preserve_hdr_metadata` | P / editor | Persisted edit > default true | Yes | HDR policy/snapshot; current real worker refuses HDR inputs | New job plan | PARTIALLY WIRED |
 | `hdr_metadata.validate_signalling` | `HDRMetadataPolicy` / API, retained by editor | Persisted nested value > true | Yes | Model tone-map consistency, snapshot; future validator | New job plan | PARTIALLY WIRED |
 | `hdr_metadata.preserve_color_primaries` | Same | Same | Yes | Snapshot; future encoder/validator | New job plan | PARTIALLY WIRED |
 | `hdr_metadata.preserve_transfer_characteristics` | Same | Same | Yes | Snapshot; future encoder/validator | New job plan | PARTIALLY WIRED |
@@ -86,27 +87,31 @@ checks in `services/presets.py`. API-only nested controls are included.
 | `minimum_source_bitrate` | P / editor | Persisted edit > default 0 | Yes | Policy source floor | Eligibility/new jobs | WIRED |
 | `minimum_expected_saving_percent` | P / editor | Persisted edit > default 20 | Yes | ABR eligibility block, quality-mode planning warning; actual output threshold not implemented | Eligibility/new job plan | PARTIALLY WIRED |
 | `allow_hevc_reencode` | P / editor | Persisted edit > false | Yes | Policy HEVC recompression block | Eligibility/new jobs | WIRED |
-| Job `preserve_audio` | `models/queue.py`, compression modal | Explicit checkbox or null preset default; policy/tag overrides | Job snapshot | Policy, E, fake queue | New job | WIRED |
-| Job `preserve_subtitles` (chapters/attachments/metadata) | Same | Explicit bool > true | Job snapshot | Eligibility response and job plan; no muxer | New job plan | PARTIALLY WIRED |
-| Job `replace_source` / keep output | Same | Explicit bool > false (keep output) | Job snapshot | Fake worker/output plan wording; no replacement or output produced | New job plan | PARTIALLY WIRED |
-| Queue priority / Move next | Queue models and UI | Explicit priority/order > normal, then estimated/planning bytes saved | Yes | Queue ordering and independent fake lanes | Immediately for queued jobs | WIRED |
-| Remove queued / Stop & Skip | Queue UI/API | Explicit action; active deletion prohibited | Yes | Fake queue lifecycle/history | Immediately | WIRED |
+| Job `preserve_audio` | `models/queue.py`, compression modal | Explicit checkbox or null preset default; policy/tag overrides | Job snapshot | Policy/E; real worker accepts copy-only plans | New job | WIRED for supported copy plans |
+| Job `preserve_subtitles` (chapters/attachments/metadata) | Same | Explicit bool > true | Job snapshot | Real explicit stream/metadata/chapter mapping and validation counts | New job | WIRED for supported Matroska streams |
+| Job `replace_source` / keep output | Same | Explicit bool > false (keep output) | Job snapshot | Real worker refuses replacement; validated keep-output written under workspace | New job | WIRED for keep-output only |
+| Queue priority / Move next | Queue models and UI | Explicit priority/order > normal, then estimated/planning bytes saved | Yes | Queue ordering and independent seed fake lanes / filesystem CPU lane | Immediately for queued jobs | WIRED |
+| Remove queued / Stop & Skip | Queue UI/API | Explicit action; active deletion prohibited | Yes | Seed fake lifecycle or owned ffmpeg process lifecycle | Immediately | WIRED |
 | Tags Preserve A/V, Preserve Video, Preserve Audio, Quality CPU | `models/tags.py`, tag dialog | Explicit assignment > seed direct tags; inherited union remains | Yes, semantic identity | TagService, Policy, queued-job revalidation | Immediately | WIRED |
 | Quality Floor minimum bitrate / minimum height | `models/tags.py`, tag dialog | Maximum inherited/direct floor; values required with tag | Yes | Policy output height and ABR bitrate checks; CRF/ICQ blocked under bitrate floor | Immediately | WIRED |
 | Tag bulk add/remove/replace | `TagUpdate` / API and dialog | Explicit operation; bulk replacement prohibited | Resulting assignments | Atomic TagService update | Immediately | WIRED |
 
-`WIRED` for planning fields means the planning/policy consumer runs today, not
-that an encoder exists. All filesystem queue submissions remain rejected.
+`WIRED` for planning fields means the planning/policy consumer runs. Real
+filesystem jobs are accepted only when startup diagnostics show all encoder
+prerequisites and per-item execution guards pass. The real encoder consumes CRF or
+ABR video rate control, x265 preset, output bit depth, stream preservation and
+keep-resolution semantics; other combinations are excluded with a reason.
 
 ## Absent settings and fixed behavior
 
 No editable workspace path, CPU/QSV worker counts, CPU budget, global minimum
 saving, scan interval, automatic scan, configurable extension list or
-reconciliation tuning exists. Nothing corresponding to these is silently saved.
-The fake scheduler has one CPU and one QSV lane; its one-second tick and simulated
-stage durations are constants, not ignored settings. Scans are explicit; no
-watcher/startup scan. Extension support and 48-packet ffprobe inspection are
-adapter constants. Polling is 1.5 seconds (5 seconds in a hidden browser tab).
+reconciliation tuning exists. Workspace and binary paths come from environment
+settings and require restart. Seed mode has one CPU and one QSV fake lane; its
+one-second tick and simulated stage durations are constants. Filesystem mode has
+one real CPU lane and no QSV worker. Scans are explicit; no watcher/startup scan.
+Extension support and 48-packet ffprobe inspection are adapter constants. Polling
+is 1.5 seconds (5 seconds in a hidden browser tab).
 
 Hardlink, DV, unsupported/uncertain HDR, interlaced and UHD Movie REMUX protections
 are mandatory Policy/SourceGuard behavior. There are no safety toggles. The

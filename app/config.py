@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import Literal
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from pydantic_settings import (
     BaseSettings,
@@ -32,6 +32,17 @@ class Settings(BaseSettings):
     shows_root: Path | None = None
     ffprobe_binary: str = Field(default="ffprobe", min_length=1)
     ffprobe_timeout: float = Field(default=30, gt=0, le=600)
+    ffmpeg_binary: str = Field(default="ffmpeg", min_length=1)
+    workspace_root: Path = Path("/mnt/kompressor")
+
+
+    @field_validator("workspace_root")
+    @classmethod
+    def absolute_workspace(cls, value: Path) -> Path:
+        if not value.is_absolute():
+            raise ValueError("Workspace root must be an absolute path.")
+        return value
+
 
     database_path: Path = PROJECT_ROOT / "data" / "kompressor.sqlite3"
 

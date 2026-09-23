@@ -1,10 +1,10 @@
 {% extends 'base.html' %}
 {% block content %}
-<p class="notice">Saved simulation results. Sizes and savings are estimates; the source library stays unchanged.</p>
+<p class="notice">Real jobs show validated output paths and measured savings. Seed-mode jobs remain simulations with estimated savings. Original library files are kept.</p>
 <div class="stats" id="history-stats"></div>
 <div class="table-wrap"><table data-sortable>
-  <caption class="sr-only">Simulated job history</caption>
-  <thead><tr><th scope="col"><button class="sort-button" data-sort-key="name">Media</button></th><th scope="col"><button class="sort-button" data-sort-key="status">State</button></th><th scope="col"><button class="sort-button" data-sort-key="preset">Preset / backend</button></th><th scope="col"><button class="sort-button" data-sort-key="source" data-sort-type="number">Source</button></th><th scope="col"><button class="sort-button" data-sort-key="output" data-sort-type="number">Estimated output</button></th><th scope="col"><button class="sort-button" data-sort-key="saving" data-sort-type="number">Estimated saving</button></th><th scope="col"><button class="sort-button" data-sort-key="video">Video</button></th><th scope="col"><button class="sort-button" data-sort-key="elapsed" data-sort-type="number">Elapsed</button></th><th scope="col"><button class="sort-button" data-sort-key="finished" data-sort-type="number">Finished</button></th></tr></thead>
+  <caption class="sr-only">Encode and simulated job history</caption>
+  <thead><tr><th scope="col"><button class="sort-button" data-sort-key="name">Media</button></th><th scope="col"><button class="sort-button" data-sort-key="status">State</button></th><th scope="col"><button class="sort-button" data-sort-key="preset">Preset / backend</button></th><th scope="col"><button class="sort-button" data-sort-key="source" data-sort-type="number">Source</button></th><th scope="col"><button class="sort-button" data-sort-key="output" data-sort-type="number">Output size</button></th><th scope="col"><button class="sort-button" data-sort-key="saving" data-sort-type="number">Space saved</button></th><th scope="col"><button class="sort-button" data-sort-key="video">Video</button></th><th scope="col"><button class="sort-button" data-sort-key="elapsed" data-sort-type="number">Elapsed</button></th><th scope="col"><button class="sort-button" data-sort-key="finished" data-sort-type="number">Finished</button></th></tr></thead>
   <tbody id="history-rows"><tr><td colspan="9" class="empty">Loading history…</td></tr></tbody>
 </table></div>
 {% endblock %}

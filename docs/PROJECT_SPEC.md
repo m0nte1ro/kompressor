@@ -59,10 +59,12 @@ The optional `filesystem` backend now discovers video files recursively and uses
 scan → probe → reconciliation to LibraryDiscoveryService; the existing library
 views read a projection of that reconciled inventory. Seed mode remains the
 default. Roots have no production defaults and can be configured through settings.
-Scans are explicit and read-only; filesystem mode cannot enqueue encoding jobs.
-No encoding, replacement, hashing or reconciliation redesign is included.
-See [READ_ONLY_DISCOVERY.md](READ_ONLY_DISCOVERY.md) for configuration, endpoints,
-probe limitations, naming assumptions and verification details.
+Scans are explicit and read-only. The separate [first real CPU encoding milestone](REAL_ENCODING.md)
+can enqueue only when ffmpeg, ffprobe, libx265 and the dedicated workspace are
+available; it leaves source media untouched and writes validated outputs elsewhere.
+No source replacement, hashing or reconciliation redesign is included. See
+[READ_ONLY_DISCOVERY.md](READ_ONLY_DISCOVERY.md) for scan configuration, probe
+limitations, naming assumptions and verification details.
 
 ## Fixture reconciliation milestone
 
@@ -72,10 +74,9 @@ identities. It consumes fixture snapshots through MediaProcessor, with tiered
 fingerprint evidence, conservative rename matching and root-scoped absence rules.
 Raw probe/HDR facts are separate from semantic media identity and derived HDR
 classification. Source revision and hardlinks must be freshly revalidated both
-before processing and immediately before any future replacement. The existing
-seed catalogue/queue remains unchanged; real scanning, probing and replacement
-are not implemented. See [RECONCILIATION.md](RECONCILIATION.md) for contracts,
-safety boundaries and remaining production work.
+before processing and immediately before any future replacement. The existing seed catalogue/queue remains unchanged. Real scanning and probing
+are documented separately, and source replacement remains unimplemented. See
+[RECONCILIATION.md](RECONCILIATION.md) for identity contracts and safety boundaries.
 
 ## Application boundary and composition
 
@@ -97,23 +98,21 @@ per FastAPI application lifespan. The instance lives in
 overrides available for tests. Run one application process for the existing
 single scheduler; multiple processes sharing the queue are not supported.
 
-Today the composition uses seed media, SQLite presets/tags/jobs, FakeMediaScanner,
-FakeProbeService and FakeEncoder behind the elapsed-time FakeEncoderWorker.
-Discovery/probing return domain models and never inspect actual media paths.
-There is no public scan endpoint yet. The encoder contract is
-`encode(job, progress_callback) -> EncodeResult` plus `stop(job_id)`.
-Fake encoding is instantaneous; the fake worker provides pacing and simulated
-validation. Submitting a job only evaluates policy and enqueues a preset snapshot.
-CPU/QSV scheduling remains in QueueService, outside HTTP encode execution.
+Seed mode composes seed media, SQLite presets/tags/jobs, fake scanner/probe
+adapters and `FakeEncoderWorker`; it remains deterministic and never touches media
+files. Filesystem mode composes `FilesystemMediaRepository`, `FilesystemScanner`,
+`FFprobeService` and, when startup prerequisites pass, one background CPU
+`RealEncoderWorker`. `LibraryDiscoveryService` owns scan/probe/reconciliation
+flow, and filesystem scans publish batches while they run.
 
-Later, the composition root will select FilesystemMediaRepository,
-FilesystemMediaScanner, FFprobeService and FFmpegEncoder. FFprobeService owns
-probing and domain-model translation. One FFmpegEncoder adapter owns all ffmpeg
-arguments, stream mapping, CPU/QSV configuration, HDR/audio/container handling,
-progress and process termination. Real workers must execute long-running encodes
-outside HTTP requests **and outside scheduler/database locks**, then validate and
-record completion. The existing fake tick loop is not a production executor.
-No real adapter, file replacement or deinterlacing is implemented here.
+`FFprobeService` owns probing and domain-model translation. `FFmpegEncoder` owns
+all ffmpeg arguments, stream mapping, progress, subprocess lifecycle and output
+paths. Real work runs outside HTTP requests and queue/database transactions. The
+current worker accepts only CPU/libx265, confirmed SDR progressive sources, copied
+audio, unchanged resolution and keep-output MKV. It validates with ffprobe before
+publishing the result. QSV, HDR, audio conversion, deinterlacing and source
+replacement remain unsupported. See [REAL_ENCODING.md](REAL_ENCODING.md) for the
+current boundaries; the fake tick loop remains only for seed mode.
 
 For compatibility, job-level `keep_output` remains represented by
 `replace_source: false` in the API and persistence; `true` records replacement
@@ -1082,10 +1081,10 @@ ENCODING
 
 The original file must remain untouched until the new output has passed validation.
 
-Output handling is a job option, not a quality preset. The development default is
-keep_output: leave the source untouched and retain the encoded result in the
-Kompressor workspace for inspection. replace_source records a future replacement
-request but does not implement filesystem replacement in the fake workflow.
+Output handling is a job option, not a quality preset. `replace_source: false`
+keeps the original and stores a validated real output in the Kompressor workspace;
+seed mode simulates that choice. `replace_source: true` records intent for review
+but is refused by the real worker. No replacement workflow is implemented.
 Future options such as sample_only must not require redesigning the preset model.
 
 38. Safe Replacement
@@ -1781,11 +1780,9 @@ Jobs are assigned according to the selected preset backend.
 
 CPU and QSV lanes represent independent workers that may run concurrently.
 
-No subprocesses.
-
-No ffmpeg.
-
-No real encoding.
+This original UI scope describes seed mode only: it uses no subprocesses, ffmpeg
+or real encoding. Seed mode still uses the fake infrastructure below. The current
+filesystem real-encode slice is documented in [REAL_ENCODING.md](REAL_ENCODING.md).
 
 Use clean fake infrastructure, preferably a fake queue repository/service and fixture data if necessary.
 

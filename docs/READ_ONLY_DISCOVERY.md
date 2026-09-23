@@ -1,8 +1,10 @@
 # Read-only filesystem discovery and probing
 
 The reconciliation milestone was closed in `f580cf4`. This milestone keeps that
-identity/revision model and adds real read-only adapters around it. It implements
-no encoder, file replacement, hashing, media-server integration or metadata API.
+identity/revision model and adds read-only discovery/probe adapters. The separate
+[first CPU encoding slice](REAL_ENCODING.md) writes only to the dedicated workspace;
+media roots remain read-only. This document's discovery flow does not encode,
+replace sources, hash media, use media servers or external metadata APIs.
 
 ## Enable and use
 
@@ -57,9 +59,11 @@ It includes present records from the currently configured roots. It exposes
 seed tag keys remain unchanged. Missing records/revisions stay in the reconciled
 inventory even when hidden from the active library views.
 
-The filesystem backend is read-only: eligibility explains that encoding is not
-enabled, queue submissions are rejected, and simulated worker ticks are disabled.
-The original seed workflow, including its fake workers, still works.
+Filesystem source mounts remain read-only. When ffmpeg, ffprobe, libx265 and the
+workspace are ready, the filesystem backend can enqueue the separate CPU-only
+real encode slice; otherwise queue submission returns a clear runtime error. It
+never uses the seed fake worker. The original seed workflow, including its fake
+workers, still works.
 
 ## Scanner behaviour
 

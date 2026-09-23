@@ -1,4 +1,6 @@
 """Application facade. Transport, persistence and encoder details stay outside."""
+from pathlib import Path
+
 from app.models.media import MediaScope
 from app.models.inventory import ReconciliationResult, ScanSnapshot
 from app.services.reconciliation import ReconciliationService
@@ -14,6 +16,7 @@ from app.services.queue import QueueService
 from app.services.library_discovery import LibraryDiscoveryService, configured_roots
 from app.services.discovery import MediaScanner, ProbeService
 from app.services.tags import TagService
+from app.services.encoding_runtime import roots_overlap_workspace
 
 
 class MediaProcessor:
@@ -56,16 +59,20 @@ class MediaProcessor:
     def update_library_paths(self, paths: LibraryPaths) -> LibraryPaths:
         if self.preferences is None:
             raise InvalidOperation("Preferences storage is unavailable.")
-        configured_roots(paths, self.preferences.database.path)
+        roots = configured_roots(paths, self.preferences.database.path)
+        workspace = self.runtime_settings.get("workspace_root")
+        if workspace and roots_overlap_workspace(Path(workspace), roots):
+            raise InvalidOperation("Library roots must not overlap the Kompressor output workspace.")
         return self.preferences.save_library_paths(paths)
 
     def get_runtime_settings(self) -> dict:
-        return {"startup": dict(self.runtime_settings), "startup_apply_timing": "restart_required",
+        return {**dict(self.runtime_settings), "startup": dict(self.runtime_settings), "startup_apply_timing": "restart_required",
                 "library_paths": self.get_library_paths().model_dump(),
                 "paths_apply_timing": "next_scan; active scan keeps captured roots",
                 "paths_precedence": "persisted settings (including empty) > environment/.env > empty defaults",
                 "presets_apply_timing": "immediate eligibility; new jobs only; queued snapshots unchanged",
-                "encoding_enabled": False, "development_mode": "unused compatibility flag"}
+                "encoding_enabled": self.runtime_settings.get("encoding_enabled", False),
+                "development_mode": "unused compatibility flag"}
 
     def create_preset(self, payload: PresetSettings):
         return self.presets.create(payload)
@@ -86,10 +93,7 @@ class MediaProcessor:
         return self.catalog.evaluate(entry, preset, preserve_audio, preserve_subtitles)
 
     def queue_encode(self, request: EnqueueRequest):
-        if self.discovery is not None:
-            raise InvalidOperation("Filesystem inventory is read-only; encoding is not enabled.")
-        # QueueService already evaluates through CatalogService/PolicyEngine,
-        # snapshots presets and excludes blocked items atomically. Do not repeat it.
+        # QueueService and the configured worker enforce policy and runtime capability.
         return self.queue.enqueue(request)
 
     def get_queue(self):
@@ -116,10 +120,13 @@ class MediaProcessor:
         return {"available": TAG_NAMES, **self._tagger().describe(target)}
 
     def update_tags(self, payload: TagUpdate):
-        # Preserve atomic tag edits + revalidation, with the scheduler excluded.
+        # Tag changes and queue revalidation commit atomically. Any real process
+        # cancellation waits until both the queue lock and DB transaction release.
         with self.queue.lock, self.queue.repository.transaction():
             updated = self._tagger().update(payload)
-            self.queue.revalidate()
+            stop_after_commit = self.queue.revalidate(defer_external_stops=True)
+        for job_id in stop_after_commit:
+            self.queue.worker.stop(job_id)
         return {"updated": updated}
 
     def scan_library(self):

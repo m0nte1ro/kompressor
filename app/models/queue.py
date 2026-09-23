@@ -4,9 +4,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.media import MediaScope
 from app.models.preset import CompressionPreset, EncoderBackend
+from app.models.inventory import SourceReference
 
 
-JobStatus = Literal["queued", "encoding", "validating", "completed", "skipped", "blocked"]
+JobStatus = Literal["queued", "encoding", "validating", "completed", "skipped", "blocked", "failed"]
 Priority = Literal["low", "normal", "high", "urgent"]
 
 
@@ -43,6 +44,10 @@ class QueueJob(BaseModel):
     planning_saving: int | None = None
     planning_saving_percent: float | None = None
     source_codec: str
+    execution_mode: Literal["fake", "real"] = "fake"
+    source_file_id: str | None = None
+    source_revision_id: str | None = None
+    source_reference: SourceReference | None = None
     replace_source: bool = False
     estimate_basis: str = "bitrate"
     estimated_saving_low: int | None = None
@@ -56,3 +61,9 @@ class QueueJob(BaseModel):
     finished_at: str | None = None
     elapsed_seconds: float = 0
     reasons: list[str] = Field(default_factory=list)
+    output_path: str | None = None
+    output_size: int | None = None
+    measured_saving: int | None = None
+    error_message: str | None = None
+    ffmpeg_exit_code: int | None = None
+    validation_errors: list[str] = Field(default_factory=list)

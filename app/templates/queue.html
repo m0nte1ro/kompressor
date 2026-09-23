@@ -1,10 +1,17 @@
 {% extends 'base.html' %}
 {% block content %}
+{% if scan_status.backend == 'filesystem' and runtime_settings.encoding_enabled %}
+<p class="notice">CPU jobs run through FFmpeg/libx265 for confirmed SDR progressive sources. Audio is copied, output stays in the Kompressor workspace, and source files are never replaced. QSV is unavailable. Progress and measured savings come from the real encode.</p>
+{% elif scan_status.backend == 'filesystem' %}
+<p class="notice">Filesystem queue is read-only until runtime prerequisites are available. {{ runtime_settings.unavailable_reason or 'Encoding is disabled.' }}</p>
+{% else %}
 <p class="notice">One CPU worker + one QSV worker. Progress is simulated; queue and history are saved locally. Interrupted simulations restart after revalidation.</p>
+{% endif %}
 <div class="queue-grid" id="queue-lanes">
   {% for backend, label in [('cpu', 'CPU Queue'), ('qsv', 'Intel QSV Queue')] %}
-  <section class="card lane" data-backend="{{ backend }}" aria-label="{{ label }}">
-    <header class="lane-head"><h2>{{ label }}</h2><span class="badge">1 worker</span></header>
+  {% set backend_enabled = backend in runtime_settings.supported_backends %}
+  <section class="card lane {{ 'lane-disabled' if not backend_enabled }}" data-backend="{{ backend }}" aria-label="{{ label }}">
+    <header class="lane-head"><h2>{{ label }}</h2><span class="badge">{{ '1 worker' if backend_enabled else 'unavailable' }}</span></header>
     <div class="active-slot"><p class="empty">Loading worker…</p></div>
     <h3 class="section-label">Up next <span class="queued-count">0</span></h3>
     <p class="muted">Move next → priority → estimated saving</p>

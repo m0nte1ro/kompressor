@@ -135,3 +135,16 @@ def test_unavailable_presets_cannot_enqueue(queue, catalog, movie_payload, monke
     result = queue.enqueue(EnqueueRequest.model_validate(movie_payload))
     assert not result["added"]
     assert any(reason in r for r in result["excluded"][0]["reasons"])
+
+
+def test_seed_worker_blocks_persisted_real_jobs_instead_of_simulating(queue, movie_payload):
+    job = queue.enqueue(EnqueueRequest.model_validate(movie_payload))["added"][0]
+    saved = next(item for item in queue.repository.get_all() if item.id == job["id"])
+    saved.execution_mode = "real"
+    queue.repository.save(saved)
+    queue.recover()
+    blocked = queue._find(saved.id)
+    assert blocked.status == "blocked"
+    assert "cannot run in fake mode" in blocked.reasons[0]
+    queue.tick(10_000)
+    assert queue._find(saved.id).status == "blocked"

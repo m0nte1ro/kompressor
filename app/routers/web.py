@@ -69,19 +69,38 @@ def episodes(request: Request, show_id: str, processor: Processor):
 
 
 @router.get("/queue", response_class=HTMLResponse)
-def queue(request: Request):
+def queue(request: Request, processor: Processor):
     return render(request, "queue.html", "queue", "Queue",
-                  subtitle="Independent CPU and Intel QSV workers · estimated saving first")
+                  subtitle="Independent CPU and Intel QSV workers · estimated saving first",
+                  scan_status=processor.get_scan_status(), runtime_settings=processor.get_runtime_settings())
 
 
 @router.get("/history", response_class=HTMLResponse)
-def history(request: Request):
+def history(request: Request, processor: Processor):
     return render(request, "history.html", "history", "History",
-                  subtitle="Completed and skipped simulations · no actual storage savings")
+                  subtitle="Encode results and queue history · estimated and measured savings",
+                  runtime_settings=processor.get_runtime_settings())
 
 
 @router.get("/settings", response_class=HTMLResponse)
 def settings(request: Request, processor: Processor):
+    scan_status = processor.get_scan_status()
+    if not isinstance(scan_status, dict):
+        scan_status = {"backend": "seed", "state": "disabled", "roots": []}
+    runtime_settings = processor.get_runtime_settings()
+    if not isinstance(runtime_settings, dict):
+        runtime_settings = {}
+    runtime_settings = {
+        "media_backend": scan_status.get("backend", "seed"),
+        "ffmpeg_binary": "ffmpeg", "ffprobe_binary": "ffprobe",
+        "ffmpeg_available": None, "ffprobe_available": None, "libx265_available": None,
+        "workspace_root": "not configured", "workspace_writable": None,
+        "encoding_enabled": False, "encoder_mode": "seed fake simulation",
+        "supported_backends": ["cpu", "qsv"] if scan_status.get("backend") == "seed" else [],
+        "unavailable_reason": None, **runtime_settings,
+    }
+    runtime_settings.setdefault("startup", dict(runtime_settings))
     return render(request, "settings.html", "settings", "Settings",
                   subtitle="Presets and persistent library preferences",
-                  presets=processor.get_presets(), library_paths=processor.get_library_paths(), scan_status=processor.get_scan_status(), runtime_settings=processor.get_runtime_settings())
+                  presets=processor.get_presets(), library_paths=processor.get_library_paths(),
+                  scan_status=scan_status, runtime_settings=runtime_settings)

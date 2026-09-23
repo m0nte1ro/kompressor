@@ -26,31 +26,40 @@ writable location. The database is created on first startup, not on import.
 Stop the application before copying the database for a backup. Local databases
 are excluded from Git. Tests use isolated databases in temporary directories.
 
-## Read-only real library
+## Real library and CPU encoding
 
 Set `KOMPRESSOR_MEDIA_BACKEND=filesystem` and configure movie/show roots in Settings
 (or `KOMPRESSOR_MOVIES_ROOT` / `KOMPRESSOR_SHOWS_ROOT` as defaults). Roots default to
 unconfigured. Use **Settings → Scan library** to discover and probe actual files;
-Scans run in the background and results update automatically without reloading
-the page. ffprobe must be installed for technical metadata. No media file is modified and
-encoding is disabled in this mode. Seed mode still needs no media tools.
+scans run in the background and results update automatically without reloading the
+page. Seed mode still needs no media tools and keeps its deterministic fake queue.
 
-See [read-only discovery](docs/READ_ONLY_DISCOVERY.md) for configuration, API
-endpoints, conservative HDR handling and metadata limitations.
+Filesystem mode can also run one real CPU/libx265 encode at a time when ffmpeg,
+ffprobe, libx265 and the dedicated writable workspace are available. It only accepts
+confirmed SDR progressive sources, copies audio, keeps resolution, and writes a
+separate MKV output under the workspace. Source files remain untouched. QSV, HDR,
+source replacement and audio conversion are not enabled.
+
+See [read-only discovery](docs/READ_ONLY_DISCOVERY.md) for scan behaviour and
+[real CPU encoding](docs/REAL_ENCODING.md) for the supported encode slice, setup,
+validation and recovery details.
 
 ## Deploy discovery in an LXC
 
-Use Python 3.12+ and the installation steps above. Install your distribution's
-`ffprobe` package/tool (Debian/Ubuntu normally provides it in the `ffmpeg` package).
-Check `ffprobe -version`; this app invokes ffprobe only, never ffmpeg encoding.
-Give the application user read/traverse access to mounted media and a writable
-application data directory outside the media roots.
+Use Python 3.12+ and the installation steps above. Install ffmpeg with libx265 and
+ffprobe (Debian/Ubuntu normally provides both in the `ffmpeg` package). Give the
+application user read/traverse access to media roots, a writable application data
+directory outside those roots, and a separate writable workspace with a `jobs/`
+subdirectory. Settings reports whether the binaries, libx265 and workspace are
+usable at startup.
 
 ```sh
 KOMPRESSOR_MEDIA_BACKEND=filesystem \
 KOMPRESSOR_MOVIES_ROOT=/your/movies \
 KOMPRESSOR_SHOWS_ROOT=/your/shows \
 KOMPRESSOR_FFPROBE_BINARY=/usr/bin/ffprobe \
+KOMPRESSOR_FFMPEG_BINARY=/usr/bin/ffmpeg \
+KOMPRESSOR_WORKSPACE_ROOT=/mnt/kompressor \
 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 ```
 
@@ -60,9 +69,9 @@ paths override environment defaults, including saved empty paths. Missing
 ffprobe leaves files listed with unknown metadata and reported errors.
 
 Series naming currently requires a series directory and `SxxExx` episode names;
-unsupported names are reported, not resolved through external metadata. This is
-real read-only inventory, not yet real compression. There is no authentication;
-use the intended private homelab network.
+unsupported names are reported, not resolved through external metadata. The scanner never writes to the media roots; validated outputs go only to the
+separate workspace. There is no authentication; use the intended private homelab
+network.
 
 See the [full Settings audit](docs/SETTINGS_AUDIT.md) and
 [schema, migration and scale report](docs/INVENTORY_STORAGE.md).
@@ -77,16 +86,18 @@ See the [full Settings audit](docs/SETTINGS_AUDIT.md) and
 - Queue submissions re-evaluate every item. Blocked, missing or already pending
   items are excluded individually. Encoder settings are copied from the preset,
   never accepted as client overrides.
-- CPU and QSV are independent fake lanes. Each starts its next job on the next
-  one-second scheduler tick. Encoding takes 180 simulated seconds, followed by
-  five seconds of validation. Completed/skipped/blocked jobs appear in History.
+- In seed mode, CPU and QSV are independent fake lanes. Each starts its next job
+  on the next one-second scheduler tick. Encoding takes 180 simulated seconds,
+  followed by five seconds of validation. Filesystem mode uses one real CPU lane;
+  QSV remains unavailable there. Completed/failed/skipped/blocked jobs appear in
+  History.
 - Default order is estimated bytes saved, descending. Manual priority overrides
   this order; Move next overrides priority within the same lane. Changing a job’s
   priority clears its Move next override. Active jobs require Stop & Skip.
-- Queue/history survive restarts. Interrupted encoding/validation simulations are
-  reset to zero, revalidated and queued again; downtime does not count as progress.
-  No fixture or media file is written. Savings remain estimates; completing a fake
-  job does not change the inventory.
+- Queue/history survive restarts. Interrupted seed simulations reset to zero and
+  revalidate. Interrupted real jobs are requeued from zero after stale workspace
+  output is removed. Real measured savings are separate from estimates; seed
+  simulations never change media or inventory.
 - Settings separates movie/show presets and supports creating, editing,
   duplicating and enabling/disabling every preset. The initial presets are copied
   from the seed JSON once. Subsequent startups do not overwrite user edits.
@@ -125,9 +136,10 @@ or hardlink protections.
 ## Quality modes and test output
 
 Presets support CPU CRF, QSV ICQ and explicit ABR, along with encoder effort,
-output bit depth, source applicability and SDR/HDR10 input support. HDR defaults
-to preserving the source mode; tone mapping is never implicit and is blocked
-until a future real encoder path exists.
+output bit depth, source applicability and SDR/HDR10 input support. The current
+real worker consumes CPU CRF/ABR, x265 preset and output bit depth; QSV ICQ and
+HDR preset behavior remain planning-only. Filesystem encoding accepts confirmed
+SDR only, and tone mapping is unavailable.
 Quality modes carry planning bitrate ranges separately from encoder settings.
 They do not return fake exact output sizes or savings; ranges are labeled as
 planning estimates and may fall outside their bounds. Actual quality-mode savings
@@ -135,11 +147,12 @@ must be checked after encoding; pre-encode minimum-saving shortfalls produce a
 warning. The editor fills these ranges from the selected intent; they are optional
 advanced planning metadata, not values that control CRF, ICQ or x265.
 
-Jobs default to `replace_source: false` (keep the original and plan a separate
-test output). `true` records replacement-after-validation intent. Both remain
-simulated; no source or output file is touched. Keeping originals reclaims zero
-storage, and real test outputs will need additional free space. The future real
-worker must validate streams/metadata and actual savings before replacing sources.
+Jobs default to `replace_source: false` (keep the original and write a separate
+test output). `true` records replacement intent, but the real worker refuses it.
+Seed mode simulates jobs without touching files. Filesystem mode writes a validated
+keep-output artifact under the workspace and never changes the source. Keeping the
+original reclaims no storage and requires free workspace space; actual output size
+and saving are recorded only after validation.
 
 Tag writes and pending-job revalidation share a transaction. Queued jobs get
 updated effective audio policy and savings. Jobs that become ineligible move to
@@ -170,8 +183,9 @@ under a lock. SQLite repositories own persisted state; `FakeEncoderWorker` advan
 progress independently of browser polling through the application lifespan.
 Repository, scanner, probe and encoder protocols provide the adapter boundaries.
 `FakeEncoder` implements encode/progress/stop without touching files; the fake
-worker supplies the existing clock and validation simulation. A future
-`FFmpegEncoder` owns encoder/process details, while `FFprobeService` owns probing.
+worker supplies the existing clock and validation simulation in seed mode. The
+filesystem worker uses a separate `FFmpegEncoder` for process details, while
+`FFprobeService` owns probing.
 Real execution must run outside HTTP requests and scheduler transactions. There are no scattered development-mode branches, authentication, hardware checks
 or ffmpeg dependencies. Only the optional filesystem backend invokes ffprobe.
 

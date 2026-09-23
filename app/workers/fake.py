@@ -4,6 +4,7 @@ from app.workers.encoder import Encoder
 
 
 class FakeEncoderWorker:
+    execution_mode = "fake"
     encode_seconds = 180
     validation_seconds = 5
 
