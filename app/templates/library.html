@@ -2,7 +2,7 @@
 {% block content %}
 {% set eligible = rows | selectattr('eligibility.eligible') | list %}
 {% set planned = namespace(value=0) %}
-{% for row in eligible %}{% set planned.value = planned.value + (row.eligibility.planning_saving or row.eligibility.estimated_saving or 0) %}{% endfor %}
+{% for row in rows %}{% set planned.value = planned.value + (row.eligibility.planning_saving or row.eligibility.estimated_saving or 0) %}{% endfor %}
 <section class="stats" aria-label="Library summary">
   <div class="card stat"><span>Library size</span><strong>{{ rows | sum(attribute='item.size') | size }}</strong><small>{{ rows | length }} {{ 'movies' if scope == 'movie' else 'episodes' }}</small></div>
   <div class="card stat"><span>Estimated saving</span><strong class="saving">~{{ planned.value | size }}</strong><small>Planning midpoint · not measured</small></div>
