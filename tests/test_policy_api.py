@@ -36,6 +36,28 @@ def test_dune_keeps_all_core_protections(client):
     assert any("Preserve A/V" in reason for reason in result["reasons"])
     assert any("2160p REMUX" in reason for reason in result["reasons"])
     assert any("Dolby Vision" in reason for reason in result["reasons"])
+    assert result["estimate_basis"] == "unknown"
+    assert result["estimated_saving"] is None
+    assert result["estimated_saving_low"] is None
+    assert result["estimated_saving_high"] is None
+    assert result["planning_saving"] is None
+
+
+def test_inherited_preserve_av_suppresses_show_estimates(client, catalog):
+    show = catalog.media.library.shows[0]
+    show.tags.append("Preserve A/V")
+    result = client.post("/api/eligibility", json={
+        "scope": "show",
+        "media_id": "modern-family-s03e04",
+        "preset_id": "show-streaming-quality",
+    }).json()
+    assert not result["eligible"]
+    assert any("Preserve A/V" in reason for reason in result["reasons"])
+    assert result["estimate_basis"] == "unknown"
+    assert result["estimated_saving"] is None
+    assert result["estimated_saving_low"] is None
+    assert result["estimated_saving_high"] is None
+    assert result["planning_saving"] is None
 
 
 def test_audio_inheritance_and_override(client, catalog):
