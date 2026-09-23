@@ -71,8 +71,7 @@ if its file/revision/stat evidence still matches the current observation.
 ## Progressive scans
 
 `POST /api/library/scan` validates/captures roots and returns **202** immediately.
-A single managed background thread performs discovery. Concurrent requests get
-409. `GET /api/library/scan` reports scan ID, generation, phase, counts, errors and
+A single managed background thread performs discovery. Concurrent requests get 409. `GET /api/library/scan` reports scan ID, generation, phase, counts, errors and
 root reconciliation results; errors remain visible if the job fails.
 
 On an initially empty root, discovery publishes bounded partial batches (100
