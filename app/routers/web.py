@@ -19,7 +19,7 @@ def size(value: int | None) -> str:
 def bitrate(value: int | None) -> str:
     if value is None:
         return "—"
-    return f"{value / 1_000_000:g} Mbps"
+    return f"{value / 1_000_000:.1f} Mbps"
 
 
 def label(value: str | None) -> str:
