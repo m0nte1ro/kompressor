@@ -1,4 +1,6 @@
 """Aggregate library views: no episode probes are loaded to count shows or bytes."""
+from collections.abc import Generator
+
 from app.repositories.database import Database
 
 
@@ -31,3 +33,14 @@ class InventoryViews:
                 JOIN observations o USING(observation_id) WHERE f.presence='present'
                 AND f.show_id IS NOT NULL AND f.root_id IN (''' + ','.join('?' for _ in roots)
                 + ') GROUP BY f.show_id', roots)]
+
+    def show_paths(self, roots: list[str], show_id: str, *, first_only: bool = False) -> Generator[str, None, None]:
+        if not roots:
+            return
+        query = ("SELECT relative_path FROM library_files WHERE presence='present' AND show_id=? "
+                 "AND root_id IN (" + ','.join('?' for _ in roots) + ')')
+        if first_only:
+            query += ' ORDER BY relative_path LIMIT 1'
+        with self.database.read() as connection:
+            for row in connection.execute(query, [show_id, *roots]):
+                yield row['relative_path']

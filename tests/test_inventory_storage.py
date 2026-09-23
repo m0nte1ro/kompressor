@@ -4,10 +4,14 @@ import sqlite3
 from time import monotonic
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app.config import PROJECT_ROOT, Settings
 from app.container import build_media_processor
+from app.main import create_app
 from app.models.inventory import FileObservation, ScanSnapshot
+from app.models.probe import MediaProbeResult
+from app.models.tags import TagTarget
 from app.repositories.database import Database
 from app.repositories.discovery_fixture import read_snapshot
 from app.repositories.inventory import SQLiteInventoryRepository
@@ -77,7 +81,8 @@ def test_scale_indexed_projection_reconciliation_and_missing(tmp_path, monkeypat
     assert isinstance(repository, SQLiteInventoryRepository)
     root_id = root_identity('show', root)
     probe = read_snapshot(PROJECT_ROOT / 'fixtures/reconciliation/initial.json').files[0].probe
-    observations = [FileObservation(root_id=root_id, relative_path=f'Series {show:03}/Series.S01E{ep:03}.mkv',
+    observations = [FileObservation(root_id=root_id,
+                      relative_path=f"Series {show:03}/Series.{'S02' if show == 0 and ep == 100 else 'S01'}E{ep:03}.mkv",
                       media_id=f'episode-{show}-{ep}', scope='show', filesystem_id='fixture', inode=show * 1000 + ep,
                       size=2_000_000_000, mtime_ns=1, hardlinks=1, probe=probe)
                     for show in range(200) for ep in range(1, 101 if show == 0 else 21)]
@@ -98,6 +103,40 @@ def test_scale_indexed_projection_reconciliation_and_missing(tmp_path, monkeypat
     assert len(cards) == 200 and cards[0]['count'] == 100
     aggregate_queries = len(statements)
     assert aggregate_queries <= 8
+    monkeypatch.setattr(processor.catalog.media, 'get_library',
+                        lambda: pytest.fail('full media library loaded for show page'))
+    with TestClient(create_app(processor=processor, start_workers=False)) as client:
+        with monkeypatch.context() as restricted:
+            for model in (FileObservation, MediaProbeResult):
+                restricted.setattr(model, 'model_validate_json',
+                                   lambda *args, **kwargs: pytest.fail('full probe JSON deserialized on show page'))
+            statements.clear()
+            started_list = monotonic()
+            assert client.get('/shows').status_code == 200
+            list_time = monotonic() - started_list
+            list_queries = len(statements)
+            assert list_queries <= 8
+            statements.clear()
+            started_detail = monotonic()
+            assert client.get(f"/shows/{cards[0]['show'].id}").status_code == 200
+            detail_time = monotonic() - started_detail
+            detail_queries = len(statements)
+            assert detail_queries <= 16
+        statements.clear()
+        with monkeypatch.context() as restricted:
+            for method in ('files', 'load'):
+                restricted.setattr(repository, method, lambda *args, **kwargs: pytest.fail('full file projection in tag lookup'))
+            restricted.setattr(processor.catalog.media, 'select_library',
+                               lambda **kwargs: pytest.fail('episode projection in tag lookup'))
+            tagger = processor.catalog.tagger
+            assert tagger is not None
+            show_id = cards[0]['show'].id
+            assert tagger.describe(TagTarget(kind='show', id=show_id))['target']['id'] == show_id
+            assert tagger.describe(TagTarget(kind='season', id=show_id, season=1))['target']['season'] == 1
+            assert tagger.describe(TagTarget(kind='season', id=show_id, season=2))['target']['season'] == 2
+        assert len(statements) <= 9
+    print(f'\nHTTP shows={list_time:.3f}s/{list_queries} SELECTs; '
+          f'show detail={detail_time:.3f}s/{detail_queries} SELECTs')
     statements.clear()
     detail = processor.get_show(cards[0]['show'].id)
     assert len(detail['rows']) == 100

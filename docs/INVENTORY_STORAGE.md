@@ -39,7 +39,10 @@ allow atomic path swaps; artifact revision ownership is enforced too.
 aggregates. SQL remains in repositories. Show cards and summary counts do not
 decode episode probes. A show detail selects only that show's present files,
 then batches streams, chapters and tag assignments. Presets are fetched once per
-preview batch. `/api/library` intentionally remains a full catalogue export;
+preview batch. Show/season tag lookup uses indexed present paths instead of
+projecting all episodes, and reads the season paths as a cursor. Already-normalized
+relative paths bypass `PurePosixPath` reconstruction; ambiguous paths still use
+the existing normalization and validation. `/api/library` intentionally remains a full catalogue export;
 normal page queries do not use it or load historical revisions. Diagnostic
 `repository.load()` is an explicit fixture/test export, never a runtime fallback.
 
@@ -102,18 +105,27 @@ scan coordinator is not implemented.
 
 The synthetic fixture test uses 4,080 episodes across 200 shows, including a
 100-episode show. It exercises initial insertion, SQL summaries/cards, scoped
-show detail, a mostly unchanged scan and missing-file detection. It forbids the
-runtime diagnostic full export and asserts query budgets rather than wall time.
-Observed: **5 SELECTs** for combined summary/cards; **13 SELECTs** for a
-100-episode detail; approximately **5.6 seconds** for creation plus tested queries
-and reconciliation on the development machine. This is not a disk/ffprobe
-throughput promise for the LXC.
+show detail, show/season tag lookup (including a late season), a mostly unchanged
+scan and missing-file detection. It forbids the runtime diagnostic full export,
+full probe JSON deserialization in Show HTTP responses and episode projection
+during show/season tag lookup. Query budgets do not depend on episode count:
+**5 SELECTs** for combined summary/cards, **3 SELECTs** for HTTP `/shows`,
+and **13 SELECTs** for HTTP detail and a direct 100-episode detail. Local HTTP
+timings on this fixture were approximately 0.038-0.039s for the list and
+0.093-0.098s for detail before these changes, versus 0.034s and 0.093s after.
+Creation, queries and reconciliation together took approximately 5.3s after.
+These are development-machine observations, not a disk/ffprobe throughput
+promise or a statistically significant speedup. The earlier LXC `py-spy`
+profile captured a different code path; `py-spy` was unavailable locally, so
+no post-change LXC profile or production speedup is claimed.
 
 Migration tests cover round-trip/idempotence, preserved unrelated application
 state and rollback for malformed/inconsistent documents. Background tests block
 ffprobe and directory enumeration deliberately and verify that HTTP stays
 responsive, initial rows are visible, conflicts/failures are reported, and probing
-fills details. Full settings trace: [SETTINGS_AUDIT.md](SETTINGS_AUDIT.md).
+fills details. Queue polling remains responsive during a blocked probe, and
+shutdown joins the active scan thread with a cancelled report. Full settings
+trace: [SETTINGS_AUDIT.md](SETTINGS_AUDIT.md).
 
 Large directory walks can still take time on slow/network storage; subsequent
 scans preserve atomic root reconciliation instead of guessing at renames from

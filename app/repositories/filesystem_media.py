@@ -1,13 +1,16 @@
 """Projection of reconciled probe facts into the existing UI/policy domain models."""
 import re
 from collections.abc import Callable
+from contextlib import closing
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
 from app.models.inventory import LibraryFile
 from app.models.media import AudioTrack, Episode, HDRType, MediaLibrary, Movie, Season, Show
 from app.models.probe import StreamFacts
+from app.models.tags import TagTarget
 from app.repositories.inventory import InventoryRepository
+from app.services.errors import NotFound
 from app.services.filesystem_scanner import EPISODE, root_identity
 
 
@@ -69,6 +72,25 @@ class FilesystemMediaRepository:
             cards.append({'show': Show(id=row['show_id'], name=display_name(name)),
                           'count': row['count'], 'size': row['size']})
         return sorted(cards, key=lambda card: card['show'].name.casefold())
+
+    def tag_ancestors(self, target: TagTarget):
+        paths = self.inventory.views.show_paths(self.root_ids(), target.id,
+                                                 first_only=target.kind == 'show')
+        with closing(paths):
+            for value in paths:
+                relative = Path(value)
+                match = EPISODE.search(relative.stem)
+                if match is None or target.kind == 'season' and int(match[1]) != target.season:
+                    continue
+                name = relative.parts[0] if len(relative.parts) > 1 else relative.stem[:match.start()]
+                show = Show(id=target.id, name=display_name(name))
+                show_target = TagTarget(kind='show', id=target.id)
+                chain: list[tuple[TagTarget, Show | Season, str]] = [(show_target, show, show.name)]
+                if target.kind == 'season':
+                    season = Season(season=int(match[1]))
+                    chain.append((target, season, f'{show.name} · Season {season.season}'))
+                return chain
+        raise NotFound('Tag target not found.')
 
     def get_library(self) -> MediaLibrary:
         return self.select_library()

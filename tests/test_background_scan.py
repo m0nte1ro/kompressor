@@ -29,6 +29,7 @@ def test_slow_probe_does_not_block_http_and_publishes_discovery(tmp_path, monkey
             assert entered.wait(5)
             assert client.post('/api/library/scan').status_code == 409
             assert client.get('/healthz').status_code == 200
+            assert client.get('/api/queue').status_code == 200
             assert client.get('/api/summary').json()['movies'] == 205
             library = client.get('/api/library').json()
             assert library['movies'][0]['probe'] is None
@@ -89,3 +90,27 @@ def test_failed_background_scan_is_reported_and_lock_released(tmp_path, monkeypa
             discovery.thread.join(5)
             report = client.get('/api/library/scan').json()
             assert report['state'] == 'failed' and report['error'] == 'fixture traversal failure'
+
+
+def test_shutdown_stops_background_scan(tmp_path, monkeypatch):
+    root = tmp_path / 'movies'
+    root.mkdir()
+    (root / 'Movie.mkv').write_bytes(b'fixture')
+    app = create_app(config=Settings(media_backend='filesystem', movies_root=root,
+                                     database_path=tmp_path / 'state.sqlite3'))
+    entered = Event()
+    facts = parse_ffprobe({'format': {}, 'streams': []})
+
+    def probe_until_shutdown(self, path):
+        entered.set()
+        assert app.state.media_processor.discovery.stop.wait(5)
+        return facts
+
+    monkeypatch.setattr(FFprobeService, 'inspect', probe_until_shutdown)
+    with TestClient(app) as client:
+        assert client.post('/api/library/scan').status_code == 202
+        assert entered.wait(5)
+        assert client.get('/api/queue').status_code == 200
+    discovery = app.state.media_processor.discovery
+    assert not discovery.thread.is_alive()
+    assert discovery.status()['state'] == 'cancelled'

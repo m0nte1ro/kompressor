@@ -45,6 +45,8 @@ class FileObservation(BaseModel):
     @field_validator("relative_path")
     @classmethod
     def safe_relative_path(cls, value: str) -> str:
+        if value and not value.startswith('/') and all(part not in ('', '.', '..') for part in value.split('/')):
+            return value
         path = PurePosixPath(value)
         if not value or path.is_absolute() or ".." in path.parts or str(path) == ".":
             raise ValueError("Expected a relative path inside the configured root.")

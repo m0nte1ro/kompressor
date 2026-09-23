@@ -15,6 +15,10 @@ class TagService:
         self.repository = repository
 
     def _chain(self, target: TagTarget):
+        if target.kind in {'show', 'season'}:
+            lookup = getattr(self.media, 'tag_ancestors', None)
+            if lookup is not None:
+                return lookup(target)
         library = select_library(self.media,
             scope="movie" if target.kind == "movie" else "show",
             show_id=target.id if target.kind in {"show", "season"} else None,
@@ -52,7 +56,10 @@ class TagService:
     def describe(self, target: TagTarget) -> dict:
         with self.repository.transaction():
             chain = self._chain(target)
-            assignments = [(name, self.assignment(key, item)) for key, item, name in chain]
+            keys = [self._key(key, item) for key, item, _ in chain]
+            stored = self.repository.get_many(keys)
+            assignments = [(name, stored.get(identity) or TagAssignment.model_validate({"tags": item.tags}))
+                           for (key, item, name), identity in zip(chain, keys)]
             floors = [assignment.quality_floor for _, assignment in assignments if assignment.quality_floor]
             floor = QualityFloor(
                 minimum_video_bitrate=max(f.minimum_video_bitrate for f in floors),
