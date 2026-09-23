@@ -1,10 +1,9 @@
 from app.models.preferences import LibraryPaths
 from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
-from app.config import settings
 from app.dependencies import Processor
 
 
@@ -20,8 +19,8 @@ class EligibilityRequest(BaseModel):
 
 
 @router.get("/healthz")
-def healthz(processor: Processor):
-    return {"status": "ok", "app": settings.app_name, "media_backend": processor.get_scan_status()["backend"]}
+def healthz(processor: Processor, request: Request):
+    return {"status": "ok", "app": request.app.title, "media_backend": processor.get_scan_status()["backend"]}
 
 
 @router.get("/api/library")
@@ -54,7 +53,7 @@ def evaluate_eligibility(processor: Processor, payload: EligibilityRequest):
     return processor.evaluate_compression(**payload.model_dump())
 
 
-@router.post("/api/library/scan")
+@router.post("/api/library/scan", status_code=202)
 def scan_library(processor: Processor):
     return processor.refresh_library()
 
@@ -62,3 +61,8 @@ def scan_library(processor: Processor):
 @router.get("/api/library/scan")
 def scan_status(processor: Processor):
     return processor.get_scan_status()
+
+
+@router.get("/api/settings/runtime")
+def runtime_settings(processor: Processor):
+    return processor.get_runtime_settings()

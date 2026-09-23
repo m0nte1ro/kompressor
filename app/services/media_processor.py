@@ -21,7 +21,7 @@ class MediaProcessor:
                  queue: QueueService, scanner: MediaScanner | None, probe: ProbeService | None,
                  preferences: SQLitePreferencesRepository | None = None,
                  inventory: ReconciliationService | None = None,
-                 discovery: LibraryDiscoveryService | None = None):
+                 discovery: LibraryDiscoveryService | None = None, runtime_settings: dict | None = None):
         self.catalog = catalog
         self.presets = presets
         self.queue = queue
@@ -30,6 +30,7 @@ class MediaProcessor:
         self.preferences = preferences
         self.inventory = inventory
         self.discovery = discovery
+        self.runtime_settings = runtime_settings or {}
 
     def get_library(self):
         return self.catalog.library()
@@ -55,9 +56,16 @@ class MediaProcessor:
     def update_library_paths(self, paths: LibraryPaths) -> LibraryPaths:
         if self.preferences is None:
             raise InvalidOperation("Preferences storage is unavailable.")
-        if self.discovery:
-            configured_roots(paths, self.discovery.database_path)
+        configured_roots(paths, self.preferences.database.path)
         return self.preferences.save_library_paths(paths)
+
+    def get_runtime_settings(self) -> dict:
+        return {"startup": dict(self.runtime_settings), "startup_apply_timing": "restart_required",
+                "library_paths": self.get_library_paths().model_dump(),
+                "paths_apply_timing": "next_scan; active scan keeps captured roots",
+                "paths_precedence": "persisted settings (including empty) > environment/.env > empty defaults",
+                "presets_apply_timing": "immediate eligibility; new jobs only; queued snapshots unchanged",
+                "encoding_enabled": False, "development_mode": "unused compatibility flag"}
 
     def create_preset(self, payload: PresetSettings):
         return self.presets.create(payload)
@@ -125,7 +133,7 @@ class MediaProcessor:
     def refresh_library(self) -> dict:
         if self.discovery is None:
             raise InvalidOperation("Real scanning requires the filesystem backend.")
-        return self.discovery.scan()
+        return self.discovery.start()
 
     def get_scan_status(self) -> dict:
         return self.discovery.status() if self.discovery else {"backend": "seed", "state": "disabled", "roots": []}

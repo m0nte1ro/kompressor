@@ -11,7 +11,8 @@ def audio_plan(item, preset: CompressionPreset, preserve_audio: bool) -> list[di
             continue
         bitrate = track.bitrate
         codec = track.codec.lower()
-        target = preset.stereo_audio_bitrate if track.channels <= 2 else preset.target_audio_bitrate or 640000
+        output_channels = track.channels if rules.channel_handling == "preserve" else min(track.channels, 2)
+        target = preset.stereo_audio_bitrate if output_channels <= 2 else preset.target_audio_bitrate or 640000
         copy = preserve_audio or (
             rules.channel_handling == "preserve"
             and (
@@ -21,9 +22,9 @@ def audio_plan(item, preset: CompressionPreset, preserve_audio: bool) -> list[di
                 and bitrate is not None and bitrate <= target
             )
         )
-        channels = track.channels if rules.channel_handling == "preserve" else min(track.channels, 2)
+        channels = track.channels if copy else output_channels
         plan.append({"track": index, "action": "copy" if copy else "encode",
-                     "codec": codec if copy else rules.mono_stereo_codec if track.channels <= 2 else rules.multichannel_codec,
+                     "codec": codec if copy else rules.mono_stereo_codec if channels <= 2 else rules.multichannel_codec,
                      "channels": channels, "bitrate": bitrate if copy else target})
     return plan
 
@@ -44,6 +45,7 @@ def estimate(item, preset: CompressionPreset, preserve_audio: bool) -> dict:
     audio_bytes = sum(t["bitrate"] or 0 for t in plan) * duration / 8
     low = preset.target_video_bitrate if preset.rate_control == "abr" else preset.planning_video_bitrate_low
     high = preset.target_video_bitrate if preset.rate_control == "abr" else preset.planning_video_bitrate_high
+    assert low is not None and high is not None  # Validated ABR target or quality planning bounds.
     output_low = int((low * duration / 8 + audio_bytes + residual) * 1.01)
     output_high = int((high * duration / 8 + audio_bytes + residual) * 1.01)
     output = (output_low + output_high) // 2

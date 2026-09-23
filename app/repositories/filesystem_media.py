@@ -54,12 +54,31 @@ class FilesystemMediaRepository:
         self.inventory = inventory
         self.roots = roots
 
+    def root_ids(self) -> list[str]:
+        return [root_identity('movie' if scope == 'movie' else 'show', root) for scope, root in self.roots().items()]
+
+    def summary(self) -> dict:
+        return self.inventory.views.summary(self.root_ids())
+
+    def show_cards(self) -> list[dict]:
+        cards: list[dict] = []
+        for row in self.inventory.views.shows(self.root_ids()):
+            relative = Path(row['path'])
+            match = EPISODE.search(relative.stem)
+            name = relative.parts[0] if len(relative.parts) > 1 else relative.stem[:match.start()] if match else relative.stem
+            cards.append({'show': Show(id=row['show_id'], name=display_name(name)),
+                          'count': row['count'], 'size': row['size']})
+        return sorted(cards, key=lambda card: card['show'].name.casefold())
+
     def get_library(self) -> MediaLibrary:
+        return self.select_library()
+
+    def select_library(self, scope: str | None = None, show_id: str | None = None, file_id: str | None = None) -> MediaLibrary:
         roots = self.roots()
         locations = {root_identity('movie' if scope == 'movie' else 'show', path): path for scope, path in roots.items()}
         library = MediaLibrary()
         shows: dict[str, Show] = {}
-        for record in self.inventory.load().files.values():
+        for record in self.inventory.files(roots=list(locations), present=True, scope=scope, show_id=show_id, file_id=file_id):
             if record.presence != 'present' or record.root_id not in locations:
                 continue
             fields = media_fields(record, locations[record.root_id])

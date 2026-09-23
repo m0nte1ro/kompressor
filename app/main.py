@@ -44,6 +44,8 @@ def create_app(database_path: Path | None = None, *, media: MediaRepository | No
         try:
             yield
         finally:
+            if composed.discovery:
+                await asyncio.to_thread(composed.discovery.close)
             if task:
                 task.cancel()
                 with suppress(asyncio.CancelledError):

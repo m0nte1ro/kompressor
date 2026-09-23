@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ title }} · Kompressor</title>
+  <title>{{ title }} · {{ request.app.title }}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
   <script type="module" src="{{ url_for('static', path='app.js') }}"></script>
 </head>
 <body data-page="{{ page }}">
   <a class="skip-link" href="#content">Skip to content</a>
   <aside class="sidebar">
-    <a class="brand" href="/movies"><span class="logo" aria-hidden="true">◆</span> Kompressor</a>
+    <a class="brand" href="/movies"><span class="logo" aria-hidden="true">◆</span> {{ request.app.title }}</a>
     <nav aria-label="Main navigation">
       {% for key, icon, name in [('movies', '▣', 'Movies'), ('shows', '▤', 'Shows'), ('queue', '≋', 'Queue'), ('history', '↺', 'History'), ('settings', '⚙', 'Settings')] %}
       <a href="/{{ key }}" {% if page == key %}aria-current="page"{% endif %}>
@@ -27,6 +27,7 @@
       <div class="worker-pills"><span class="badge" id="cpu-state">CPU · idle</span><span class="badge" id="qsv-state">QSV · idle</span></div>
     </header>
     <div class="content">
+      <div id="discovery-status" class="notice" role="status" hidden></div>
       <div id="message" class="notice" role="status" hidden></div>
       <noscript><p class="notice">Enable JavaScript to use compression controls and the simulated queue.</p></noscript>
       {% block content %}{% endblock %}

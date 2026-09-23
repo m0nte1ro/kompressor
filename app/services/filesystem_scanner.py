@@ -1,4 +1,7 @@
 """Read-only local discovery. No hashing, probing, media mutation or symlink traversal."""
+from collections import defaultdict
+from collections.abc import Callable
+from time import monotonic
 import os
 import re
 import stat
@@ -28,13 +31,21 @@ def semantic_key(scope: MediaScope, relative: str) -> str | None:
 
 
 class FilesystemScanner:
-    def scan(self, root: Path, scope: MediaScope, state: InventoryState) -> tuple[ScanSnapshot, list[str]]:
+    def scan(self, root: Path, scope: MediaScope, state: InventoryState, on_batch: Callable[[list[FileObservation]], None] | None = None,
+             cancelled: Callable[[], bool] | None = None) -> tuple[ScanSnapshot, list[str]]:
         root = root.absolute()
         root_id = root_identity(scope, root)
         sequence = state.scan_sequences.get(root_id, 0) + 1
         snapshot = ScanSnapshot(root_id=root_id, sequence=sequence, status='complete')
         errors: list[str] = []
+        batch: list[FileObservation] = []
+        last_publish = monotonic()
         existing = [f for f in state.files.values() if f.root_id == root_id]
+        by_path = {f.relative_path: f for f in existing}
+        by_physical = defaultdict(list)
+        for f in existing:
+            obs = f.observation
+            by_physical[(obs.filesystem_id, obs.inode, obs.size, obs.mtime_ns)].append(f)
         def failure(error: OSError):
             errors.append(str(error))
             snapshot.status = 'partial'
@@ -48,8 +59,14 @@ class FilesystemScanner:
             snapshot.status = 'unavailable'
             return snapshot, [str(error)]
         for directory, folders, filenames in os.walk(root, followlinks=False, onerror=failure):
+            if cancelled and cancelled():
+                snapshot.status = 'partial'
+                break
             folders[:] = sorted(name for name in folders if not Path(directory, name).is_symlink())
             for name in sorted(filenames):
+                if cancelled and cancelled():
+                    snapshot.status = 'partial'
+                    break
                 path = Path(directory, name)
                 if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
                     continue
@@ -60,10 +77,8 @@ class FilesystemScanner:
                     if not os.access(path, os.R_OK):
                         raise OSError(f'File is not readable: {path}')
                     relative = path.relative_to(root).as_posix()
-                    same_path = next((f for f in existing if f.relative_path == relative), None)
-                    physical = [f for f in existing if f.observation.filesystem_id == str(info.st_dev)
-                                and f.observation.inode == info.st_ino
-                                and f.observation.size == info.st_size and f.observation.mtime_ns == info.st_mtime_ns]
+                    same_path = by_path.get(relative)
+                    physical = by_physical[(str(info.st_dev), info.st_ino, info.st_size, info.st_mtime_ns)]
                     previous = same_path or (physical[0] if len(physical) == 1 else None)
                     key = semantic_key(scope, relative)
                     if previous is None and key is None:
@@ -76,6 +91,13 @@ class FilesystemScanner:
                         size=info.st_size, mtime_ns=info.st_mtime_ns, ctime_ns=info.st_ctime_ns,
                         hardlinks=info.st_nlink,
                     ))
+                    batch.append(snapshot.files[-1])
+                    if on_batch and (len(batch) >= 100 or monotonic() - last_publish >= 1):
+                        on_batch(batch)
+                        batch = []
+                        last_publish = monotonic()
                 except OSError as error:
                     failure(error)
+        if on_batch and batch:
+            on_batch(batch)
         return snapshot, errors

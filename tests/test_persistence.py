@@ -94,7 +94,7 @@ def test_database_transaction_rolls_back_and_reopens(tmp_path):
                 raise RuntimeError("Rollback")
     with Database(path).transaction() as connection:
         assert connection.execute("SELECT 1 FROM metadata WHERE id = 'test'").fetchone() is None
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
 
 
 def test_idle_worker_tick_without_jobs(queue):

@@ -5,6 +5,7 @@ if (dialog) {
   const form = $('#preset-form');
   const field = name => form.elements.namedItem(name);
   const error = $('#preset-error');
+  let hdrMetadata = null, originalAudioPolicy = null, originalPreserveAudio = true;
   let editing = null, saving = false, revision = 0, efficientAudioRules = null, sourceApplicability = [];
   const allSourceResolutions = ['480p', '576p', '720p', '1080p', '2160p'];
   let planningVideoBitrateLow = null, planningVideoBitrateHigh = null;
@@ -51,7 +52,8 @@ if (dialog) {
     planningVideoBitrateHigh = Math.round(defaults.planning_video_bitrate_high * 1e6);
     for (const [name, value] of Object.entries(defaults)) {
       const control = field(name);
-      if (control) control.value = value;
+      if (control?.type === 'checkbox') control.checked = value;
+      else if (control) control.value = value;
     }
     audioPolicy();
     backendFields();
@@ -151,13 +153,20 @@ if (dialog) {
   function open(preset, id = null) {
     editing = id;
     efficientAudioRules = preset.efficient_audio_rules ?? null;
-    sourceApplicability = preset.source_resolutions?.length ? [...preset.source_resolutions] : [...allSourceResolutions];
+    sourceApplicability = [...(preset.source_resolutions ?? allSourceResolutions)];
+    hdrMetadata = preset.hdr_metadata ?? null;
+    originalAudioPolicy = preset.audio_policy;
+    originalPreserveAudio = preset.preserve_audio_by_default ?? (preset.audio_policy === 'preserve');
     planningVideoBitrateLow = preset.planning_video_bitrate_low ?? null;
     planningVideoBitrateHigh = preset.planning_video_bitrate_high ?? null;
     error.hidden = true;
     $('#preset-editor-title').textContent = id ? 'Edit preset' : 'New preset';
     [...text, ...numeric].forEach(name => field(name).value = preset[name] ?? '');
     mbps.forEach(name => field(name).value = preset[name] == null ? '' : preset[name] / 1e6);
+    for (const name of ['stereo_audio_bitrate', 'target_audio_bitrate']) {
+      const value = (preset[name] ?? (name === 'stereo_audio_bitrate' ? 192000 : 640000)) / 1000;
+      if (![...field(name).options].some(option => Number(option.value) === value)) field(name).add(new Option(`${value} kbps`, String(value)));
+    }
     field('stereo_audio_bitrate').value = (preset.stereo_audio_bitrate ?? 192000) / 1000;
     field('target_audio_bitrate').value = (preset.target_audio_bitrate ?? 640000) / 1000;
     boolean.forEach(name => field(name).checked = preset[name]);
@@ -212,11 +221,12 @@ if (dialog) {
     const payload = {};
     text.forEach(name => payload[name] = field(name).value);
     numeric.forEach(name => payload[name] = field(name).value === '' ? null : Number(field(name).value));
-    payload.source_resolutions = sourceApplicability.length ? sourceApplicability : allSourceResolutions;
+    payload.source_resolutions = sourceApplicability;
+    if (hdrMetadata && payload.hdr_policy !== 'tone_map_to_sdr') payload.hdr_metadata = hdrMetadata;
     payload.planning_video_bitrate_low = payload.rate_control === 'abr' ? null : planningVideoBitrateLow;
     payload.planning_video_bitrate_high = payload.rate_control === 'abr' ? null : planningVideoBitrateHigh;
     boolean.forEach(name => payload[name] = field(name).checked);
-    payload.preserve_audio_by_default = payload.audio_policy === 'preserve';
+    payload.preserve_audio_by_default = payload.audio_policy === originalAudioPolicy ? originalPreserveAudio : payload.audio_policy === 'preserve';
     if (efficientAudioRules) payload.efficient_audio_rules = efficientAudioRules;
     mbps.forEach(name => payload[name] = payload[name] == null ? null : Math.round(payload[name] * 1e6));
     payload.stereo_audio_bitrate *= 1000;

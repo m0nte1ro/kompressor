@@ -14,12 +14,12 @@ class SQLitePresetRepository:
                 connection.execute("INSERT INTO metadata VALUES ('presets_initialized', 'true')")
 
     def get_all(self) -> list[CompressionPreset]:
-        with self.database.transaction() as connection:
+        with self.database.read() as connection:
             return [CompressionPreset.model_validate_json(row[0]) for row in
                     connection.execute("SELECT payload FROM presets ORDER BY rowid")]
 
     def get_by_id(self, preset_id: str) -> CompressionPreset | None:
-        with self.database.transaction() as connection:
+        with self.database.read() as connection:
             row = connection.execute("SELECT payload FROM presets WHERE id = ?", (preset_id,)).fetchone()
             return CompressionPreset.model_validate_json(row[0]) if row else None
 
@@ -40,8 +40,18 @@ class SQLiteTagRepository:
     def transaction(self):
         return self.database.transaction()
 
+    def get_many(self, keys: list[str]) -> dict[str, TagAssignment]:
+        result = {}
+        with self.database.read() as connection:
+            for start in range(0, len(keys), 500):
+                batch = keys[start:start + 500]
+                marks = ','.join('?' for _ in batch)
+                for row in connection.execute(f'SELECT id,payload FROM tags WHERE id IN ({marks})', batch):
+                    result[row[0]] = TagAssignment.model_validate_json(row[1])
+        return result
+
     def get(self, key: str) -> TagAssignment | None:
-        with self.database.transaction() as connection:
+        with self.database.read() as connection:
             row = connection.execute("SELECT payload FROM tags WHERE id = ?", (key,)).fetchone()
             return TagAssignment.model_validate_json(row[0]) if row else None
 
@@ -59,7 +69,7 @@ class SQLiteQueueRepository:
         return self.database.transaction()
 
     def get_all(self) -> list[QueueJob]:
-        with self.database.transaction() as connection:
+        with self.database.read() as connection:
             return [QueueJob.model_validate_json(row[0]) for row in
                     connection.execute("SELECT payload FROM jobs ORDER BY rowid")]
 

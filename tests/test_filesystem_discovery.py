@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -12,6 +13,18 @@ from app.models.inventory import InventoryState
 from app.services.errors import InvalidOperation
 from app.services.ffprobe import FFprobeService, parse_ffprobe
 from app.services.filesystem_scanner import FilesystemScanner
+
+
+def scan(client):
+    response = client.post('/api/library/scan')
+    if response.status_code != 202:
+        return response
+    for _ in range(500):
+        response = client.get('/api/library/scan')
+        if response.json()['state'] != 'running':
+            return response
+        time.sleep(.01)
+    pytest.fail('Background scan did not finish')
 
 
 @pytest.fixture
@@ -65,7 +78,7 @@ def test_real_inventory_reaches_ui_api_and_keeps_seed_mode_separate(config, prob
     with TestClient(app) as client:
         assert client.get('/healthz').json()['media_backend'] == 'filesystem'
         assert client.get('/api/library').json() == {'movies': [], 'shows': []}
-        response = client.post('/api/library/scan')
+        response = scan(client)
         assert response.status_code == 200
         report = response.json()
         assert report['state'] == 'completed' and report['backend'] == 'filesystem'
@@ -87,14 +100,14 @@ def test_real_inventory_reaches_ui_api_and_keeps_seed_mode_separate(config, prob
         eligible = client.post('/api/eligibility', json={'scope': 'movie', 'media_id': movie['id'], 'preset_id': 'movie-streaming-quality'}).json()
         assert not eligible['eligible'] and any('Read-only' in r for r in eligible['reasons'])
         assert client.post('/api/queue', json={'scope': 'movie', 'media_ids': [movie['id']], 'preset_id': 'movie-streaming-quality'}).status_code == 422
-        client.post('/api/library/scan')
+        scan(client)
         assert probe.call_count == 2  # unchanged sources reuse persisted probe facts
         assert client.get('/api/library').json()['movies'][0]['id'] == movie['id']
 
 
 def test_restart_persistence_rename_and_real_tags(config, probe):
     with TestClient(create_app(config=config)) as client:
-        client.post('/api/library/scan')
+        scan(client)
         movie = client.get('/api/library').json()['movies'][0]
         target = {'kind': 'movie', 'id': movie['id']}
         assert client.patch('/api/tags', json={'targets': [target], 'tags': ['Preserve Audio']}).status_code == 200
@@ -102,7 +115,7 @@ def test_restart_persistence_rename_and_real_tags(config, probe):
     path.rename(path.with_name('Renamed.mkv'))  # simulate an external rename, not scanner behaviour
     with TestClient(create_app(config=config)) as client:
         assert client.get('/api/library').json()['movies'][0]['id'] == movie['id']
-        client.post('/api/library/scan')
+        scan(client)
         renamed = client.get('/api/library').json()['movies'][0]
         assert renamed['id'] == movie['id'] and renamed['revision_id'] == movie['revision_id']
         assert renamed['media_id'] == movie['media_id'] and renamed['tags'] == ['Preserve Audio']
@@ -113,22 +126,22 @@ def test_unavailable_root_retains_inventory_complete_scan_marks_missing(config, 
     assert config.movies_root is not None
     movies = config.movies_root
     with TestClient(create_app(config=config)) as client:
-        client.post('/api/library/scan')
+        scan(client)
         offline = movies.with_name('offline')
         movies.rename(offline)
-        report = client.post('/api/library/scan').json()
+        report = scan(client).json()
         assert report['roots'][0]['status'] == 'unavailable'
         assert len(client.get('/api/library').json()['movies']) == 1
         offline.rename(movies)
         next(movies.rglob('*.mkv')).unlink()  # simulate removal by another application
-        report = client.post('/api/library/scan').json()
+        report = scan(client).json()
         assert len(report['roots'][0]['reconciliation']['missing']) == 1
         assert client.get('/api/library').json()['movies'] == []
 
 
 def test_missing_ffprobe_keeps_files_visible_with_unknowns(config):
     with TestClient(create_app(config=config)) as client:
-        report = client.post('/api/library/scan').json()
+        report = scan(client).json()
         assert report['roots'][0]['errors'] and report['roots'][0]['discovered'] == 1
         movie = client.get('/api/library').json()['movies'][0]
         assert movie['video_bitrate'] is None and movie['duration_seconds'] is None
@@ -142,7 +155,7 @@ def test_probe_bridge_preserves_interlace_and_hdr_safety(config, monkeypatch, na
     facts = parse_ffprobe(json.loads((PROJECT_ROOT / f'fixtures/ffprobe/{name}.json').read_text()))
     monkeypatch.setattr(FFprobeService, 'inspect', lambda self, path: facts.model_copy(deep=True))
     with TestClient(create_app(config=config)) as client:
-        client.post('/api/library/scan')
+        scan(client)
         movie = client.get('/api/library').json()['movies'][0]
         assert movie['hdr'] == hdr
         result = client.post('/api/eligibility', json={'scope': 'movie', 'media_id': movie['id'], 'preset_id': 'movie-streaming-quality'}).json()
@@ -159,11 +172,11 @@ def test_probe_bridge_preserves_interlace_and_hdr_safety(config, monkeypatch, na
 
 def test_probe_failure_after_change_does_not_reuse_old_metadata(config, probe):
     with TestClient(create_app(config=config)) as client:
-        client.post('/api/library/scan')
+        scan(client)
         old = client.get('/api/library').json()['movies'][0]
         Path(old['path']).write_bytes(b'new external replacement with different content')
         probe.side_effect = InvalidOperation('corrupt file')
-        client.post('/api/library/scan')
+        scan(client)
         new = client.get('/api/library').json()['movies'][0]
         assert new['id'] == old['id'] and new['revision_id'] != old['revision_id']
         assert new['probe'] is None
@@ -175,7 +188,7 @@ def test_seed_mode_never_executes_probe(tmp_path, monkeypatch):
     monkeypatch.setattr(FFprobeService, 'inspect', probe)
     with TestClient(create_app(tmp_path / 'state.sqlite3')) as client:
         assert len(client.get('/api/library').json()['movies']) == 3
-        assert client.post('/api/library/scan').status_code == 422
+        assert scan(client).status_code == 422
         assert client.get('/api/library/scan').json()['backend'] == 'seed'
     probe.assert_not_called()
 
@@ -184,13 +197,13 @@ def test_paths_are_configurable_and_no_production_defaults(tmp_path, probe):
     config = Settings(media_backend='filesystem', database_path=tmp_path / 'state.sqlite3', movies_root=None, shows_root=None)
     with TestClient(create_app(config=config)) as client:
         assert client.get('/api/settings').json() == {'movies_path': '', 'shows_path': ''}
-        assert client.post('/api/library/scan').status_code == 422
+        assert scan(client).status_code == 422
         assert client.put('/api/settings', json={'movies_path': 'relative', 'shows_path': ''}).status_code == 422
         movies = tmp_path / 'library'
         movies.mkdir()
         (movies / 'Film.mkv').write_bytes(b'fixture')
         assert client.put('/api/settings', json={'movies_path': str(movies), 'shows_path': ''}).status_code == 200
-        assert client.post('/api/library/scan').status_code == 200
+        assert scan(client).status_code == 200
         assert len(client.get('/api/library').json()['movies']) == 1
         # Configuration must not put app state inside media or overlap roots.
         assert client.put('/api/settings', json={'movies_path': str(tmp_path), 'shows_path': ''}).status_code == 422
@@ -199,7 +212,7 @@ def test_paths_are_configurable_and_no_production_defaults(tmp_path, probe):
 
 def test_scan_failure_in_subdirectory_never_marks_whole_root_missing(config, probe, monkeypatch):
     with TestClient(create_app(config=config)) as client:
-        client.post('/api/library/scan')
+        scan(client)
         walk = os.walk
         def failing_walk(root, **kwargs):
             if root == config.movies_root:
@@ -207,7 +220,7 @@ def test_scan_failure_in_subdirectory_never_marks_whole_root_missing(config, pro
                 return iter([])
             return walk(root, **kwargs)
         monkeypatch.setattr(os, 'walk', failing_walk)
-        report = client.post('/api/library/scan').json()
+        report = scan(client).json()
         assert report['roots'][0]['status'] == 'partial'
         assert not report['roots'][0]['reconciliation']['missing']
         assert len(client.get('/api/library').json()['movies']) == 1
@@ -220,7 +233,7 @@ def test_content_change_during_probe_discards_inconsistent_facts(config, probe):
         return facts
     probe.side_effect = changing_probe
     with TestClient(create_app(config=config)) as client:
-        report = client.post('/api/library/scan').json()
+        report = scan(client).json()
         assert 'changed during probing' in report['roots'][0]['errors'][0]
         assert client.get('/api/library').json()['movies'][0]['probe'] is None
 

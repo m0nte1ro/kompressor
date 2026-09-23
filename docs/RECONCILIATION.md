@@ -1,5 +1,9 @@
 # Fixture reconciliation
 
+Historical milestone: JSON persistence described below has since been replaced by
+[indexed schema-v2 storage](INVENTORY_STORAGE.md). The identity and source safety
+model remains unchanged.
+
 This document describes the completed fixture milestone. Its read-only filesystem
 and ffprobe follow-up is documented in [READ_ONLY_DISCOVERY.md](READ_ONLY_DISCOVERY.md);
 that follow-up adds a scan endpoint while retaining the reconciliation model below.

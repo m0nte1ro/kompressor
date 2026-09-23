@@ -9,7 +9,7 @@
     <div class="badges">{% for tag in card.show.tags %}<span class="badge violet">{{ tag }}</span>{% else %}<span class="badge">Default show policies</span>{% endfor %}</div>
     <span class="show-link">Browse episodes →</span>
   </a>
-  {% else %}<p class="empty">No shows in this seed library.</p>{% endfor %}
+  {% else %}<p class="empty">No shows in this library.</p>{% endfor %}
 </section>
 <p id="no-shows" class="empty" hidden>No shows match your search.</p>
 {% endblock %}

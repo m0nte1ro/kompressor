@@ -44,6 +44,9 @@ class MemoryPresets:
 
 
 class MemoryTags:
+    def get_many(self, keys):
+        return {key: value for key in keys if (value := self.get(key)) is not None}
+
     def __init__(self):
         self.items = {}
 

@@ -1,6 +1,7 @@
 import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js';
 import './presets.js';
 import './settings.js';
+import './discovery.js';
 import {setupTags} from './tags.js';
 import {compressionModal} from './compression.js';
 import {renderHistory, renderQueue} from './queue.js';
@@ -9,7 +10,7 @@ let queue = {lanes: [], history: [], pending_count: 0};
 let refreshRevision = 0;
 let mutating = false;
 const library = $('#library');
-const rows = $$('.media-row');
+let rows = $$('.media-row');
 const selected = () => rows.filter(row => $('.media-select', row).checked);
 const jobFor = row => pendingJobs(queue).find(job => job.media_id === row.dataset.id && job.scope === library?.dataset.scope);
 
@@ -158,3 +159,10 @@ async function poll() {
   finally { window.setTimeout(poll, 2000); }
 }
 poll();
+
+// Preserve toolbar listeners, filters and selections while replacing server-rendered rows.
+window.addEventListener('library-updated', () => {
+  rows = $$('.media-row');
+  renderLibraryQueue();
+  $('#show-search')?.dispatchEvent(new Event('input'));
+});

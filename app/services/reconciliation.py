@@ -1,5 +1,6 @@
 """Transactional reconciliation of fixture observations, not a filesystem scanner."""
 from uuid import uuid4
+from collections import defaultdict
 
 from app.models.inventory import (
     FileObservation, FileRevision, InventoryState, LibraryFile,
@@ -19,8 +20,7 @@ class ReconciliationService:
         self.repository = repository
 
     def capture(self, file_id: str) -> SourceReference:
-        state = self.repository.load()
-        record = state.files.get(file_id)
+        record = self.repository.get_file(file_id)
         if record is None:
             raise NotFound("Library file not found.")
         if record.presence != "present":
@@ -29,12 +29,12 @@ class ReconciliationService:
 
     def reconcile(self, snapshot: ScanSnapshot) -> ReconciliationResult:
         with self.repository.transaction():
-            state = self.repository.load()
+            state = self.repository.root_state(snapshot.root_id, snapshot.files if snapshot.status != "complete" else None)
             if snapshot.sequence <= state.scan_sequences.get(snapshot.root_id, 0):
                 raise Conflict("Stale or already applied scan sequence.")
             result = self._apply(state, snapshot)
             state.scan_sequences[snapshot.root_id] = snapshot.sequence
-            self.repository.save(state)
+            self.repository.apply(state, snapshot, result)
             return result
 
     def _apply(self, state: InventoryState, snapshot: ScanSnapshot) -> ReconciliationResult:
@@ -49,6 +49,11 @@ class ReconciliationService:
         stable = {r.relative_path: r for r in sorted(records, key=lambda r: r.presence == "present")
                   if r.relative_path in observations
                   and unchanged(r.observation, observations[r.relative_path])}
+        by_media = defaultdict(list)
+        by_path = defaultdict(list)
+        for record in records:
+            by_media[(record.media_id, record.scope)].append(record)
+            by_path[record.relative_path].append(record)
         def rank(item: FileObservation) -> int:
             if item.relative_path in stable:
                 return 0
@@ -56,7 +61,7 @@ class ReconciliationService:
                 self._same_media(r, item) and unchanged(r.observation, item)
                 and (r.relative_path not in observations or
                      not unchanged(r.observation, observations[r.relative_path]))
-                for r in records
+                for r in by_media[(item.media_id, item.scope)]
             ):
                 return 1
             return 2
@@ -66,11 +71,11 @@ class ReconciliationService:
             if item.relative_path in artifact_paths:
                 result.ignored_artifacts.append(item.relative_path)
                 continue
-            same_path = next((r for r in sorted(records, key=lambda r: (r.presence == "missing", -r.last_seen_sequence))
+            same_path = next((r for r in sorted(by_path[item.relative_path], key=lambda r: (r.presence == "missing", -r.last_seen_sequence))
                               if r.relative_path == item.relative_path and r.file_id not in claimed), None)
             record = stable.get(item.relative_path)
             # Renames/swaps only use records displaced from their previous path.
-            candidates = [r for r in records if r.file_id not in claimed and self._same_media(r, item)
+            candidates = [r for r in by_media[(item.media_id, item.scope)] if r.file_id not in claimed and self._same_media(r, item)
                           and (r.relative_path not in observations or
                                not unchanged(r.observation, observations[r.relative_path]))]
             physical = [r for r in candidates if item.physical_key() is not None
@@ -134,8 +139,9 @@ class ReconciliationService:
             state.files[record.file_id] = record
             claimed.add(record.file_id)
         if snapshot.status == "complete":
+            protected = claimed | unresolved
             for record in records:
-                if record.file_id not in claimed | unresolved and record.presence != "missing":
+                if record.file_id not in protected and record.presence != "missing":
                     state.files[record.file_id].presence = "missing"
                     result.missing.append(record.file_id)
         return result

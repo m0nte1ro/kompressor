@@ -1,5 +1,3 @@
-import json
-
 from app.models.preferences import LibraryPaths
 from app.repositories.database import Database
 
@@ -13,7 +11,7 @@ class SQLitePreferencesRepository:
         self.defaults = defaults or LibraryPaths()
 
     def get_library_paths(self) -> LibraryPaths:
-        with self.database.transaction() as connection:
+        with self.database.read() as connection:
             row = connection.execute(
                 "SELECT payload FROM metadata WHERE id = ?",
                 (PREFERENCES_ID,),

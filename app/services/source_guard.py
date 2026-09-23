@@ -24,7 +24,7 @@ class SourceGuard:
         self._revalidate(reference)
 
     def _revalidate(self, reference: SourceReference) -> None:
-        record = self.repository.load().files.get(reference.file_id)
+        record = self.repository.get_file(reference.file_id)
         if record is None:
             raise NotFound("Library file not found.")
         if record.presence != "present" or record.revision_id != reference.revision_id:

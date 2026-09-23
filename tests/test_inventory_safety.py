@@ -170,4 +170,5 @@ def test_reconciliation_persists_after_new_repository_instance(tmp_path):
     reference = first.capture(file_id)
     second = ReconciliationService(SQLiteInventoryRepository(Database(path)))
     assert second.capture(file_id) == reference
+    assert isinstance(second.repository, SQLiteInventoryRepository)
     assert second.repository.load().scan_sequences[snapshot.root_id] == 1

@@ -203,11 +203,11 @@ def test_stale_scan_rejected_without_state_change(inventory, snapshot):
 
 
 def test_atomic_reconciliation_rollback(inventory, snapshot, monkeypatch):
-    save = inventory.repository.save
-    def fail_after_save(state):
-        save(state)
+    save = inventory.repository.apply
+    def fail_after_save(*args):
+        save(*args)
         raise RuntimeError('storage failure')
-    monkeypatch.setattr(inventory.repository, 'save', fail_after_save)
+    monkeypatch.setattr(inventory.repository, 'apply', fail_after_save)
     with pytest.raises(RuntimeError):
         inventory.reconcile(snapshot)
     assert not inventory.repository.load().files

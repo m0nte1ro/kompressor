@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block content %}
-<p class="notice">Preset quality values and QSV settings are experimental starting points, not exact or Netflix-equivalent guarantees. Changes are saved locally. Queued jobs retain their original preset configuration.</p>
+<p class="notice">Preset quality values and QSV settings are experimental starting points, not exact or Netflix-equivalent guarantees. Changes are saved locally and affect new job plans and eligibility. There is no real encoding yet; encoder quality, HDR preservation and resolution changes are stored plans, not executed operations. Queued jobs retain their original preset configuration.</p>
 {% for scope, heading in [('movie', 'Movie presets'), ('show', 'Show presets')] %}
 <details class="preset-section" aria-label="{{ heading }}" open>
   <summary><h2>{{ heading }}</h2><span class="badge">{{ presets | selectattr('scope', 'equalto', scope) | list | length }} presets</span></summary>
@@ -35,7 +35,7 @@
 {% endfor %}
 <section class="card library-settings" aria-labelledby="library-settings-title">
   <h2 id="library-settings-title">Library paths</h2>
-  <p class="muted">Saved locally. In filesystem mode, use Scan library after saving. Leave a root empty to disable it. Scans never modify media.</p>
+  <p class="muted">Saved paths override environment defaults, including empty paths. They apply to the next scan; an active scan keeps its original roots. In filesystem mode, use Scan library after saving. Leave a root empty to disable it. Scans never modify media.</p>
   <form id="library-paths-form" class="field-grid">
     <label class="field">Movies path<input name="movies_path" value="{{ library_paths.movies_path }}" maxlength="500"></label>
     <label class="field">Shows path<input name="shows_path" value="{{ library_paths.shows_path }}" maxlength="500"></label>
@@ -43,6 +43,8 @@
   </form>
 </section>
 <section class="card future-settings"><h2>Library discovery</h2>
+  <p class="muted">Scans run in the background. Movies and Shows update automatically while discovery and probing proceed. Run a single application worker.</p>
+  <p class="muted">Environment configuration requires restart: backend {{ runtime_settings.startup.media_backend or scan_status.backend }}, ffprobe {{ runtime_settings.startup.ffprobe_binary or 'ffprobe' }}, timeout {{ runtime_settings.startup.ffprobe_timeout or 30 }} seconds. These are not editable in this form.</p>
   <p>{{ 'Read-only filesystem inventory · encoding disabled' if scan_status.backend == 'filesystem' else 'Seed library · simulated workers' }}</p>
   {% if scan_status.backend == 'filesystem' %}<button id="scan-library" class="primary">Scan library</button><p id="scan-status" role="status">{{ scan_status.state }}</p><ul id="scan-errors"></ul>{% else %}<p class="muted">Set KOMPRESSOR_MEDIA_BACKEND=filesystem to enable read-only discovery and ffprobe.</p>{% endif %}
 </section>

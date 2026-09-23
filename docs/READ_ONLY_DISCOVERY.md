@@ -23,10 +23,15 @@ SQLite database outside them. Saving paths does not scan, create or move media.
 Use **Settings → Scan library**, or `POST /api/library/scan`, to initiate discovery.
 `GET /api/library/scan` shows the current/last report in this application process.
 
-Scans are explicit, synchronous and serialized within the single application
-process. Each ffprobe invocation has a timeout (`KOMPRESSOR_FFPROBE_TIMEOUT`,
-30 seconds by default). Closing the browser does not cancel a running scan.
-The inventory persists across restarts; the transient scan report resets to idle.
+Scans are explicit and run in a managed background thread. POST returns 202;
+GET reports progress/errors. Movies and Shows update automatically about every
+1.5 seconds without a page reload. Initial discovery publishes batches before
+ffprobe runs; subsequent scans preserve complete-root rename reconciliation.
+Each ffprobe invocation has a timeout (`KOMPRESSOR_FFPROBE_TIMEOUT`, 30 seconds by
+default). Closing the browser does not cancel a running scan. The inventory
+persists in indexed SQLite tables; the transient scan report resets on restart.
+Run one application process. See [inventory storage](INVENTORY_STORAGE.md) for
+atomic batch boundaries, migration and query measurements.
 There is no startup scan or filesystem watcher. A missing ffprobe executable is
 reported per file; discovered files remain visible with unknown technical facts.
 
@@ -107,9 +112,8 @@ DV base-layer compatibility remains unknown; DV, HDR10+, HLG and uncertain HDR
 are not enabled for transcoding. No tone mapping or deinterlacing is performed.
 
 External subtitle discovery, full frame analysis, advanced DV classification and
-hardware capability detection remain out of scope. For large libraries, the
-existing fixture-sized inventory document/projection will need indexed storage;
-this milestone does not redesign reconciliation or persistence.
+hardware capability detection remain out of scope. Inventory now uses indexed schema-v2 storage; complete-root reconciliation remains
+linear in the current records for that root. This does not redesign identity.
 
 ## Validation
 

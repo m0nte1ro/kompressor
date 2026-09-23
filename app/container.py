@@ -33,9 +33,9 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
     db_path = database_path if database_path is not None else config.database_path
     defaults = LibraryPaths(movies_path=str(config.movies_root) if config.movies_root else "",
                             shows_path=str(config.shows_root) if config.shows_root else "")
-    configured_roots(defaults, db_path)
     database = Database(db_path)
     preferences = SQLitePreferencesRepository(database, defaults)
+    configured_roots(preferences.get_library_paths(), db_path)
     inventory_repository = SQLiteInventoryRepository(database)
     reconciliation = ReconciliationService(inventory_repository)
     discovery: LibraryDiscoveryService | None = None
@@ -69,4 +69,6 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
         preferences=preferences,
         inventory=reconciliation,
         discovery=discovery,
+        runtime_settings={"media_backend": "filesystem" if discovery else "seed", "database_path": str(db_path),
+                          "ffprobe_binary": config.ffprobe_binary, "ffprobe_timeout": config.ffprobe_timeout},
     )

@@ -1,4 +1,8 @@
 from typing import cast
+from app.services.library_query import select_library
+from app.models.media import Movie, Episode, Show, Season
+
+TaggedItem = Movie | Episode | Show | Season
 
 from app.services.errors import NotFound
 from app.models.tags import QualityFloor, TagAssignment, TagName, TagTarget, TagUpdate
@@ -11,7 +15,10 @@ class TagService:
         self.repository = repository
 
     def _chain(self, target: TagTarget):
-        library = self.media.get_library()
+        library = select_library(self.media,
+            scope="movie" if target.kind == "movie" else "show",
+            show_id=target.id if target.kind in {"show", "season"} else None,
+            file_id=target.id if target.kind in {"movie", "episode"} else None)
         if target.kind == "movie":
             for movie in library.movies:
                 if movie.id == target.id:
@@ -59,18 +66,39 @@ class TagService:
                 "effective_quality_floor": floor.model_dump() if floor else None,
             }
 
+    def decorate(self, library):
+        """Load assignments once and propagate floors in a single traversal."""
+        chains: list[list[tuple[TagTarget, TaggedItem]]] = []
+        for movie in library.movies:
+            chains.append([(TagTarget(kind="movie", id=movie.id), movie)])
+        for show in library.shows:
+            chain: list[tuple[TagTarget, TaggedItem]] = [(TagTarget(kind="show", id=show.id), show)]
+            chains.append(chain)
+            for season in show.seasons:
+                season_chain = [*chain, (TagTarget(kind="season", id=show.id, season=season.season), season)]
+                chains.append(season_chain)
+                for episode in season.episodes:
+                    chains.append([*season_chain, (TagTarget(kind="episode", id=episode.id), episode)])
+        keys = list(dict.fromkeys(self._key(t, item) for chain in chains for t, item in chain))
+        stored = self.repository.get_many(keys)
+        assignments = {}
+        for chain in chains:
+            for target, item in chain:
+                key = self._key(target, item)
+                assignments.setdefault(key, stored.get(key) or TagAssignment.model_validate({"tags": item.tags}))
+        floors = {}
+        for chain in chains:
+            target, item = chain[-1]
+            item.tags = [str(tag) for tag in assignments[self._key(target, item)].tags]
+            inherited = [assignments[self._key(t, i)].quality_floor for t, i in chain]
+            active = [floor for floor in inherited if floor is not None]
+            if active and target.kind in {"movie", "episode"}:
+                floors[target.id] = QualityFloor(minimum_video_bitrate=max(f.minimum_video_bitrate for f in active),
+                                               minimum_height=max(f.minimum_height for f in active))
+        return library, floors
+
     def library(self):
-        library = self.media.get_library().model_copy(deep=True)
-        with self.repository.transaction():
-            for movie in library.movies:
-                movie.tags = [str(tag) for tag in self.assignment(TagTarget(kind="movie", id=movie.id), movie).tags]
-            for show in library.shows:
-                show.tags = [str(tag) for tag in self.assignment(TagTarget(kind="show", id=show.id), show).tags]
-                for season in show.seasons:
-                    season.tags = [str(tag) for tag in self.assignment(TagTarget(kind="season", id=show.id, season=season.season), season).tags]
-                    for episode in season.episodes:
-                        episode.tags = [str(tag) for tag in self.assignment(TagTarget(kind="episode", id=episode.id), episode).tags]
-        return library
+        return self.decorate(self.media.get_library().model_copy(deep=True))[0]
 
     def update(self, request: TagUpdate) -> list[dict]:
         with self.repository.transaction():

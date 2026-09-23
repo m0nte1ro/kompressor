@@ -31,11 +31,41 @@ are excluded from Git. Tests use isolated databases in temporary directories.
 Set `KOMPRESSOR_MEDIA_BACKEND=filesystem` and configure movie/show roots in Settings
 (or `KOMPRESSOR_MOVIES_ROOT` / `KOMPRESSOR_SHOWS_ROOT` as defaults). Roots default to
 unconfigured. Use **Settings → Scan library** to discover and probe actual files;
-ffprobe must be installed for technical metadata. No media file is modified and
+Scans run in the background and results update automatically without reloading
+the page. ffprobe must be installed for technical metadata. No media file is modified and
 encoding is disabled in this mode. Seed mode still needs no media tools.
 
 See [read-only discovery](docs/READ_ONLY_DISCOVERY.md) for configuration, API
 endpoints, conservative HDR handling and metadata limitations.
+
+## Deploy discovery in an LXC
+
+Use Python 3.12+ and the installation steps above. Install your distribution's
+`ffprobe` package/tool (Debian/Ubuntu normally provides it in the `ffmpeg` package).
+Check `ffprobe -version`; this app invokes ffprobe only, never ffmpeg encoding.
+Give the application user read/traverse access to mounted media and a writable
+application data directory outside the media roots.
+
+```sh
+KOMPRESSOR_MEDIA_BACKEND=filesystem \
+KOMPRESSOR_MOVIES_ROOT=/your/movies \
+KOMPRESSOR_SHOWS_ROOT=/your/shows \
+KOMPRESSOR_FFPROBE_BINARY=/usr/bin/ffprobe \
+.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
+```
+
+Open Settings, verify/save the paths, and click **Scan library**. Navigate to
+Movies/Shows while it runs: names appear first, technical details follow. Saved
+paths override environment defaults, including saved empty paths. Missing
+ffprobe leaves files listed with unknown metadata and reported errors.
+
+Series naming currently requires a series directory and `SxxExx` episode names;
+unsupported names are reported, not resolved through external metadata. This is
+real read-only inventory, not yet real compression. There is no authentication;
+use the intended private homelab network.
+
+See the [full Settings audit](docs/SETTINGS_AUDIT.md) and
+[schema, migration and scale report](docs/INVENTORY_STORAGE.md).
 
 ## Seed workflows
 
@@ -62,16 +92,16 @@ endpoints, conservative HDR handling and metadata limitations.
   from the seed JSON once. Subsequent startups do not overwrite user edits.
   Preset details are collapsed by default. The Settings page also persists the
   Movies and Shows library paths in SQLite; these paths are currently stored for
-  the future scanner and do not trigger a scan yet.
+  the filesystem scanner; saving alone does not trigger a scan.
   Built-in display names are user-owned: Just convert to HEVC, Tone it down a bit
-  - HEVC, and Tone it down a bit + HEVC + Efficient Audio. Intent is stored
-    separately from those names. All preserve source resolution.
-    Existing jobs keep a complete preset snapshot, even if that preset is later
-    edited, moved to another scope or disabled. Disable affects new submissions.
-    The catalogue upgrade inserts missing current presets and disables untouched
-    legacy defaults once; user edits and queued snapshots are preserved. Legacy
-    custom presets retain explicit source applicability rules, while target
-    resolution is configured separately.
+  + HEVC, and Tone it down a bit + HEVC + Efficient Audio. Intent is stored
+  separately from those names. All preserve source resolution. Existing jobs keep
+  a complete preset snapshot, even if that preset is later edited, moved to
+  another scope or disabled. Disable affects new submissions. The catalogue
+  upgrade inserts missing current presets and disables untouched legacy defaults
+  once; user edits and queued snapshots are preserved. Legacy custom presets
+  retain explicit source applicability rules, while target resolution is
+  configured separately.
 - Movies and episodes have Manage tags; episode pages also expose series and
   season tags. Select multiple rows to add/remove tags without replacing unrelated
   direct tags. The editor shows direct tags, inherited tags and their origin.
@@ -118,9 +148,9 @@ An active fake job also becomes blocked if protection or audio requirements
 change. Before every fake worker tick, policies are rechecked against current
 media/tags and the job's preset snapshot.
 
-Tag targets currently use stable seed IDs in a seed namespace. A future scanner
-must define its own stable identity and explicit reconciliation/migration before
-applying these assignments to real files. Changing a path must not guess identity.
+Seed tags retain their seed IDs. Filesystem rows use persistent file IDs, with
+tag assignments owned by semantic media identity; reconciliation preserves
+identity across supported renames. Seed IDs are not automatically migrated.
 
 ## Architecture
 
@@ -146,7 +176,7 @@ Real execution must run outside HTTP requests and scheduler transactions. There 
 or ffmpeg dependencies. Only the optional filesystem backend invokes ffprobe.
 
 SQLite uses the Python standard library with parameterized statements and
-transactions shared by repositories. Schema version 1 is recorded with
+transactions shared by repositories. Schema version 2 is recorded with
 `PRAGMA user_version`; unknown future versions fail explicitly. `create_app`
 accepts an isolated database path and media repository for tests. The fake queue
 repository remains available for in-memory simulations, but is not the app's

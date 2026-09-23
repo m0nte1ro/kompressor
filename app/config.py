@@ -25,12 +25,12 @@ class Settings(BaseSettings):
 
     app_name: str = "Kompressor"
 
-    development_mode: bool = True
+    development_mode: bool = Field(default=True, deprecated="Unused compatibility flag; select media_backend instead.")
 
     media_backend: Literal["seed", "filesystem"] = "seed"
     movies_root: Path | None = None
     shows_root: Path | None = None
-    ffprobe_binary: str = "ffprobe"
+    ffprobe_binary: str = Field(default="ffprobe", min_length=1)
     ffprobe_timeout: float = Field(default=30, gt=0, le=600)
 
     database_path: Path = PROJECT_ROOT / "data" / "kompressor.sqlite3"

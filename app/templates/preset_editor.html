@@ -10,7 +10,7 @@
         <label class="field">Backend<select name="backend"><option value="cpu">CPU · x265</option><option value="qsv">Intel QSV</option></select></label>
         <label class="field">Destination codec<select name="destination_codec"><option value="hevc">HEVC</option><option value="av1" disabled>AV1 · unavailable</option></select></label>
         <label class="field">HDR input support<select name="hdr_support"><option value="hdr10_experimental">SDR + HDR10 · experimental pipeline</option><option value="sdr_only">SDR sources only</option></select><small>Controls which HDR inputs are accepted. Dolby Vision remains blocked.</small></label>
-        <label class="field">HDR output policy<select name="hdr_policy"><option value="preserve_source">Preserve source HDR mode</option><option value="tone_map_to_sdr">Tone map HDR to SDR · custom only</option></select><small>Default presets never tone map. HDR10 remains HDR10.</small></label>
+        <label class="field">HDR output policy<select name="hdr_policy"><option value="preserve_source">Preserve source HDR mode</option><option value="tone_map_to_sdr">Tone map HDR to SDR · unavailable</option></select><small>Tone mapping is not implemented and is blocked. HDR settings describe future output requirements.</small></label>
         <label class="field">Rate control<select name="rate_control"><option value="crf">CRF · CPU quality</option><option value="icq">ICQ · QSV quality</option><option value="abr">ABR · target bitrate</option></select></label>
         <label class="field" id="quality-value-field"><span id="quality-value-label">Quality value</span><div class="quality-range"><input name="quality_value" type="number" min="0" max="51" step="0.1"><output id="quality-value-output" for="quality_value" hidden></output></div></label>
         <label class="field" id="encoder-effort-field">Encoder effort<select name="encoder_preset"><option value="fast">Fast</option><option value="medium">Medium</option><option value="slow">Slow</option><option value="slower">Slower</option></select></label>
@@ -32,7 +32,7 @@
         </div>
       </details>
       <label class="check"><input name="enabled" type="checkbox"> Enabled</label>
-      <label class="check"><input name="preserve_hdr_metadata" type="checkbox"> Preserve HDR metadata <small>Preserves and validates HDR10 signalling when HDR10 input is allowed; not applicable to SDR-only input or tone-mapped output.</small></label>
+      <label class="check"><input name="preserve_hdr_metadata" type="checkbox"> Preserve HDR metadata <small>Requests preservation and validation in a future encoder when HDR10 input is allowed; not applicable to SDR-only input or tone-mapped output.</small></label>
       <label class="check"><input name="allow_hevc_reencode" type="checkbox"> Allow HEVC reencode</label>
       <p id="preset-error" class="error" role="alert" hidden></p>
     </div>
