@@ -3,7 +3,7 @@ export const $$ = (selector, root = document) => [...root.querySelectorAll(selec
 export const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
 })[char]);
-export const size = value => value == null ? '—' : `${(value / 1e9).toFixed(1)} GB`;
+export const size = value => value == null ? '—' : `${(value / (1024 ** 3)).toFixed(1)} GiB`;
 export const bitrate = value => value == null ? '—' : `${(value / 1e6).toFixed(1)} Mbps`;
 export const label = value => ({cpu: 'CPU · x265', qsv: 'Intel QSV', hevc: 'HEVC', h264: 'H.264',
   preserve: 'Preserve source', keep: 'Keep source resolution', efficient: 'Efficient E-AC3 / AAC',
