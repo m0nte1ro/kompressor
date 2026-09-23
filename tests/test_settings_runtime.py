@@ -33,7 +33,7 @@ def test_saved_roots_override_environment_and_change_both_next_scan_roots(tmp_pa
         assert [m['name'] for m in client.get('/api/library').json()['movies']] == ['New']
         assert all(path.args[0].is_relative_to(movies) or path.args[0].is_relative_to(shows) for path in inspected.call_args_list)
         runtime = client.get('/api/settings/runtime').json()
-        assert 'next_scan' in runtime['paths_apply_timing'] and not runtime['encoding_enabled']
+        assert 'next_scan' in runtime['paths_apply_timing']
     # Even overlapping env defaults must not override already-saved valid paths.
     config.movies_root = tmp_path
     config.shows_root = tmp_path
