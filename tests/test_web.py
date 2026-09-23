@@ -85,3 +85,12 @@ def test_not_found_and_home(client):
 
 def test_size_uses_binary_units():
     assert size(81_093_483_589) == "75.5 GiB"
+
+
+def test_blocked_media_still_shows_saving_estimate(client):
+    html = client.get("/movies").text
+    start = html.index('data-id="movie-dune-part-two"')
+    row = html[start:html.index("</tr>", start)]
+    assert "Blocked" in row
+    assert "Planning range" in row
+    assert "Estimate unavailable" not in row
