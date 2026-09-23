@@ -4,7 +4,7 @@ SCHEMA = [
     '''CREATE TABLE observations (
         observation_id TEXT PRIMARY KEY, root_id TEXT NOT NULL, relative_path TEXT NOT NULL,
         media_id TEXT NOT NULL REFERENCES media_items(media_id), scope TEXT NOT NULL,
-        filesystem_id TEXT, inode INTEGER, generation TEXT, size INTEGER NOT NULL CHECK(size>=0),
+        filesystem_id TEXT, inode TEXT, generation TEXT, size INTEGER NOT NULL CHECK(size>=0),
         mtime_ns INTEGER NOT NULL, ctime_ns INTEGER, hardlinks INTEGER,
         fingerprints TEXT NOT NULL, container TEXT, container_bitrate INTEGER, duration_seconds REAL, probe_metadata TEXT)''',
     '''CREATE TABLE library_files (
