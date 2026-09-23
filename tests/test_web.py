@@ -89,11 +89,20 @@ def test_size_uses_binary_units():
 
 def test_blocked_media_still_shows_saving_estimate(client):
     html = client.get("/movies").text
-    start = html.index('data-id="movie-dune-part-two"')
+    start = html.index('data-id="movie-hardlinked-example"')
     row = html[start:html.index("</tr>", start)]
     assert "Blocked" in row
     assert "Planning range" in row
     assert "Estimate unavailable" not in row
+
+
+def test_preserve_av_row_does_not_show_saving_estimate(client):
+    html = client.get("/movies").text
+    start = html.index('data-id="movie-dune-part-two"')
+    row = html[start:html.index("</tr>", start)]
+    assert "Preserve A/V" in row
+    assert "Estimate unavailable" in row
+    assert "Planning range" not in row
 
 
 def test_summary_includes_blocked_media_estimates(client):
