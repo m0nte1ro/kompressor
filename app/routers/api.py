@@ -20,8 +20,8 @@ class EligibilityRequest(BaseModel):
 
 
 @router.get("/healthz")
-def healthz():
-    return {"status": "ok", "app": settings.app_name, "media_backend": settings.media_backend}
+def healthz(processor: Processor):
+    return {"status": "ok", "app": settings.app_name, "media_backend": processor.get_scan_status()["backend"]}
 
 
 @router.get("/api/library")
@@ -52,3 +52,13 @@ def update_settings(processor: Processor, payload: LibraryPaths):
 @router.post("/api/eligibility")
 def evaluate_eligibility(processor: Processor, payload: EligibilityRequest):
     return processor.evaluate_compression(**payload.model_dump())
+
+
+@router.post("/api/library/scan")
+def scan_library(processor: Processor):
+    return processor.refresh_library()
+
+
+@router.get("/api/library/scan")
+def scan_status(processor: Processor):
+    return processor.get_scan_status()

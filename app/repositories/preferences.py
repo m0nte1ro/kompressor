@@ -8,8 +8,9 @@ PREFERENCES_ID = "library_paths"
 
 
 class SQLitePreferencesRepository:
-    def __init__(self, database: Database):
+    def __init__(self, database: Database, defaults: LibraryPaths | None = None):
         self.database = database
+        self.defaults = defaults or LibraryPaths()
 
     def get_library_paths(self) -> LibraryPaths:
         with self.database.transaction() as connection:
@@ -18,7 +19,7 @@ class SQLitePreferencesRepository:
                 (PREFERENCES_ID,),
             ).fetchone()
             if row is None:
-                return LibraryPaths()
+                return self.defaults.model_copy()
             return LibraryPaths.model_validate_json(row[0])
 
     def save_library_paths(self, paths: LibraryPaths) -> LibraryPaths:

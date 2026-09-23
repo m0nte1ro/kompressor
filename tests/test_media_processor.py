@@ -187,6 +187,7 @@ def test_fake_discovery_contracts_do_not_touch_media():
     assert isinstance(processor.scanner, MediaScanner)
     library = processor.scan_library()
     source = library.movies[1]
+    assert processor.probe is not None
     probed = cast(Movie, processor.probe.inspect(source.path))
     assert probed == source and probed is not source
     probed.name = 'Changed locally'

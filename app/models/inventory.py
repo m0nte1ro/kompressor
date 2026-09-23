@@ -37,6 +37,7 @@ class FileObservation(BaseModel):
     generation: str | None = None
     size: int = Field(ge=0)
     mtime_ns: int = Field(ge=0)
+    ctime_ns: int | None = Field(default=None, ge=0)
     hardlinks: int | None = Field(default=None, ge=1)
     fingerprints: Fingerprints = Field(default_factory=Fingerprints)
     probe: MediaProbeResult | None = None

@@ -1,5 +1,9 @@
 # Fixture reconciliation
 
+This document describes the completed fixture milestone. Its read-only filesystem
+and ffprobe follow-up is documented in [READ_ONLY_DISCOVERY.md](READ_ONLY_DISCOVERY.md);
+that follow-up adds a scan endpoint while retaining the reconciliation model below.
+
 This milestone adds a persistent reconciliation sandbox behind
 `MediaProcessor.reconcile_library(snapshot)`. It consumes supplied observations;
 it never walks/stat()s `/media`, computes hashes, invokes ffprobe, or encodes a

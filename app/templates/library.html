@@ -55,13 +55,17 @@
           <td><input type="checkbox" class="media-select" aria-label="Select {{ row.entry.name }}"></td>
           <th scope="row" class="media-name">
             {% if scope == 'movie' %}{{ item.name }}{% else %}<span class="episode-code">S{{ '%02d' | format(item.season) }}E{{ '%02d' | format(item.episode) }}</span> {{ item.title or 'Untitled' }}{% endif %}
+            {% if item.probe %}<details><summary>Technical metadata</summary>
+              <small>Container: {{ item.probe.container }} · Duration: {{ item.probe.duration_seconds if item.probe.duration_seconds is not none else 'Unknown' }} s · Chapters: {{ item.probe.chapters | length }}</small>
+              {% for stream in item.probe.streams %}<small>#{{ stream.index }} {{ stream.kind }} · {{ stream.codec }}{% if stream.kind == 'video' %} · {{ stream.scan_type }} · {{ stream.frame_rate or 'Unknown' }} fps · {{ stream.hdr.bit_depth if stream.hdr and stream.hdr.bit_depth else 'Unknown' }} bit · {{ item.hdr | label }}{% endif %}{% if stream.language %} · {{ stream.language }}{% endif %}{% if stream.title %} · {{ stream.title }}{% endif %}{% if stream.dispositions.get('forced') %} · Forced{% endif %}{% if stream.dispositions.get('default') %} · Default{% endif %}</small>{% endfor %}
+            </details>{% endif %}
             <small>{{ row.preset.name if row.preset else 'No enabled preset' }}</small><span class="job-state"></span>
           </th>
           {% if scope == 'movie' %}<td>{{ item.year or '—' }}</td><td>{{ item.source or '—' }}</td>{% endif %}
           <td><span class="badge">{{ item.resolution }}</span></td><td>{{ item.video_codec | label }}</td>
           {% if scope == 'movie' %}<td><span class="{{ 'hdr' if item.hdr else 'muted' }}">{{ item.hdr | label }}</span></td>{% endif %}
           <td class="numeric">{{ item.video_bitrate | bitrate }}</td><td class="numeric">{{ item.size | size }}</td>
-          <td class="audio">{% for track in item.audio %}<span>{{ track.codec | label }} · {{ track.channels }} ch{% if track.language %} · {{ track.language }}{% endif %}</span>{% else %}—{% endfor %}</td>
+          <td class="audio">{% for track in item.audio %}<span>{{ track.codec | label }} · {{ track.channels if track.channels is not none else 'Unknown' }} ch{% if track.language %} · {{ track.language }}{% endif %}</span>{% else %}—{% endfor %}</td>
           <td class="policy">
             <div class="badges">{% for tag in row.entry.tags %}<span class="badge violet">{{ tag }}</span>{% endfor %}
               {% if not result.eligible %}<span class="badge red">Blocked</span>{% else %}<span class="badge green">Eligible</span>{% endif %}
@@ -72,7 +76,7 @@
           <td class="saving numeric">{% if result.eligible %}{% if result.estimate_basis == 'planning_range' %}{{ result.estimated_saving_low | size }}–{{ result.estimated_saving_high | size }}<small>Planning range</small>{% else %}~{{ result.estimated_saving | size }}<small>{{ '%.0f' | format(result.estimated_saving_percent) }}%</small>{% endif %}{% else %}—{% endif %}</td>
           <td class="row-action"><button data-action="compress" aria-label="Review compression for {{ row.entry.name }}">{{ 'Compress' if result.eligible else 'Review' }}</button></td>
         </tr>
-        {% else %}<tr><td colspan="{{ 13 if scope == 'movie' else 10 }}" class="empty">No media in this seed library.</td></tr>{% endfor %}
+        {% else %}<tr><td colspan="{{ 13 if scope == 'movie' else 10 }}" class="empty">No media in this library.</td></tr>{% endfor %}
       </tbody>
     </table>
     <p id="no-results" class="empty" hidden>No items match these filters.</p>

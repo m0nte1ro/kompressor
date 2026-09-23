@@ -1,0 +1,17 @@
+{
+  "format": {"format_name": "matroska,webm", "duration": "120.5", "bit_rate": "12345678", "tags": {"title": "Fixture film"}},
+  "streams": [
+    {"index": 0, "codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080,
+     "pix_fmt": "yuv420p", "field_order": "progressive", "avg_frame_rate": "24000/1001", "bit_rate": "12000000",
+     "color_primaries": "bt709", "color_transfer": "bt709", "color_space": "bt709"},
+    {"index": 1, "codec_type": "audio", "codec_name": "dts", "channels": 6, "channel_layout": "5.1(side)",
+     "sample_rate": "48000", "bit_rate": "1500000", "tags": {"language": "eng", "title": "Original"}, "disposition": {"default": 1}},
+    {"index": 2, "codec_type": "audio", "codec_name": "aac", "channels": 2, "channel_layout": "stereo", "sample_rate": "48000",
+     "tags": {"language": "por", "title": "Commentary"}, "disposition": {"comment": 1, "default": 0}},
+    {"index": 3, "codec_type": "subtitle", "codec_name": "subrip", "tags": {"language": "eng"}, "disposition": {"forced": 1}},
+    {"index": 4, "codec_type": "subtitle", "codec_name": "ass", "tags": {"language": "por"}},
+    {"index": 5, "codec_type": "attachment", "codec_name": "ttf", "tags": {"filename": "font.ttf", "mimetype": "application/x-truetype-font"}}
+  ],
+  "chapters": [{"id": 1, "start_time": "0.0", "end_time": "120.5", "tags": {"title": "Chapter one"}}],
+  "frames": [{"stream_index": 0, "interlaced_frame": 0, "top_field_first": 0}]
+}

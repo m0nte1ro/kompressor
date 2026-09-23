@@ -1,7 +1,12 @@
-"""The only composition root: seed discovery, SQLite state and fake execution."""
+"""Central adapter selection: seed simulation or read-only filesystem discovery."""
 from pathlib import Path
 
 from app.config import Settings
+from app.models.preferences import LibraryPaths
+from app.repositories.filesystem_media import FilesystemMediaRepository
+from app.services.filesystem_scanner import FilesystemScanner
+from app.services.ffprobe import FFprobeService
+from app.services.library_discovery import LibraryDiscoveryService, configured_roots
 from app.models.preset import CompressionPreset
 from app.repositories.base import MediaRepository
 from app.repositories.database import Database
@@ -25,15 +30,29 @@ from app.services.presets import PresetService
 def build_media_processor(config: Settings, database_path: Path | None = None, *,
                           media: MediaRepository | None = None,
                           initial_presets: list[CompressionPreset] | None = None) -> MediaProcessor:
-    if media is None and config.media_backend != "seed":
-        raise ValueError("Only the seed media backend is implemented.")
-    database = Database(database_path if database_path is not None else config.database_path)
-    media_repository = media if media is not None else SeedMediaRepository(config.seed_media_path)
+    db_path = database_path if database_path is not None else config.database_path
+    defaults = LibraryPaths(movies_path=str(config.movies_root) if config.movies_root else "",
+                            shows_path=str(config.shows_root) if config.shows_root else "")
+    configured_roots(defaults, db_path)
+    database = Database(db_path)
+    preferences = SQLitePreferencesRepository(database, defaults)
+    inventory_repository = SQLiteInventoryRepository(database)
+    reconciliation = ReconciliationService(inventory_repository)
+    discovery: LibraryDiscoveryService | None = None
+    media_repository: MediaRepository
+    if config.media_backend == "filesystem" and media is None:
+        def roots() -> dict[str, Path]:
+            return configured_roots(preferences.get_library_paths(), db_path)
+        roots()
+        media_repository = FilesystemMediaRepository(inventory_repository, roots)
+        discovery = LibraryDiscoveryService(FilesystemScanner(),
+            FFprobeService(config.ffprobe_binary, config.ffprobe_timeout), reconciliation, roots, db_path)
+    else:
+        media_repository = media if media is not None else SeedMediaRepository(config.seed_media_path)
     presets = SQLitePresetRepository(
         database,
         initial_presets if initial_presets is not None else SeedPresetRepository(config.seed_presets_path).get_all(),
     )
-    preferences = SQLitePreferencesRepository(database)
     if initial_presets is None:
         from app.repositories.preset_migration import upgrade_streaming_presets
         upgrade_streaming_presets(database, SeedPresetRepository(config.seed_presets_path).get_all())
@@ -45,8 +64,9 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
         catalog,
         PresetService(presets, database.transaction),
         queue,
-        FakeMediaScanner(media_repository),
-        FakeProbeService(media_repository),
+        FakeMediaScanner(media_repository) if discovery is None else None,
+        FakeProbeService(media_repository) if discovery is None else None,
         preferences=preferences,
-        inventory=ReconciliationService(SQLiteInventoryRepository(database)),
+        inventory=reconciliation,
+        discovery=discovery,
     )

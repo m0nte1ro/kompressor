@@ -26,6 +26,17 @@ writable location. The database is created on first startup, not on import.
 Stop the application before copying the database for a backup. Local databases
 are excluded from Git. Tests use isolated databases in temporary directories.
 
+## Read-only real library
+
+Set `KOMPRESSOR_MEDIA_BACKEND=filesystem` and configure movie/show roots in Settings
+(or `KOMPRESSOR_MOVIES_ROOT` / `KOMPRESSOR_SHOWS_ROOT` as defaults). Roots default to
+unconfigured. Use **Settings → Scan library** to discover and probe actual files;
+ffprobe must be installed for technical metadata. No media file is modified and
+encoding is disabled in this mode. Seed mode still needs no media tools.
+
+See [read-only discovery](docs/READ_ONLY_DISCOVERY.md) for configuration, API
+endpoints, conservative HDR handling and metadata limitations.
+
 ## Seed workflows
 
 - Movies and Shows display the existing JSON inventory. Episode tables are flat,
@@ -131,8 +142,8 @@ Repository, scanner, probe and encoder protocols provide the adapter boundaries.
 `FakeEncoder` implements encode/progress/stop without touching files; the fake
 worker supplies the existing clock and validation simulation. A future
 `FFmpegEncoder` owns encoder/process details, while `FFprobeService` owns probing.
-Real execution must run outside HTTP requests and scheduler transactions. There are no development-mode branches, authentication,
-media scans, hardware checks or ffmpeg dependencies.
+Real execution must run outside HTTP requests and scheduler transactions. There are no scattered development-mode branches, authentication, hardware checks
+or ffmpeg dependencies. Only the optional filesystem backend invokes ffprobe.
 
 SQLite uses the Python standard library with parameterized statements and
 transactions shared by repositories. Schema version 1 is recorded with

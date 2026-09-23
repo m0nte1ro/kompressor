@@ -61,6 +61,8 @@ class StreamFacts(BaseModel):
     height: int | None = Field(default=None, gt=0)
     resolution_class: int | None = Field(default=None, gt=0)
     scan_type: Literal["progressive", "interlaced", "mixed", "unknown"] = "unknown"
+    frame_rate: str | None = None
+    pixel_format: str | None = None
     field_order: Literal["top_first", "bottom_first", "unknown"] = "unknown"
     hdr: HDRSignalling | None = None
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
@@ -75,7 +77,8 @@ class ChapterFacts(BaseModel):
 class MediaProbeResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     container: str
-    duration_seconds: float = Field(gt=0)
+    container_bitrate: int | None = Field(default=None, gt=0)
+    duration_seconds: float | None = Field(default=None, gt=0)
     streams: list[StreamFacts] = Field(default_factory=list)
     chapters: list[ChapterFacts] = Field(default_factory=list)
     metadata: dict[str, JsonValue] = Field(default_factory=dict)

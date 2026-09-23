@@ -31,8 +31,16 @@ class TagService:
                         return [*season_chain, (target, episode, f"{show.name} · S{episode.season:02}E{episode.episode:02}")]
         raise NotFound("Tag target not found.")
 
+    @staticmethod
+    def _key(target: TagTarget, item) -> str:
+        media_id = getattr(item, "media_id", None)
+        if media_id:
+            logical = target.model_copy(update={"id": media_id})
+            return "filesystem:" + logical.model_dump_json()
+        return target.key()
+
     def assignment(self, target: TagTarget, item) -> TagAssignment:
-        return self.repository.get(target.key()) or TagAssignment(tags=item.tags)
+        return self.repository.get(self._key(target, item)) or TagAssignment(tags=item.tags)
 
     def describe(self, target: TagTarget) -> dict:
         with self.repository.transaction():
@@ -79,5 +87,5 @@ class TagService:
                 else:
                     tags = [tag for tag in current.tags if tag not in request.tags]
                     floor = current.quality_floor if "Quality Floor" in tags else None
-                self.repository.save(target.key(), TagAssignment(tags=list(cast(list[TagName], tags)), quality_floor=floor))
+                self.repository.save(self._key(target, item), TagAssignment(tags=list(cast(list[TagName], tags)), quality_floor=floor))
             return [self.describe(target) for target, _ in resolved]

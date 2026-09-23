@@ -10,7 +10,7 @@ def test_restart_preserves_preferences_queue_order_and_history(tmp_path, legacy_
     path = tmp_path / "state.sqlite3"
     app = create_app(path, start_workers=False, initial_presets=legacy_defaults)
     with TestClient(app) as client:
-        assert client.get("/api/settings").json() == {"movies_path": "/media/movies", "shows_path": "/media/shows"}
+        assert client.get("/api/settings").json() == {"movies_path": "", "shows_path": ""}
         assert client.put("/api/settings", json={
             "movies_path": "/srv/media/movies",
             "shows_path": "/srv/media/shows",

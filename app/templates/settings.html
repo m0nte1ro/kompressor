@@ -35,14 +35,17 @@
 {% endfor %}
 <section class="card library-settings" aria-labelledby="library-settings-title">
   <h2 id="library-settings-title">Library paths</h2>
-  <p class="muted">Saved locally for the future media scanner. Changing these values does not scan or move media yet.</p>
+  <p class="muted">Saved locally. In filesystem mode, use Scan library after saving. Leave a root empty to disable it. Scans never modify media.</p>
   <form id="library-paths-form" class="field-grid">
-    <label class="field">Movies path<input name="movies_path" value="{{ library_paths.movies_path }}" required maxlength="500"></label>
-    <label class="field">Shows path<input name="shows_path" value="{{ library_paths.shows_path }}" required maxlength="500"></label>
+    <label class="field">Movies path<input name="movies_path" value="{{ library_paths.movies_path }}" maxlength="500"></label>
+    <label class="field">Shows path<input name="shows_path" value="{{ library_paths.shows_path }}" maxlength="500"></label>
     <div class="settings-actions"><button type="submit" class="primary">Save library paths</button><span id="library-paths-status" class="muted" role="status"></span></div>
   </form>
 </section>
-<section class="card future-settings"><h2>Workers & library</h2><p>Seed media repository · one simulated CPU worker · one simulated QSV worker.</p><p class="muted">Scanning and production worker configuration will arrive with the production adapters. AV1 is unavailable in this workflow.</p></section>
+<section class="card future-settings"><h2>Library discovery</h2>
+  <p>{{ 'Read-only filesystem inventory · encoding disabled' if scan_status.backend == 'filesystem' else 'Seed library · simulated workers' }}</p>
+  {% if scan_status.backend == 'filesystem' %}<button id="scan-library" class="primary">Scan library</button><p id="scan-status" role="status">{{ scan_status.state }}</p><ul id="scan-errors"></ul>{% else %}<p class="muted">Set KOMPRESSOR_MEDIA_BACKEND=filesystem to enable read-only discovery and ffprobe.</p>{% endif %}
+</section>
 {% endblock %}
 
 {% block dialogs %}{% include 'preset_editor.html' %}{% endblock %}

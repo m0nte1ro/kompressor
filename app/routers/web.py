@@ -16,7 +16,9 @@ def size(value: int | None) -> str:
     return f"{value / 1_000_000_000:.1f} GB"
 
 
-def bitrate(value: int) -> str:
+def bitrate(value: int | None) -> str:
+    if value is None:
+        return "—"
     return f"{value / 1_000_000:g} Mbps"
 
 
@@ -27,7 +29,7 @@ def label(value: str | None) -> str:
               "max_1080p": "Max 1080p", "max_720p": "Max 720p", "max_576p": "Max 576p",
               "max_480p": "Max 480p", "sdr_only": "SDR sources only",
               "hdr10_experimental": "SDR + HDR10 · experimental", "preserve_source": "Preserve source HDR mode",
-              "tone_map_to_sdr": "Tone map HDR to SDR", "hdr10": "HDR10",
+              "tone_map_to_sdr": "Tone map HDR to SDR", "hdr10": "HDR10", "hdr10plus": "HDR10+", "unknown": "Unknown", "hlg": "HLG",
               "dolby_vision": "Dolby Vision", "dolby_vision_hdr10": "DV + HDR10"}
     return labels.get(value or "", (value or "SDR").replace("_", " ").upper())
 
@@ -82,4 +84,4 @@ def history(request: Request):
 def settings(request: Request, processor: Processor):
     return render(request, "settings.html", "settings", "Settings",
                   subtitle="Presets and persistent library preferences",
-                  presets=processor.get_presets(), library_paths=processor.get_library_paths())
+                  presets=processor.get_presets(), library_paths=processor.get_library_paths(), scan_status=processor.get_scan_status())

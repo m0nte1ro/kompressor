@@ -52,6 +52,18 @@ Movies are treated significantly more conservatively than TV shows.
 
 ---
 
+## Read-only discovery milestone
+
+The optional `filesystem` backend now discovers video files recursively and uses
+`FFprobeService` to normalize real technical metadata. MediaProcessor delegates
+scan → probe → reconciliation to LibraryDiscoveryService; the existing library
+views read a projection of that reconciled inventory. Seed mode remains the
+default. Roots have no production defaults and can be configured through settings.
+Scans are explicit and read-only; filesystem mode cannot enqueue encoding jobs.
+No encoding, replacement, hashing or reconciliation redesign is included.
+See [READ_ONLY_DISCOVERY.md](READ_ONLY_DISCOVERY.md) for configuration, endpoints,
+probe limitations, naming assumptions and verification details.
+
 ## Fixture reconciliation milestone
 
 A separate reconciliation inventory now models persistent logical `file_id`

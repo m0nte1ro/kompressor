@@ -165,7 +165,7 @@ export function compressionModal(scope, refreshQueue) {
       $('#source-summary').innerHTML = rows.map(row => {
         const item = items.find(i => i.id === row.dataset.id);
         if (!item) return `<p>${esc(row.dataset.name)} · Source no longer available</p>`;
-        const audio = item.audio.map(a => `${label(a.codec)} ${a.channels} ch${a.language ? ` · ${a.language}` : ''}`).join(' / ') || 'No audio';
+        const audio = item.audio.map(a => `${label(a.codec)} ${a.channels ?? 'Unknown'} ch${a.language ? ` · ${a.language}` : ''}`).join(' / ') || 'No audio';
         return `<div class="source-item"><strong>${esc(row.dataset.name)}</strong><p class="muted">${esc([item.source, item.resolution, label(item.video_codec), bitrate(item.video_bitrate), size(item.size), label(item.hdr), audio].filter(Boolean).join(' · '))}</p></div>`;
       }).join('');
       await evaluate();

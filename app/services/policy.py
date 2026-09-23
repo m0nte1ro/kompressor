@@ -28,11 +28,24 @@ class PolicyEngine:
     ) -> EligibilityResult:
         reasons: list[str] = []
         warnings: list[str] = []
+        if not item.processing_supported:
+            reasons.append("Read-only filesystem inventory: encoding is not enabled.")
+        if item.hdr in {"hdr10plus", "hlg", "unknown"}:
+            reasons.append("HDR signalling is unsupported or uncertain; transcoding is blocked.")
+        if item.probe:
+            for stream in item.probe.streams:
+                if stream.kind == "video" and stream.hdr and stream.hdr.classify().base != "sdr" and stream.hdr.classify().uncertain:
+                    reasons.append("Dynamic HDR metadata is uncertain; transcoding is blocked.")
+                    break
+        if item.duration_seconds is None:
+            reasons.append("Source duration is unknown.")
+        if item.interlaced is None:
+            reasons.append("Source scan type is unknown.")
         if spatial_resolution(item) not in preset.source_resolutions:
             reasons.append("Source resolution is not supported by this preset. Configure explicit applicability.")
         if item.hdr and preset.hdr_support == "sdr_only":
             reasons.append("This preset supports SDR sources only.")
-        elif item.hdr:
+        elif item.hdr == "hdr10":
             warnings.append("HDR10 pipeline is experimental and must be validated on actual output.")
         if preset.hdr_policy == "tone_map_to_sdr":
             reasons.append("HDR to SDR tone mapping is not implemented in this workflow.")
@@ -47,6 +60,8 @@ class PolicyEngine:
         if "Quality Floor" in effective_tags:
             if quality_floor is None:
                 reasons.append("Quality Floor requires configured bitrate and resolution limits.")
+            elif item.height is None:
+                reasons.append("Source resolution is unknown; Quality Floor cannot be checked.")
             else:
                 height = min(item.height, {
                     "max_480p": 480,
@@ -75,7 +90,9 @@ class PolicyEngine:
                 "Preset is disabled."
             )
 
-        if item.hardlinks > 1:
+        if item.hardlinks is None:
+            reasons.append("Source hardlink count is unknown.")
+        elif item.hardlinks > 1:
             reasons.append(
                 "File is hardlinked / may still be seeding."
             )
@@ -92,6 +109,7 @@ class PolicyEngine:
 
         if (
             scope == "movie"
+            and item.height is not None
             and item.height >= 2160
             and isinstance(item, Movie)
             and item.source
@@ -111,7 +129,7 @@ class PolicyEngine:
 
         if item.interlaced:
             reasons.append(
-                "Interlaced source requires deinterlacing, which is not currently supported."
+                "Interlaced source requires deinterlacing; no validated pipeline is enabled"
             )
 
         if (
@@ -126,7 +144,9 @@ class PolicyEngine:
                 "Preset does not allow HEVC recompression."
             )
 
-        if (
+        if item.video_bitrate is None:
+            reasons.append("Source video bitrate is unknown.")
+        elif (
             item.video_bitrate
             < preset.minimum_source_bitrate
         ):
@@ -153,7 +173,7 @@ class PolicyEngine:
         saving_percent = estimates["estimated_saving_percent"]
         if saving_percent is None:
             saving_percent = estimates["planning_saving_percent"]
-        if saving_percent < preset.minimum_expected_saving_percent:
+        if saving_percent is not None and saving_percent < preset.minimum_expected_saving_percent:
             if preset.rate_control == "abr":
                 reasons.append("Estimated saving is below preset minimum.")
             else:

@@ -1,4 +1,6 @@
 from pathlib import Path
+from typing import Literal
+from pydantic import Field
 
 from pydantic_settings import (
     BaseSettings,
@@ -25,7 +27,11 @@ class Settings(BaseSettings):
 
     development_mode: bool = True
 
-    media_backend: str = "seed"
+    media_backend: Literal["seed", "filesystem"] = "seed"
+    movies_root: Path | None = None
+    shows_root: Path | None = None
+    ffprobe_binary: str = "ffprobe"
+    ffprobe_timeout: float = Field(default=30, gt=0, le=600)
 
     database_path: Path = PROJECT_ROOT / "data" / "kompressor.sqlite3"
 

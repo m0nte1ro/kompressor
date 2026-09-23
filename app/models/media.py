@@ -3,11 +3,15 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from app.models.probe import MediaProbeResult
 
 
 MediaScope = Literal["movie", "show"]
 HDRType = Literal[
     "hdr10",
+    "hdr10plus",
+    "hlg",
+    "unknown",
     "dolby_vision",
     "dolby_vision_hdr10",
 ]
@@ -15,13 +19,20 @@ HDRType = Literal[
 
 class AudioTrack(BaseModel):
     codec: str
-    channels: int
+    channels: int | None
     bitrate: int | None = None
     language: str | None = None
     title: str | None = None
+    stream_index: int | None = None
+    channel_layout: str | None = None
+    dispositions: dict[str, bool] = Field(default_factory=dict)
 
 
 class Movie(BaseModel):
+    media_id: str | None = None
+    revision_id: str | None = None
+    processing_supported: bool = True
+    probe: MediaProbeResult | None = None
     id: str
     name: str
     year: int | None = None
@@ -29,17 +40,17 @@ class Movie(BaseModel):
 
     source: str | None = None
 
-    width: int
-    height: int
+    width: int | None
+    height: int | None
     resolution: str
 
     video_codec: str
-    video_bitrate: int
+    video_bitrate: int | None
 
-    duration_seconds: float
+    duration_seconds: float | None
 
     hdr: HDRType | None = None
-    interlaced: bool = False
+    interlaced: bool | None = False
 
     size: int
 
@@ -47,7 +58,7 @@ class Movie(BaseModel):
         default_factory=list,
     )
 
-    hardlinks: int = 1
+    hardlinks: int | None = 1
 
     tags: list[str] = Field(
         default_factory=list,
@@ -55,6 +66,10 @@ class Movie(BaseModel):
 
 
 class Episode(BaseModel):
+    media_id: str | None = None
+    revision_id: str | None = None
+    processing_supported: bool = True
+    probe: MediaProbeResult | None = None
     id: str
 
     season: int
@@ -63,17 +78,17 @@ class Episode(BaseModel):
     title: str | None = None
     path: str
 
-    width: int
-    height: int
+    width: int | None
+    height: int | None
     resolution: str
 
     video_codec: str
-    video_bitrate: int
+    video_bitrate: int | None
 
-    duration_seconds: float
+    duration_seconds: float | None
 
     hdr: HDRType | None = None
-    interlaced: bool = False
+    interlaced: bool | None = False
 
     size: int
 
@@ -81,7 +96,7 @@ class Episode(BaseModel):
         default_factory=list,
     )
 
-    hardlinks: int = 1
+    hardlinks: int | None = 1
 
     tags: list[str] = Field(
         default_factory=list,
@@ -129,6 +144,10 @@ def spatial_resolution(item: Movie | Episode) -> str:
     Keep the source's display label and separate interlaced flag intact. Do not
     infer a new resolution from height: cropped 1080 sources can be shorter.
     """
+    if item.probe:
+        video = next((s for s in item.probe.streams if s.kind == "video" and not s.dispositions.get("attached_pic")), None)
+        if video and video.resolution_class:
+            return f"{video.resolution_class}p"
     label = item.resolution.lower()
     if label.endswith("i") and label[:-1].isdigit():
         return label[:-1] + "p"

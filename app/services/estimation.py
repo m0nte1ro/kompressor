@@ -6,6 +6,9 @@ def audio_plan(item, preset: CompressionPreset, preserve_audio: bool) -> list[di
     rules = preset.efficient_audio_rules
     plan = []
     for index, track in enumerate(item.audio):
+        if track.channels is None:
+            plan.append({"track": index, "action": "copy", "codec": track.codec, "channels": None, "bitrate": track.bitrate})
+            continue
         bitrate = track.bitrate
         codec = track.codec.lower()
         target = preset.stereo_audio_bitrate if track.channels <= 2 else preset.target_audio_bitrate or 640000
@@ -28,6 +31,12 @@ def audio_plan(item, preset: CompressionPreset, preserve_audio: bool) -> list[di
 def estimate(item, preset: CompressionPreset, preserve_audio: bool) -> dict:
     plan = audio_plan(item, preset, preserve_audio)
     duration = item.duration_seconds
+    if duration is None or item.video_bitrate is None:
+        return dict(estimated_output_size=None, estimated_saving=None, estimated_saving_percent=None,
+                    estimated_output_size_low=None, estimated_output_size_high=None,
+                    estimated_saving_low=None, estimated_saving_high=None, estimate_basis="unknown",
+                    planning_output_size=None, planning_saving=None, planning_saving_percent=None,
+                    audio_plan=plan)
     # Container/subtitle/unknown-stream residual is retained in either audio mode.
     known_audio = sum(t.bitrate or 0 for t in item.audio) * duration / 8
     source_video = item.video_bitrate * duration / 8

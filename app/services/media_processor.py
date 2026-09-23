@@ -11,15 +11,17 @@ from app.services.errors import InvalidOperation
 from app.services.presets import PresetService
 from app.repositories.preferences import SQLitePreferencesRepository
 from app.services.queue import QueueService
+from app.services.library_discovery import LibraryDiscoveryService, configured_roots
 from app.services.discovery import MediaScanner, ProbeService
 from app.services.tags import TagService
 
 
 class MediaProcessor:
     def __init__(self, catalog: CatalogService, presets: PresetService,
-                 queue: QueueService, scanner: MediaScanner, probe: ProbeService,
+                 queue: QueueService, scanner: MediaScanner | None, probe: ProbeService | None,
                  preferences: SQLitePreferencesRepository | None = None,
-                 inventory: ReconciliationService | None = None):
+                 inventory: ReconciliationService | None = None,
+                 discovery: LibraryDiscoveryService | None = None):
         self.catalog = catalog
         self.presets = presets
         self.queue = queue
@@ -27,6 +29,7 @@ class MediaProcessor:
         self.probe = probe
         self.preferences = preferences
         self.inventory = inventory
+        self.discovery = discovery
 
     def get_library(self):
         return self.catalog.library()
@@ -52,6 +55,8 @@ class MediaProcessor:
     def update_library_paths(self, paths: LibraryPaths) -> LibraryPaths:
         if self.preferences is None:
             raise InvalidOperation("Preferences storage is unavailable.")
+        if self.discovery:
+            configured_roots(paths, self.discovery.database_path)
         return self.preferences.save_library_paths(paths)
 
     def create_preset(self, payload: PresetSettings):
@@ -73,6 +78,8 @@ class MediaProcessor:
         return self.catalog.evaluate(entry, preset, preserve_audio, preserve_subtitles)
 
     def queue_encode(self, request: EnqueueRequest):
+        if self.discovery is not None:
+            raise InvalidOperation("Filesystem inventory is read-only; encoding is not enabled.")
         # QueueService already evaluates through CatalogService/PolicyEngine,
         # snapshots presets and excludes blocked items atomically. Do not repeat it.
         return self.queue.enqueue(request)
@@ -108,8 +115,20 @@ class MediaProcessor:
         return {"updated": updated}
 
     def scan_library(self):
-        # Seed discovery only; no new HTTP scan workflow or filesystem side effects.
+        if self.discovery is not None:
+            self.discovery.scan()
+            return self.catalog.library()
+        if self.scanner is None:
+            raise InvalidOperation("Scanner is unavailable.")
         return self.scanner.scan()
+
+    def refresh_library(self) -> dict:
+        if self.discovery is None:
+            raise InvalidOperation("Real scanning requires the filesystem backend.")
+        return self.discovery.scan()
+
+    def get_scan_status(self) -> dict:
+        return self.discovery.status() if self.discovery else {"backend": "seed", "state": "disabled", "roots": []}
 
     def reconcile_library(self, snapshot: ScanSnapshot) -> ReconciliationResult:
         """Apply observations supplied by fixtures; never initiate filesystem IO."""

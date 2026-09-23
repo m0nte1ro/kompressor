@@ -1,0 +1,7 @@
+{
+  "format": {"format_name": "mpegts", "duration": "3600"},
+  "streams": [{"index": 0, "codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080,
+               "field_order": "tt", "avg_frame_rate": "25/1", "pix_fmt": "yuv420p", "bit_rate": "24000000",
+               "color_primaries": "bt709", "color_transfer": "bt709", "color_space": "bt709"}],
+  "frames": [{"stream_index": 0, "interlaced_frame": 1, "top_field_first": 1}]
+}
