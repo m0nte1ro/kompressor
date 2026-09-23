@@ -7,6 +7,57 @@ import {compressionModal} from './compression.js';
 import {renderHistory, renderQueue} from './queue.js';
 
 let queue = {lanes: [], history: [], pending_count: 0};
+
+function sortRows(table) {
+  const key = table.dataset.sortKey;
+  if (!key) return;
+  const button = table.querySelector(`[data-sort-key="${key}"]`);
+  const type = button?.dataset.sortType ?? 'text';
+  const direction = table.dataset.sortDirection === 'desc' ? -1 : 1;
+  const tbody = table.tBodies[0];
+  if (!tbody) return;
+  const values = row => row.dataset[`sort${key[0].toUpperCase()}${key.slice(1)}`] ?? '';
+  const compare = (a, b) => {
+    if (type === 'number') {
+      const left = Number(values(a));
+      const right = Number(values(b));
+      return direction * ((Number.isFinite(left) ? left : -Infinity) - (Number.isFinite(right) ? right : -Infinity));
+    }
+    return direction * values(a).localeCompare(values(b), undefined, {numeric: true, sensitivity: 'base'});
+  };
+  const mediaRows = [...tbody.querySelectorAll('tr[data-sort-name], tr[data-sort-finished]')];
+  if (!mediaRows.length) return;
+  const separators = [...tbody.querySelectorAll('tr.season')];
+  if (separators.length) {
+    for (const separator of separators) {
+      const group = mediaRows.filter(row => row.dataset.season === separator.dataset.season).sort(compare);
+      tbody.append(separator, ...group);
+    }
+  } else {
+    mediaRows.sort(compare).forEach(row => tbody.append(row));
+  }
+  table.querySelectorAll('thead th').forEach(th => th.removeAttribute('aria-sort'));
+  button?.closest('th')?.setAttribute('aria-sort', direction === 1 ? 'ascending' : 'descending');
+}
+
+function setupSortableTables() {
+  $$('table[data-sortable]').forEach(table => {
+    table.addEventListener('click', event => {
+      const button = event.target.closest('[data-sort-key]');
+      if (!button || !table.contains(button)) return;
+      const same = table.dataset.sortKey === button.dataset.sortKey;
+      table.dataset.sortKey = button.dataset.sortKey;
+      table.dataset.sortDirection = same && table.dataset.sortDirection === 'asc' ? 'desc' : 'asc';
+      sortRows(table);
+    });
+  });
+}
+
+setupSortableTables();
+window.addEventListener('table-updated', event => {
+  if (event.detail?.table) sortRows(event.detail.table);
+});
+
 let refreshRevision = 0;
 let mutating = false;
 const library = $('#library');

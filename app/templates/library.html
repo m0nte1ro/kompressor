@@ -28,17 +28,17 @@
   </div>
   <p class="muted table-note">Estimates use each row’s suggested preset with audio preserved. Quality-mode ranges are planning assumptions, not measured output or hard bounds. Open Review to see blockers or choose another preset.</p>
   <div class="table-wrap">
-    <table>
+    <table data-sortable>
       <caption class="sr-only">{{ title }} media inventory and eligibility</caption>
       <thead><tr>
         <th scope="col"><input type="checkbox" id="select-all" aria-label="Select all visible items"></th>
-        <th scope="col">{{ 'Movie' if scope == 'movie' else 'Episode' }}</th>
-        {% if scope == 'movie' %}<th scope="col">Year</th><th scope="col">Source</th>{% endif %}
-        <th scope="col">Resolution</th><th scope="col">Codec</th>
-        {% if scope == 'movie' %}<th scope="col">HDR / DV</th>{% endif %}
-        <th scope="col">Bitrate</th><th scope="col">Size</th><th scope="col">Audio</th>
-        <th scope="col">{{ 'Policy / tags' if scope == 'movie' else 'Effective policy / tags' }}</th>
-        <th scope="col">Estimated saving</th><th scope="col">Action</th>
+        <th scope="col"><button class="sort-button" data-sort-key="name" data-sort-type="{{ 'number' if scope == 'show' else 'text' }}">{{ 'Movie' if scope == 'movie' else 'Episode' }}</button></th>
+        {% if scope == 'movie' %}<th scope="col"><button class="sort-button" data-sort-key="year" data-sort-type="number">Year</button></th><th scope="col"><button class="sort-button" data-sort-key="source">Source</button></th>{% endif %}
+        <th scope="col"><button class="sort-button" data-sort-key="resolution" data-sort-type="number">Resolution</button></th><th scope="col"><button class="sort-button" data-sort-key="codec">Codec</button></th>
+        {% if scope == 'movie' %}<th scope="col"><button class="sort-button" data-sort-key="hdr">HDR / DV</button></th>{% endif %}
+        <th scope="col"><button class="sort-button" data-sort-key="bitrate" data-sort-type="number">Bitrate</button></th><th scope="col"><button class="sort-button" data-sort-key="size" data-sort-type="number">Size</button></th><th scope="col"><button class="sort-button" data-sort-key="audio" data-sort-type="number">Audio</button></th>
+        <th scope="col"><button class="sort-button" data-sort-key="policy">{{ 'Policy / tags' if scope == 'movie' else 'Effective policy / tags' }}</button></th>
+        <th scope="col"><button class="sort-button" data-sort-key="saving" data-sort-type="number">Estimated saving</button></th><th scope="col">Action</th>
       </tr></thead>
       <tbody>
         {% set season = namespace(number=none) %}
@@ -51,7 +51,16 @@
         <tr class="media-row" data-id="{{ item.id }}" data-season="{{ item.season if scope == 'show' else '' }}"
             data-name="{{ row.entry.name }}" data-preset="{{ row.preset.id if row.preset else '' }}"
             data-eligible="{{ 'true' if result.eligible else 'false' }}" data-codec="{{ item.video_codec }}"
-            data-resolution="{{ item.resolution }}" data-hdr="{{ item.hdr or '' }}" data-hardlinks="{{ item.hardlinks }}">
+            data-resolution="{{ item.resolution }}" data-hdr="{{ item.hdr or '' }}" data-hardlinks="{{ item.hardlinks }}"
+            data-sort-name="{{ item.episode if scope == 'show' else row.entry.name }}"
+            data-sort-year="{{ item.year if scope == 'movie' and item.year is not none else -1 }}"
+            data-sort-source="{{ item.source if scope == 'movie' and item.source else '' }}"
+            data-sort-resolution="{{ (item.width or 0) * (item.height or 0) }}"
+            data-sort-codec="{{ item.video_codec }}" data-sort-hdr="{{ item.hdr or 'sdr' }}"
+            data-sort-bitrate="{{ item.video_bitrate if item.video_bitrate is not none else -1 }}"
+            data-sort-size="{{ item.size }}" data-sort-audio="{{ item.audio | length }}"
+            data-sort-policy="{{ 'eligible' if result.eligible else 'blocked' }}"
+            data-sort-saving="{{ result.planning_saving or result.estimated_saving or -1 }}">
           <td><input type="checkbox" class="media-select" aria-label="Select {{ row.entry.name }}"></td>
           <th scope="row" class="media-name">
             {% if scope == 'movie' %}{{ item.name }}{% else %}<span class="episode-code">S{{ '%02d' | format(item.season) }}E{{ '%02d' | format(item.episode) }}</span> {{ item.title or 'Untitled' }}{% endif %}
@@ -64,7 +73,7 @@
           {% if scope == 'movie' %}<td>{{ item.year or '—' }}</td><td>{{ item.source or '—' }}</td>{% endif %}
           <td><span class="badge">{{ item.resolution }}</span></td><td>{{ item.video_codec | label }}</td>
           {% if scope == 'movie' %}<td><span class="{{ 'hdr' if item.hdr else 'muted' }}">{{ item.hdr | label }}</span></td>{% endif %}
-          <td class="numeric">{{ item.video_bitrate | bitrate }}</td><td class="numeric">{{ item.size | size }}</td>
+          <td class="numeric">{% if item.video_bitrate_estimated %}≈ {% endif %}{{ item.video_bitrate | bitrate }}{% if item.video_bitrate_estimated %}<small>Calculated</small>{% endif %}</td><td class="numeric">{{ item.size | size }}</td>
           <td class="audio">{% for track in item.audio %}<span>{{ track.codec | label }} · {{ track.channels if track.channels is not none else 'Unknown' }} ch{% if track.language %} · {{ track.language }}{% endif %}</span>{% else %}—{% endfor %}</td>
           <td class="policy">
             <div class="badges">{% for tag in row.entry.tags %}<span class="badge violet">{{ tag }}</span>{% endfor %}

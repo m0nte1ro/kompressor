@@ -73,6 +73,31 @@ def test_recursive_discovery_stat_hardlinks_and_symlink_exclusion(roots, tmp_pat
     assert before == {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before}
 
 
+def test_missing_video_stream_bitrate_is_calculated_from_probe_facts(config, monkeypatch):
+    facts = parse_ffprobe(json.loads((PROJECT_ROOT / 'fixtures/ffprobe/progressive.json').read_text()))
+    streams = [
+        stream.model_copy(update={'bitrate': None}) if stream.kind == 'video' else stream
+        for stream in facts.streams
+    ]
+    container_bitrate = 18_000_000
+    facts = facts.model_copy(update={'streams': streams, 'container_bitrate': container_bitrate})
+    monkeypatch.setattr(FFprobeService, 'inspect', lambda self, path: facts.model_copy(deep=True))
+
+    with TestClient(create_app(config=config)) as client:
+        scan(client)
+        movie = client.get('/api/library').json()['movies'][0]
+        known_other = sum(stream.bitrate or 0 for stream in streams if stream.kind != 'video')
+        assert movie['video_bitrate'] == container_bitrate - known_other
+        assert movie['video_bitrate_estimated'] is True
+        eligibility = client.post('/api/eligibility', json={
+            'scope': 'movie', 'media_id': movie['id'], 'preset_id': 'movie-streaming-quality',
+        }).json()
+        assert not any(reason == 'Source video bitrate is unknown.' for reason in eligibility['reasons'])
+        html = client.get('/movies').text
+        assert 'Calculated' in html
+        assert 'data-sort-bitrate=' in html
+
+
 def test_real_inventory_reaches_ui_api_and_keeps_seed_mode_separate(config, probe):
     app = create_app(config=config)
     with TestClient(app) as client:

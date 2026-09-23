@@ -18,6 +18,26 @@ def display_name(value: str) -> str:
     return re.sub(r'[._]+', ' ', value).strip(' -')
 
 
+def source_video_bitrate(record: LibraryFile, probe, video: StreamFacts | None) -> tuple[int | None, bool]:
+    """Return stream bitrate, or a conservative average derived from container/file facts."""
+    if video is None:
+        return None, False
+    if video.bitrate is not None:
+        return video.bitrate, False
+    if probe is None or probe.duration_seconds is None or probe.duration_seconds <= 0:
+        return None, False
+    total = probe.container_bitrate
+    if total is None and record.observation.size > 0:
+        total = int(record.observation.size * 8 / probe.duration_seconds)
+    if total is None or total <= 0:
+        return None, False
+    known_other = sum(
+        stream.bitrate or 0 for stream in probe.streams if stream.index != video.index
+    )
+    estimated = total - known_other
+    return (int(estimated), True) if estimated > 0 else (None, False)
+
+
 def media_fields(record: LibraryFile, root: Path) -> dict:
     probe = record.observation.probe
     videos = [s for s in probe.streams if s.kind == 'video' and not s.dispositions.get('attached_pic')] if probe else []
@@ -41,11 +61,12 @@ def media_fields(record: LibraryFile, root: Path) -> dict:
     audio = [AudioTrack(codec=s.codec, channels=s.channels, bitrate=s.bitrate, language=s.language,
                         title=s.title, stream_index=s.index, channel_layout=s.channel_layout,
                         dispositions=s.dispositions) for s in probe.streams if s.kind == 'audio'] if probe else []
+    video_bitrate, video_bitrate_estimated = source_video_bitrate(record, probe, video)
     return dict(id=record.file_id, media_id=record.media_id, revision_id=record.revision_id,
                 path=str(root / record.relative_path), size=record.observation.size,
                 width=video.width if video else None, height=video.height if video else None,
                 resolution=resolution, video_codec=video.codec if video else 'unknown',
-                video_bitrate=video.bitrate if video else None,
+                video_bitrate=video_bitrate, video_bitrate_estimated=video_bitrate_estimated,
                 duration_seconds=probe.duration_seconds if probe else None, hdr=hdr,
                 interlaced=True if scan in {'interlaced', 'mixed'} else False if scan == 'progressive' else None,
                 hardlinks=record.observation.hardlinks, audio=audio, probe=probe,

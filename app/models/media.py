@@ -46,6 +46,7 @@ class Movie(BaseModel):
 
     video_codec: str
     video_bitrate: int | None
+    video_bitrate_estimated: bool = False
 
     duration_seconds: float | None
 
@@ -84,6 +85,7 @@ class Episode(BaseModel):
 
     video_codec: str
     video_bitrate: int | None
+    video_bitrate_estimated: bool = False
 
     duration_seconds: float | None
 

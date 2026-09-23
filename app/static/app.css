@@ -54,6 +54,11 @@ main { margin-left: 205px; min-width: 0; }
 table { width: 100%; border-collapse: collapse; min-width: 1000px; }
 th, td { text-align: left; padding: 11px 9px; border-bottom: 1px solid #1d2834; vertical-align: top; }
 thead th { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; background: #141c26; white-space: nowrap; }
+.sort-button { appearance: none; border: 0; border-radius: 0; padding: 0 15px 0 0; background: transparent; color: inherit; font: inherit; text-transform: inherit; letter-spacing: inherit; position: relative; }
+.sort-button:hover { background: transparent; color: var(--text); }
+.sort-button::after { content: "↕"; position: absolute; right: 0; color: #607286; }
+th[aria-sort="ascending"] .sort-button::after { content: "↑"; color: var(--green); }
+th[aria-sort="descending"] .sort-button::after { content: "↓"; color: var(--green); }
 tbody tr:last-child > * { border-bottom: 0; }
 .media-row:hover > * { background: #131c27; }
 .media-name { font-weight: 650; min-width: 165px; }
