@@ -109,6 +109,20 @@ def test_command_maps_streams_and_applies_only_supported_crf_settings(probe_fact
     assert command[-1] == str(partial)
 
 
+def test_command_converts_mov_text_subtitle_for_matroska(probe_facts, tmp_path):
+    streams = [
+        stream.model_copy(update={"codec": "mov_text"}) if stream.kind == "subtitle" and stream.index == 3 else stream
+        for stream in probe_facts.streams
+    ]
+    probe = probe_facts.model_copy(update={"streams": streams})
+    job = queue_job()
+    partial = tmp_path / "Fixture.kompressor.partial.mkv"
+    command = FFmpegEncoder.build_command("/usr/bin/ffmpeg", job, Path("/read-only/Film.mp4"), partial, probe)
+    assert command[command.index("-c:s:0") + 1] == "srt"
+    assert "-c:s:1" not in command
+    assert command[command.index("-c") + 1] == "copy"
+
+
 def test_execution_capability_rejects_unsupported_modes(probe_facts):
     guard = CPUEncodeCapability()
     item = movie_item(probe_facts)
