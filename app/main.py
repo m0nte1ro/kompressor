@@ -31,23 +31,27 @@ async def run_fake_workers(service: QueueService) -> None:
 
 
 def create_app(database_path: Path | None = None, *, media: MediaRepository | None = None,
-               start_workers: bool = True, initial_presets: list[CompressionPreset] | None = None,
+               start_workers: bool = True, start_real_worker: bool = False,
+               initial_presets: list[CompressionPreset] | None = None,
                processor: MediaProcessor | None = None, config: Settings | None = None) -> FastAPI:
     configuration = config or settings
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         composed = processor if processor is not None else build_media_processor(
-            configuration, database_path, media=media, initial_presets=initial_presets)
+            configuration, database_path, media=media, initial_presets=initial_presets,
+            process_role="worker" if start_real_worker else "web")
         application.state.media_processor = composed
         queue = composed.queue
         real_worker = queue.worker if hasattr(queue.worker, "shutdown") and hasattr(queue.worker, "filesystem_mode") else None
-        if start_workers and real_worker is not None:
+        # Real encoding is a separate process in production. The opt-in embedded
+        # mode exists only for focused tests and local development.
+        if start_real_worker and real_worker is not None:
             real_worker.start()
         task = asyncio.create_task(run_fake_workers(queue)) if start_workers and composed.discovery is None else None
         try:
             yield
         finally:
-            if real_worker is not None:
+            if start_real_worker and real_worker is not None:
                 await asyncio.to_thread(real_worker.shutdown)
             if composed.discovery:
                 await asyncio.to_thread(composed.discovery.close)

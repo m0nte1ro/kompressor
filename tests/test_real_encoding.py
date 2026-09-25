@@ -229,7 +229,8 @@ def build_real_app(tmp_path, monkeypatch, source_probe, output_probe=None, *, ex
         spawned.append(process)
         return process
     monkeypatch.setattr("app.workers.ffmpeg.subprocess.Popen", popen)
-    application = create_app(config=config, start_workers=start_workers)
+    application = create_app(config=config, start_workers=start_workers,
+                             start_real_worker=start_workers)
     return application, source, workspace, spawned
 
 

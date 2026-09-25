@@ -1,5 +1,6 @@
 """Central adapter selection: seed simulation or read-only filesystem discovery."""
 from pathlib import Path
+from typing import Literal
 from app.services.encoding_runtime import capability_status
 
 from app.config import Settings
@@ -35,7 +36,8 @@ from app.services.presets import PresetService
 
 def build_media_processor(config: Settings, database_path: Path | None = None, *,
                           media: MediaRepository | None = None,
-                          initial_presets: list[CompressionPreset] | None = None) -> MediaProcessor:
+                          initial_presets: list[CompressionPreset] | None = None,
+                          process_role: Literal["web", "worker"] = "web") -> MediaProcessor:
     db_path = database_path if database_path is not None else config.database_path
     defaults = LibraryPaths(movies_path=str(config.movies_root) if config.movies_root else "",
                             shows_path=str(config.shows_root) if config.shows_root else "")
@@ -86,7 +88,12 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
                        "supported_backends": ["cpu", "qsv"] if discovery is None else [],
                        "workspace_writable": bool(runtime and runtime["workspace_writable"]),
                        "unavailable_reason": runtime["unavailable_reason"] if runtime else None}
-    queue.recover()
+    # The web process must never reinterpret an active real job as interrupted:
+    # a standalone worker may still own its ffmpeg subprocess. Recovery therefore
+    # belongs to the real worker process. Seed mode remains embedded and recovers
+    # with the web application as before.
+    if not isinstance(worker, RealEncoderWorker) or process_role == "worker":
+        queue.recover()
     return MediaProcessor(
         catalog,
         PresetService(presets, database.transaction),
