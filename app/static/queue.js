@@ -4,6 +4,15 @@ function planningSaving(job) {
   return job.planning_saving ?? job.estimated_saving ?? 0;
 }
 
+function measuredChange(job) {
+  const saving = job.measured_saving;
+  if (saving === null || saving === undefined) return null;
+  const percent = job.source_size ? 100 * saving / job.source_size : 0;
+  return saving < 0
+    ? `${size(-saving)} larger (${Math.abs(percent).toFixed(1)}%) measured`
+    : `${size(saving)} saved (${percent.toFixed(1)}%) measured`;
+}
+
 function jobDetails(job) {
   const estimate = job.estimate_basis === 'planning_range'
     ? `${esc(size(job.estimated_saving_low))} – ${esc(size(job.estimated_saving_high))} planning estimate`
@@ -13,7 +22,7 @@ function jobDetails(job) {
     : job.replace_source ? 'Replace after validation · simulated only' : 'Keep original · simulated test copy';
   return `<div class="job-name">${esc(job.name)}</div>
     <p class="job-meta">${esc(job.preset.name)} · ${esc(label(job.backend))} · ${esc(label(job.preset.destination_codec))}</p>
-    <p class="saving">${job.measured_saving !== null && job.measured_saving !== undefined ? `${esc(size(job.measured_saving))} measured saving` : estimate}</p>
+    <p class="saving">${measuredChange(job) ? esc(measuredChange(job)) : estimate}</p>
     <p class="job-meta">${source}</p>`;
 }
 
@@ -66,7 +75,7 @@ export function renderHistory(queue) {
   const estimatedCompleted = completed.filter(j => j.execution_mode !== 'real');
   const estimatedSaving = estimatedCompleted.reduce((sum, j) => sum + planningSaving(j), 0);
   $('#history-stats').innerHTML = [
-    ['Measured real saving', size(realSaving)], ['Real encodes completed', realCompleted.length],
+    ['Net measured saving', size(realSaving)], ['Real encodes completed', realCompleted.length],
     ['Estimated simulation reduction', `~${size(estimatedSaving)}`], ['Failed / skipped / blocked', queue.history.filter(j => ['failed', 'skipped', 'blocked'].includes(j.status)).length],
   ].map(([title, value]) => `<div class="card stat"><span>${esc(title)}</span><strong>${esc(value)}</strong></div>`).join('');
   rows.innerHTML = queue.history.map(job => {
@@ -77,7 +86,7 @@ export function renderHistory(queue) {
     const actualOutput = isReal && job.status === 'completed' && job.output_size !== null;
     const actualSaving = isReal && job.status === 'completed' && job.measured_saving !== null;
     const savingText = actualSaving
-      ? `${esc(size(job.measured_saving))} (${job.source_size ? (100 * job.measured_saving / job.source_size).toFixed(1) : '0.0'}%) measured`
+      ? esc(measuredChange(job))
       : job.status === 'completed' ? job.estimate_basis === 'planning_range'
         ? `${esc(size(job.estimated_saving_low))} – ${esc(size(job.estimated_saving_high))} planning`
         : `~${esc(size(job.estimated_saving))} estimated`
