@@ -4,7 +4,7 @@ from pathlib import Path
 from app.models.media import MediaScope
 from app.models.inventory import ReconciliationResult, ScanSnapshot
 from app.services.reconciliation import ReconciliationService
-from app.models.preferences import LibraryPaths
+from app.models.preferences import LibraryPaths, WorkerSettings
 from app.models.preset import PresetSettings
 from app.models.queue import EnqueueRequest, Priority
 from app.models.tags import TAG_NAMES, TagTarget, TagUpdate
@@ -111,6 +111,24 @@ class MediaProcessor:
     def stop_job(self, job_id: str):
         self.queue.skip(job_id)
 
+    def get_worker_controls(self) -> dict:
+        return self.queue.get_worker_settings()
+
+    def update_worker_controls(self, settings: WorkerSettings) -> dict:
+        return self.queue.update_worker_settings(settings)
+
+    def pause_worker(self, backend: str) -> dict:
+        return self.queue.set_worker_paused(backend, True)
+
+    def resume_worker(self, backend: str) -> dict:
+        return self.queue.set_worker_paused(backend, False)
+
+    def pause_all_workers(self, *, stop_active: bool = False) -> dict:
+        return self.queue.pause_all_workers(stop_active=stop_active)
+
+    def stop_active_worker(self, backend: str) -> bool:
+        return self.queue.stop_active_backend(backend)
+
     def _tagger(self) -> TagService:
         if self.catalog.tagger is None:
             raise InvalidOperation("Tag service is unavailable.")
@@ -124,9 +142,7 @@ class MediaProcessor:
         # cancellation waits until both the queue lock and DB transaction release.
         with self.queue.lock, self.queue.repository.transaction():
             updated = self._tagger().update(payload)
-            stop_after_commit = self.queue.revalidate(defer_external_stops=True)
-        for job_id in stop_after_commit:
-            self.queue.worker.stop(job_id)
+            self.queue.revalidate(defer_external_stops=True)
         return {"updated": updated}
 
     def scan_library(self):

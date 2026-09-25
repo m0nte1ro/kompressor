@@ -1,0 +1,16 @@
+[Unit]
+Description=Kompressor WebUI and API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/kompressor
+EnvironmentFile=/etc/kompressor/kompressor.env
+ExecStart=/root/kompressor/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

@@ -262,8 +262,9 @@ def test_real_worker_validates_promotes_and_measures_output(tmp_path, monkeypatc
         processor.queue.set_real_validating = validating
         original_complete = processor.queue.complete_real_job
         def complete(job_id, path, size):
-            original_complete(job_id, path, size)
+            changed = original_complete(job_id, path, size)
             states.append(processor.queue._find(job_id).status)
+            return changed
         processor.queue.complete_real_job = complete
         checks = []
         original_guard = worker.guard.before_processing
@@ -307,6 +308,43 @@ def test_measured_saving_is_negative_when_output_is_larger(tmp_path, monkeypatch
         assert saved["measured_saving"] == -100_000_000
 
 
+def test_snapshot_repairs_legacy_clamped_measured_saving(tmp_path, monkeypatch, probe_facts):
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        processor.scan_library()
+        movie = processor.get_library().movies[0]
+        added = processor.queue_encode(EnqueueRequest(media_ids=[movie.id], scope="movie",
+            preset_id="movie-streaming-quality"))["added"][0]
+        job = processor.queue.claim_next("cpu")
+        assert job is not None
+        assert processor.queue.set_real_validating(job.id, "/tmp/larger-output.mkv")
+        assert processor.queue.complete_real_job(job.id, "/tmp/larger-output.mkv", 500_000_000)
+        legacy = processor.queue._find(added["id"])
+        legacy.measured_saving = 0
+        processor.queue.repository.save(legacy)
+        exposed = next(item for item in processor.get_queue()["history"] if item["id"] == added["id"])
+        assert exposed["measured_saving"] == -100_000_000
+
+
+def test_completion_refuses_persisted_stop_request(tmp_path, monkeypatch, probe_facts):
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        processor.scan_library()
+        movie = processor.get_library().movies[0]
+        added = processor.queue_encode(EnqueueRequest(media_ids=[movie.id], scope="movie",
+            preset_id="movie-streaming-quality"))["added"][0]
+        job = processor.queue.claim_next("cpu")
+        assert job is not None
+        assert processor.queue.set_real_validating(job.id, "/tmp/race-output.mkv")
+        processor.stop_job(job.id)
+        assert processor.queue.complete_real_job(job.id, "/tmp/race-output.mkv", 100_000_000) is False
+        persisted = processor.queue._find(added["id"])
+        assert persisted.status == "stopping"
+        assert persisted.cancel_requested is True
+
+
 def test_ffmpeg_failure_is_persisted_and_partial_is_removed(tmp_path, monkeypatch, probe_facts):
     application, source_path, workspace, spawned = build_real_app(
         tmp_path, monkeypatch, probe_facts, exit_code=7)
@@ -331,6 +369,28 @@ def test_ffmpeg_failure_is_persisted_and_partial_is_removed(tmp_path, monkeypatc
         assert saved["measured_saving"] is None
         assert not list((workspace / "jobs" / job_id).glob("*.partial.mkv"))
         assert source_path.stat().st_size == 400_000_000
+
+
+def test_web_stop_request_is_persisted_for_standalone_worker(tmp_path, monkeypatch, probe_facts):
+    application, _, _, spawned = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        processor.scan_library()
+        movie = processor.get_library().movies[0]
+        added = processor.queue_encode(EnqueueRequest(media_ids=[movie.id], scope="movie",
+            preset_id="movie-streaming-quality"))["added"][0]
+        job = processor.queue.claim_next("cpu")
+        assert job is not None
+        processor.stop_job(job.id)
+        persisted = processor.queue._find(job.id)
+        assert persisted.status == "stopping"
+        assert persisted.cancel_requested is True
+        assert persisted.cancel_reason == "user_stop"
+        assert spawned == []  # The web-side worker never owns or kills ffmpeg.
+        processor.queue.cancelled_real_job(job.id)
+        finished = processor.queue._find(job.id)
+        assert finished.status == "skipped"
+        assert finished.cancel_requested is False
 
 
 def test_stale_source_is_rejected_before_popen(tmp_path, monkeypatch, probe_facts):
@@ -367,6 +427,29 @@ def test_existing_preserve_video_policies_still_block_filesystem_queue(tmp_path,
             preset_id="movie-streaming-quality"))
         assert not result["added"]
         assert any(tag in reason for reason in result["excluded"][0]["reasons"])
+
+
+def test_web_restart_does_not_recover_or_stop_active_real_job(tmp_path, monkeypatch, probe_facts):
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    config = Settings(media_backend="filesystem", movies_root=tmp_path / "movies",
+        database_path=tmp_path / "state.sqlite3", workspace_root=tmp_path / "workspace",
+        ffmpeg_binary="/fake/ffmpeg", ffprobe_binary="/fake/ffprobe")
+
+    with TestClient(application):
+        processor = application.state.media_processor
+        processor.scan_library()
+        movie = processor.get_library().movies[0]
+        added = processor.queue_encode(EnqueueRequest(media_ids=[movie.id], scope="movie",
+            preset_id="movie-streaming-quality"))["added"][0]
+        claimed = processor.queue.claim_next("cpu")
+        assert claimed is not None and claimed.status == "encoding"
+
+    # A new WebUI process sees the worker-owned active state but must not reset it.
+    with TestClient(create_app(config=config, start_workers=False)) as client:
+        state = client.get("/api/queue").json()
+        active = next(lane["active"] for lane in state["lanes"] if lane["backend"] == "cpu")
+        assert active["id"] == added["id"]
+        assert active["status"] == "encoding"
 
 
 def test_background_worker_claims_and_completes_without_http_encode(tmp_path, monkeypatch, probe_facts):

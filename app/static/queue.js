@@ -29,7 +29,21 @@ function jobDetails(job) {
 export function renderQueue(queue) {
   for (const lane of queue.lanes) {
     const section = $(`[data-backend="${lane.backend}"]`);
+    const control = queue.workers?.lanes?.[lane.backend];
     if (!section) continue;
+    if (control) {
+      const mode = control.paused ? 'paused' : control.quiet_active ? 'quiet hours' : 'ready';
+      const badge = $('.worker-mode', section);
+      if (badge) badge.textContent = mode;
+      section.classList.toggle('lane-paused', control.paused || control.quiet_active);
+      const toggle = $('[data-worker-action="toggle-pause"]', section);
+      if (toggle) {
+        toggle.textContent = control.paused ? 'Resume worker' : 'Pause after current';
+        toggle.dataset.paused = String(control.paused);
+      }
+      const stop = $('[data-worker-action="stop-active"]', section);
+      if (stop) stop.disabled = !lane.active;
+    }
     const active = $('.active-slot', section);
     if (active.dataset.job !== (lane.active?.id ?? 'idle')) {
       active.dataset.job = lane.active?.id ?? 'idle';

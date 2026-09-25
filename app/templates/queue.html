@@ -7,11 +7,24 @@
 {% else %}
 <p class="notice">One CPU worker + one QSV worker. Progress is simulated; queue and history are saved locally. Interrupted simulations restart after revalidation.</p>
 {% endif %}
+<div class="toolbar worker-toolbar" id="worker-controls">
+  <span class="muted">Worker controls are persistent and shared with the standalone encoder processes.</span>
+  <div class="job-controls">
+    <button data-worker-action="pause-all">Pause all after current</button>
+    <button class="danger" data-worker-action="stop-all">Stop active &amp; pause all</button>
+  </div>
+</div>
 <div class="queue-grid" id="queue-lanes">
   {% for backend, label in [('cpu', 'CPU Queue'), ('qsv', 'Intel QSV Queue')] %}
   {% set backend_enabled = backend in runtime_settings.supported_backends %}
   <section class="card lane {{ 'lane-disabled' if not backend_enabled }}" data-backend="{{ backend }}" aria-label="{{ label }}">
-    <header class="lane-head"><h2>{{ label }}</h2><span class="badge">{{ '1 worker' if backend_enabled else 'unavailable' }}</span></header>
+    <header class="lane-head">
+      <div><h2>{{ label }}</h2><span class="badge worker-mode">{{ 'ready' if backend_enabled else 'unavailable' }}</span></div>
+      {% if backend_enabled %}<div class="job-controls">
+        <button data-worker-action="toggle-pause" data-backend="{{ backend }}">Pause after current</button>
+        <button class="danger" data-worker-action="stop-active" data-backend="{{ backend }}">Stop active</button>
+      </div>{% endif %}
+    </header>
     <div class="active-slot"><p class="empty">Loading worker…</p></div>
     <h3 class="section-label">Up next <span class="queued-count">0</span></h3>
     <p class="muted">Move next → priority → estimated saving</p>

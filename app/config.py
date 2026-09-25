@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import Field, field_validator
 
 from pydantic_settings import (
@@ -34,6 +35,7 @@ class Settings(BaseSettings):
     ffprobe_timeout: float = Field(default=30, gt=0, le=600)
     ffmpeg_binary: str = Field(default="ffmpeg", min_length=1)
     workspace_root: Path = Path("/mnt/kompressor")
+    timezone: str = "UTC"
 
 
     @field_validator("workspace_root")
@@ -41,6 +43,15 @@ class Settings(BaseSettings):
     def absolute_workspace(cls, value: Path) -> Path:
         if not value.is_absolute():
             raise ValueError("Workspace root must be an absolute path.")
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def valid_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as error:
+            raise ValueError("Timezone must be a valid IANA timezone.") from error
         return value
 
 

@@ -177,3 +177,10 @@ legend { color: var(--muted); padding: 0 5px; }
 .runtime-facts dt { color: var(--muted); }
 .runtime-facts dd { margin: 0; overflow-wrap: anywhere; }
 .lane-disabled { opacity: .68; }
+
+.worker-toolbar { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.lane-paused { border-style: dashed; }
+.worker-schedule-settings { padding: 18px; margin-top: 18px; }
+.worker-schedule-settings h2 { margin-bottom: 6px; }
+.worker-schedule-lane { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; align-items: end; }
+.worker-schedule-lane > label:first-of-type, .worker-schedule-lane > p { grid-column: 1 / -1; }

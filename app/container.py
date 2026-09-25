@@ -4,7 +4,7 @@ from typing import Literal
 from app.services.encoding_runtime import capability_status
 
 from app.config import Settings
-from app.models.preferences import LibraryPaths
+from app.models.preferences import LibraryPaths, WorkerSettings
 from app.repositories.filesystem_media import FilesystemMediaRepository
 from app.services.filesystem_scanner import FilesystemScanner
 from app.services.ffprobe import FFprobeService
@@ -22,6 +22,7 @@ from app.services.catalog import CatalogService
 from app.services.policy import PolicyEngine
 from app.services.queue import QueueService
 from app.services.tags import TagService
+from app.services.worker_control import WorkerControlService
 from app.workers.fake import FakeEncoderWorker
 from app.workers.encoder import FakeEncoder
 from app.services.discovery import FakeMediaScanner, FakeProbeService
@@ -42,7 +43,7 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
     defaults = LibraryPaths(movies_path=str(config.movies_root) if config.movies_root else "",
                             shows_path=str(config.shows_root) if config.shows_root else "")
     database = Database(db_path)
-    preferences = SQLitePreferencesRepository(database, defaults)
+    preferences = SQLitePreferencesRepository(database, defaults, WorkerSettings(timezone=config.timezone))
     configured_roots(preferences.get_library_paths(), db_path)
     inventory_repository = SQLiteInventoryRepository(database)
     reconciliation = ReconciliationService(inventory_repository)
@@ -76,7 +77,8 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
     catalog = CatalogService(media_repository, presets, PolicyEngine(), tagger)
     if worker is None:
         worker = FakeEncoderWorker(FakeEncoder())
-    queue = QueueService(SQLiteQueueRepository(database), catalog, worker)
+    controls = WorkerControlService(preferences)
+    queue = QueueService(SQLiteQueueRepository(database), catalog, worker, controls=controls)
     if isinstance(worker, RealEncoderWorker):
         worker.bind(queue, catalog)
         diagnostics = worker.diagnostics(runtime)

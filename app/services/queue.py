@@ -5,12 +5,14 @@ from uuid import uuid4
 
 from app.services.errors import Conflict, InvalidOperation, NotFound
 from app.models.queue import EnqueueRequest, Priority, QueueJob
+from app.models.preferences import WorkerSettings
 from app.repositories.base import QueueRepository
 from app.services.catalog import CatalogService
+from app.services.worker_control import WorkerControlService
 from app.workers.base import EncoderWorker
 
 
-ACTIVE = {"encoding", "validating"}
+ACTIVE = {"encoding", "validating", "stopping"}
 PENDING = {"queued", *ACTIVE}
 PRIORITIES = {"urgent": 3, "high": 2, "normal": 1, "low": 0}
 
@@ -25,15 +27,26 @@ class QueueConflict(Conflict):
 
 class QueueService:
     def __init__(self, repository: QueueRepository, catalog: CatalogService,
-                 worker: EncoderWorker):
+                 worker: EncoderWorker, controls: WorkerControlService | None = None):
         self.repository = repository
         self.catalog = catalog
         self.worker = worker
+        self.controls = controls
         self.execution_mode = getattr(worker, "execution_mode", "fake")
         self.external_backends = frozenset(getattr(worker, "external_backends", ()))
         self.supported_backends = frozenset(getattr(worker, "supported_backends", ("cpu", "qsv")))
         self.lock = RLock()
         self.move_sequence = max((j.move_next_order for j in repository.get_all()), default=0)
+
+    @staticmethod
+    def _payload(job: QueueJob) -> dict:
+        payload = job.model_dump()
+        if (job.execution_mode == "real" and job.status == "completed"
+                and job.output_size is not None):
+            # Older real jobs clamped negative savings to zero. Source/output
+            # sizes are authoritative, so expose the measured delta correctly.
+            payload["measured_saving"] = job.source_size - job.output_size
+        return payload
 
     def _queued(self, backend: str) -> list[QueueJob]:
         return sorted(
@@ -51,13 +64,14 @@ class QueueService:
                 active = next((j for j in jobs if j.backend == backend and j.status in ACTIVE), None)
                 lanes.append({
                     "backend": backend,
-                    "active": active.model_dump() if active else None,
-                    "queued": [j.model_dump() for j in self._queued(backend)],
+                    "active": self._payload(active) if active else None,
+                    "queued": [self._payload(j) for j in self._queued(backend)],
                 })
             return {
                 "lanes": lanes,
-                "history": [j.model_dump() for j in reversed(jobs) if j.status not in PENDING],
+                "history": [self._payload(j) for j in reversed(jobs) if j.status not in PENDING],
                 "pending_count": sum(j.status in PENDING for j in jobs),
+                "workers": self.controls.snapshot() if self.controls else None,
             }
 
     def enqueue(self, request: EnqueueRequest) -> dict:
@@ -148,30 +162,26 @@ class QueueService:
                 job.move_next_order = 0
             self.repository.save(job)
 
-    def skip(self, job_id: str) -> None:
+    @staticmethod
+    def _request_cancel(job: QueueJob, reason: str) -> None:
+        job.status = "stopping"
+        job.cancel_requested = True
+        job.cancel_reason = reason
+
+    def skip(self, job_id: str, reason: str = "user_stop") -> None:
         if self._find_external_active(job_id):
-            # Never wait for ffmpeg while holding the queue lock or a DB transaction.
-            # Mark cancellation, terminate/kill the owned process, and clean its
-            # partial before persisting the user-visible skipped state.
-            self.worker.stop(job_id)
+            # The HTTP process does not own the ffmpeg subprocess. Persist the
+            # cancellation request; the standalone worker observes it and stops
+            # only its own process.
             with self.lock, self.repository.transaction():
                 job = self._find(job_id)
                 if job.status == "completed":
                     raise QueueConflict("The job completed before Stop & Skip took effect.")
-                if job.status not in ACTIVE and job.status != "failed":
+                if job.status not in ACTIVE:
                     raise QueueConflict("Only active jobs can be stopped and skipped.")
-                job.status = "skipped"
-                job.finished_at = now()
-                job.error_message = None
-                job.ffmpeg_exit_code = None
-                job.output_path = None
-                job.output_size = None
-                job.measured_saving = None
-                job.validation_errors = []
-                self.repository.save(job)
-            wake = getattr(self.worker, "wake", None)
-            if wake:
-                wake()
+                if job.status != "stopping":
+                    self._request_cancel(job, reason)
+                    self.repository.save(job)
             return
         with self.lock, self.repository.transaction():
             job = self._find(job_id)
@@ -180,6 +190,8 @@ class QueueService:
             self.worker.stop(job.id)
             job.status = "skipped"
             job.finished_at = now()
+            job.cancel_requested = False
+            job.cancel_reason = reason
             self.repository.save(job)
             self.revalidate()
             self._start_idle_lanes()
@@ -192,6 +204,8 @@ class QueueService:
     def _start_idle_lanes(self) -> None:
         for backend in ("cpu", "qsv"):
             if backend in self.external_backends:
+                continue
+            if self.controls and not self.controls.can_claim(backend):
                 continue
             if any(j.backend == backend and j.status in ACTIVE for j in self.repository.get_all()):
                 continue
@@ -221,7 +235,24 @@ class QueueService:
         interrupted = []
         with self.lock, self.repository.transaction():
             for job in self.repository.get_all():
-                if job.status in ACTIVE:
+                if job.status == "stopping" and job.cancel_requested:
+                    if job.backend in self.external_backends:
+                        interrupted.append(job.id)
+                    job.status = "skipped"
+                    job.finished_at = now()
+                    if job.cancel_reason == "quiet_hours_cutoff":
+                        job.reasons = [*job.reasons, "Stopped at quiet-hours start below the configured progress cutoff."]
+                    elif job.cancel_reason == "user_stop":
+                        job.reasons = [*job.reasons, "Stopped by user."]
+                    job.output_path = None
+                    job.output_size = None
+                    job.measured_saving = None
+                    job.error_message = None
+                    job.ffmpeg_exit_code = None
+                    job.validation_errors = []
+                    job.cancel_requested = False
+                    self.repository.save(job)
+                elif job.status in ACTIVE:
                     if job.execution_mode != self.execution_mode:
                         job.status = "blocked"
                         job.reasons = [f"This {job.execution_mode} job cannot resume in {self.execution_mode} mode."]
@@ -235,8 +266,11 @@ class QueueService:
                             interrupted.append(job.id)
                         job.status = "queued"
                         job.progress = 0
+                        job.progress_known = False
                         job.elapsed_seconds = 0
                         job.started_at = None
+                        job.cancel_requested = False
+                        job.cancel_reason = None
                     job.output_path = None
                     job.output_size = None
                     job.measured_saving = None
@@ -254,6 +288,11 @@ class QueueService:
                     job.reasons = [f"{job.backend.upper()} worker is not available in this runtime."]
                     job.finished_at = now()
                     self.repository.save(job)
+                elif job.status == "blocked" and job.cancel_requested:
+                    # A prior worker may have died after policy revalidation made
+                    # the job terminal but before acknowledging the stop request.
+                    job.cancel_requested = False
+                    self.repository.save(job)
             self.revalidate()
         cleanup = getattr(self.worker, "cleanup_interrupted", None)
         if cleanup:
@@ -263,6 +302,8 @@ class QueueService:
     def claim_next(self, backend: str) -> QueueJob | None:
         with self.lock, self.repository.transaction():
             if backend not in self.external_backends or backend not in self.supported_backends:
+                return None
+            if self.controls and not self.controls.can_claim(backend):
                 return None
             if any(j.backend == backend and j.status in ACTIVE for j in self.repository.get_all()):
                 return None
@@ -283,6 +324,7 @@ class QueueService:
                 return
             if percent is not None:
                 job.progress = max(job.progress, min(99.0, percent))
+                job.progress_known = True
             job.elapsed_seconds = max(job.elapsed_seconds, elapsed)
             self.repository.save(job)
 
@@ -304,11 +346,11 @@ class QueueService:
                 job.validation_errors = errors
                 self.repository.save(job)
 
-    def complete_real_job(self, job_id: str, output_path: str, output_size: int) -> None:
+    def complete_real_job(self, job_id: str, output_path: str, output_size: int) -> bool:
         with self.lock, self.repository.transaction():
             job = self._find(job_id)
-            if job.status != "validating":
-                return
+            if job.status != "validating" or job.cancel_requested:
+                return False
             job.status = "completed"
             job.progress = 100
             job.finished_at = now()
@@ -316,7 +358,10 @@ class QueueService:
             job.output_size = output_size
             job.measured_saving = job.source_size - output_size
             job.error_message = None
+            job.cancel_requested = False
+            job.cancel_reason = None
             self.repository.save(job)
+            return True
 
     def fail_real_job(self, job_id: str, message: str, exit_code: int | None = None) -> None:
         with self.lock, self.repository.transaction():
@@ -335,11 +380,100 @@ class QueueService:
     def cancelled_real_job(self, job_id: str) -> None:
         with self.lock, self.repository.transaction():
             job = self._find(job_id)
-            # QueueService persists Stop & Skip after process termination. Shutdown
-            # deliberately leaves active state for conservative restart recovery.
-            if job.status == "skipped":
-                job.finished_at = job.finished_at or now()
+            # Service shutdown deliberately leaves ordinary encoding/validating
+            # state for conservative restart recovery. Persisted cancellation
+            # requests, however, become explicit skipped history only after the
+            # owning worker has stopped its ffmpeg process.
+            if job.status == "blocked" and job.cancel_reason == "policy_changed":
+                job.cancel_requested = False
                 self.repository.save(job)
+                return
+            if job.cancel_requested or job.status == "stopping":
+                reason = job.cancel_reason
+                job.status = "skipped"
+                job.finished_at = now()
+                job.output_path = None
+                job.output_size = None
+                job.measured_saving = None
+                job.error_message = None
+                job.ffmpeg_exit_code = None
+                job.validation_errors = []
+                if reason == "quiet_hours_cutoff":
+                    job.reasons = [*job.reasons, "Stopped at quiet-hours start below the configured progress cutoff."]
+                elif reason == "user_stop":
+                    job.reasons = [*job.reasons, "Stopped by user."]
+                job.cancel_requested = False
+                self.repository.save(job)
+
+    def cancel_requested(self, job_id: str) -> bool:
+        with self.lock, self.repository.transaction():
+            return self._find(job_id).cancel_requested
+
+    def quiet_active(self, backend: str) -> bool:
+        return bool(self.controls and self.controls.quiet_active(backend))
+
+    def enforce_quiet_start(self, backend: str) -> str | None:
+        if self.controls is None or not self.controls.quiet_active(backend):
+            return None
+        with self.lock, self.repository.transaction():
+            active = next((j for j in self.repository.get_all()
+                           if j.backend == backend and j.status in ACTIVE), None)
+            if active is None:
+                return None
+            action = self.controls.quiet_action(backend, active)
+            if action == "stop" and active.backend in self.external_backends:
+                self._request_cancel(active, "quiet_hours_cutoff")
+                self.repository.save(active)
+            return action
+
+    def get_worker_settings(self) -> dict:
+        return self.controls.snapshot() if self.controls else {
+            "timezone": "UTC", "lanes": {
+                backend: {"paused": False, "quiet_hours_enabled": False,
+                          "quiet_start": "18:00", "quiet_end": "01:00",
+                          "quiet_cutoff_percent": 50.0, "quiet_active": False,
+                          "accepting_jobs": True}
+                for backend in ("cpu", "qsv")
+            }}
+
+    def update_worker_settings(self, settings: WorkerSettings) -> dict:
+        if self.controls is None:
+            raise InvalidOperation("Worker controls are unavailable.")
+        self.controls.save(settings)
+        wake = getattr(self.worker, "wake", None)
+        if wake:
+            wake()
+        return self.controls.snapshot()
+
+    def set_worker_paused(self, backend: str, paused: bool) -> dict:
+        if self.controls is None:
+            raise InvalidOperation("Worker controls are unavailable.")
+        if backend not in {"cpu", "qsv"}:
+            raise InvalidOperation("Unknown worker backend.")
+        self.controls.set_paused(backend, paused)
+        wake = getattr(self.worker, "wake", None)
+        if wake:
+            wake()
+        return self.controls.snapshot()
+
+    def pause_all_workers(self, *, stop_active: bool = False) -> dict:
+        if self.controls is None:
+            raise InvalidOperation("Worker controls are unavailable.")
+        self.controls.pause_all()
+        if stop_active:
+            for backend in ("cpu", "qsv"):
+                self.stop_active_backend(backend, reason="user_stop")
+        return self.controls.snapshot()
+
+    def stop_active_backend(self, backend: str, reason: str = "user_stop") -> bool:
+        with self.lock, self.repository.transaction():
+            active = next((j for j in self.repository.get_all()
+                           if j.backend == backend and j.status in ACTIVE), None)
+            job_id = active.id if active else None
+        if job_id is None:
+            return False
+        self.skip(job_id, reason=reason)
+        return True
 
     def revalidate(self, *, defer_external_stops: bool = False) -> list[str]:
         """Apply current protections; optionally let a caller stop real workers after its transaction."""
@@ -370,6 +504,8 @@ class QueueService:
                 if reasons:
                     if job.status in ACTIVE:
                         if job.backend in self.external_backends:
+                            job.cancel_requested = True
+                            job.cancel_reason = "policy_changed"
                             stop_after_commit.append(job.id)
                         else:
                             self.worker.stop(job.id)
@@ -390,8 +526,8 @@ class QueueService:
                     job.planning_saving_percent = result.planning_saving_percent
                 if job.model_dump() != before:
                     self.repository.save(job)
+        # External workers observe persisted cancellation requests in
+        # SQLite. Never call a process-local encoder handle from the web process.
         if defer_external_stops:
             return stop_after_commit
-        for job_id in stop_after_commit:
-            self.worker.stop(job_id)
         return []

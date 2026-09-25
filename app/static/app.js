@@ -123,7 +123,11 @@ async function refreshQueue() {
   queue = data;
   $('#queue-count').textContent = queue.pending_count;
   queue.lanes.forEach(lane => {
-    $(`#${lane.backend}-state`).textContent = `${lane.backend.toUpperCase()} · ${lane.active?.status ?? 'idle'}`;
+    const control = queue.workers?.lanes?.[lane.backend];
+    const state = control?.paused ? 'paused'
+      : control?.quiet_active ? 'quiet hours'
+      : lane.active?.status ?? 'idle';
+    $(`#${lane.backend}-state`).textContent = `${lane.backend.toUpperCase()} · ${state}`;
   });
   renderQueue(queue);
   renderHistory(queue);
@@ -202,6 +206,21 @@ $('#queue-lanes')?.addEventListener('change', event => {
   if (!event.target.matches('[data-priority]')) return;
   const jobId = event.target.closest('[data-job]').dataset.job;
   mutate(() => queueAction(jobId, 'priority', event.target.value));
+});
+
+document.addEventListener('click', event => {
+  const button = event.target.closest('[data-worker-action]');
+  if (!button) return;
+  const action = button.dataset.workerAction;
+  const backend = button.dataset.backend;
+  let path;
+  if (action === 'pause-all') path = '/api/queue/workers/pause-all';
+  else if (action === 'stop-all') path = '/api/queue/workers/stop-all';
+  else if (action === 'stop-active') path = `/api/queue/workers/${encodeURIComponent(backend)}/stop-active`;
+  else if (action === 'toggle-pause') {
+    path = `/api/queue/workers/${encodeURIComponent(backend)}/${button.dataset.paused === 'true' ? 'resume' : 'pause'}`;
+  } else return;
+  mutate(() => api(path, {method: 'POST'}));
 });
 
 async function poll() {

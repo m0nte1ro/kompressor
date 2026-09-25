@@ -103,4 +103,5 @@ def settings(request: Request, processor: Processor):
     return render(request, "settings.html", "settings", "Settings",
                   subtitle="Presets and persistent library preferences",
                   presets=processor.get_presets(), library_paths=processor.get_library_paths(),
+                  worker_controls=processor.get_worker_controls(),
                   scan_status=scan_status, runtime_settings=runtime_settings)

@@ -4,17 +4,12 @@ Filesystem mode can run one background CPU encode at a time when the configured
 runtime has `ffmpeg`, `ffprobe`, `libx265`, and a writable dedicated workspace.
 Seed mode remains deterministic simulation. No encode runs inside an HTTP request.
 
-Configure the existing filesystem roots and the output workspace before startup:
-
-```sh
-KOMPRESSOR_MEDIA_BACKEND=filesystem \
-KOMPRESSOR_MOVIES_ROOT=/media/movies \
-KOMPRESSOR_SHOWS_ROOT=/media/shows \
-KOMPRESSOR_FFMPEG_BINARY=/usr/bin/ffmpeg \
-KOMPRESSOR_FFPROBE_BINARY=/usr/bin/ffprobe \
-KOMPRESSOR_WORKSPACE_ROOT=/mnt/kompressor \
-.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
+Configure the existing filesystem roots and output workspace for both processes.
+Start the WebUI with `.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1`
+and the encoder with `.venv/bin/python -m app.worker_main cpu`. The two processes
+share the same SQLite database and environment configuration. Restarting or stopping
+the WebUI therefore leaves an active ffmpeg process alone; only the CPU worker owns
+that subprocess. Example systemd units live in `deploy/systemd/`.
 
 The workspace must already contain a writable `jobs/` directory. Settings shows the
 resolved binary paths, whether `libx265` is present, workspace writability, active
@@ -40,10 +35,16 @@ signalling, duration and preserved stream/chapter counts. Only then is the parti
 promoted to `<source-stem>.kompressor.mkv`. The source is never renamed, truncated,
 replaced or deleted. Measured saving is recorded separately from the estimate.
 
-Stop & Skip terminates only the subprocess owned by that job ID, waits a bounded
-period before killing it if necessary, removes the partial output, records the job
-as skipped and wakes the next CPU job. Shutdown stops owned processes. If the app
-restarts with an active real job in filesystem mode, recovery requeues it from zero
-and removes stale partial/final output in that job directory; an interrupted output
-is never treated as validated. Pending jobs from the other runtime mode are blocked
-instead of being run by the wrong worker. QSV remains unsupported.
+Stop & Skip is persisted as a cancellation request in SQLite. The standalone CPU
+worker observes that request, terminates only the subprocess it owns, removes the
+partial output and records the job as skipped. Manual worker pause blocks new claims
+but lets an active job finish. Quiet hours also block new claims; when the quiet
+window begins, known progress below the configured cutoff is cancelled while jobs
+at/above it (and jobs whose progress is unknown) finish before the worker goes idle.
+
+Stopping the WebUI does not stop owned encoder processes because the WebUI owns none.
+Stopping the CPU worker does stop its own process; on the next worker startup recovery
+requeues an interrupted ordinary encode from zero and removes stale partial/final
+workspace output. An interrupted output is never treated as validated. Pending jobs
+from the other runtime mode are blocked instead of being run by the wrong worker.
+QSV execution remains unsupported.

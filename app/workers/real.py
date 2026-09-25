@@ -40,6 +40,7 @@ class RealEncoderWorker:
         self._wake = Event()
         self._lock = Lock()
         self._thread: Thread | None = None
+        self._control_thread: Thread | None = None
         self._cancelled: set[str] = set()
         self._active: set[str] = set()
 
@@ -75,11 +76,29 @@ class RealEncoderWorker:
         if not self.enabled or self._thread is not None:
             return
         self._thread = Thread(target=self._run, name="kompressor-cpu-encoder", daemon=True)
+        self._control_thread = Thread(target=self._control_loop, name="kompressor-cpu-control", daemon=True)
         self._thread.start()
+        self._control_thread.start()
         self._wake.set()
 
     def wake(self) -> None:
         self._wake.set()
+
+    def _control_loop(self) -> None:
+        last_quiet: bool | None = None
+        while not self._stop.wait(0.5):
+            queue = self.queue
+            if queue is None:
+                continue
+            quiet = queue.quiet_active("cpu")
+            if quiet and last_quiet is not True:
+                queue.enforce_quiet_start("cpu")
+            last_quiet = quiet
+            with self._lock:
+                active = list(self._active)
+            for job_id in active:
+                if queue.cancel_requested(job_id):
+                    self.stop(job_id)
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -161,7 +180,9 @@ class RealEncoderWorker:
             self.guard.before_processing(reference)
             final_path = self.encoder.promote(job.id, output)
             size = final_path.stat().st_size
-            queue.complete_real_job(job.id, str(final_path), size)
+            if not queue.complete_real_job(job.id, str(final_path), size):
+                self.encoder.cleanup(job.id, remove_final=True)
+                raise EncodingCancelled("Job was stopped before completion was persisted.")
 
     def advance(self, job: QueueJob, seconds: float) -> None:
         raise RuntimeError("The real worker is driven by its background thread, not fake ticks.")
@@ -187,3 +208,5 @@ class RealEncoderWorker:
         self.encoder.stop_all()
         if self._thread:
             self._thread.join()
+        if self._control_thread:
+            self._control_thread.join()

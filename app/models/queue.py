@@ -7,7 +7,7 @@ from app.models.preset import CompressionPreset, EncoderBackend
 from app.models.inventory import SourceReference
 
 
-JobStatus = Literal["queued", "encoding", "validating", "completed", "skipped", "blocked", "failed"]
+JobStatus = Literal["queued", "encoding", "validating", "stopping", "completed", "skipped", "blocked", "failed"]
 Priority = Literal["low", "normal", "high", "urgent"]
 
 
@@ -56,6 +56,7 @@ class QueueJob(BaseModel):
     move_next_order: int = 0
     status: JobStatus = "queued"
     progress: float = 0
+    progress_known: bool = False
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None
@@ -67,3 +68,5 @@ class QueueJob(BaseModel):
     error_message: str | None = None
     ffmpeg_exit_code: int | None = None
     validation_errors: list[str] = Field(default_factory=list)
+    cancel_requested: bool = False
+    cancel_reason: str | None = None

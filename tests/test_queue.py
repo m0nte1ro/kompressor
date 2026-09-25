@@ -1,8 +1,10 @@
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 
 import pytest
 
 from app.models.queue import EnqueueRequest
+from app.models.preferences import WorkerLaneSettings, WorkerSettings
 
 
 def add(client, payload):
@@ -148,3 +150,54 @@ def test_seed_worker_blocks_persisted_real_jobs_instead_of_simulating(queue, mov
     assert "cannot run in fake mode" in blocked.reasons[0]
     queue.tick(10_000)
     assert queue._find(saved.id).status == "blocked"
+
+
+def test_manual_worker_pause_prevents_claim_until_resumed(client, queue, movie_payload):
+    assert client.post("/api/queue/workers/cpu/pause").status_code == 200
+    job = add(client, movie_payload)["added"][0]
+    queue.tick(0)
+    cpu = next(lane for lane in client.get("/api/queue").json()["lanes"] if lane["backend"] == "cpu")
+    assert cpu["active"] is None
+    assert cpu["queued"][0]["id"] == job["id"]
+    assert client.get("/api/queue/workers").json()["lanes"]["cpu"]["paused"] is True
+
+    assert client.post("/api/queue/workers/cpu/resume").status_code == 200
+    queue.tick(0)
+    cpu = next(lane for lane in client.get("/api/queue").json()["lanes"] if lane["backend"] == "cpu")
+    assert cpu["active"]["id"] == job["id"]
+
+
+def test_stop_all_pauses_workers_and_skips_active_fake_jobs(client, queue, movie_payload, show_payload):
+    add(client, movie_payload)
+    add(client, show_payload)
+    queue.tick(0)
+    response = client.post("/api/queue/workers/stop-all")
+    assert response.status_code == 200
+    controls = response.json()["lanes"]
+    assert controls["cpu"]["paused"] is True
+    assert controls["qsv"]["paused"] is True
+    state = client.get("/api/queue").json()
+    assert all(lane["active"] is None for lane in state["lanes"])
+    assert sum(job["status"] == "skipped" for job in state["history"]) == 2
+
+
+def test_quiet_hours_cross_midnight_and_apply_progress_cutoff(queue, movie_payload):
+    controls = queue.controls
+    controls.save(WorkerSettings(
+        timezone="Europe/Lisbon",
+        cpu=WorkerLaneSettings(quiet_hours_enabled=True, quiet_start="18:00",
+            quiet_end="01:00", quiet_cutoff_percent=50),
+        qsv=WorkerLaneSettings(),
+    ))
+    # 20:00 UTC is 21:00 in Lisbon on this date; 02:00 UTC is 03:00 local.
+    assert controls.quiet_active("cpu", datetime(2026, 9, 25, 20, 0, tzinfo=timezone.utc))
+    assert not controls.quiet_active("cpu", datetime(2026, 9, 26, 2, 0, tzinfo=timezone.utc))
+
+    job = queue.enqueue(EnqueueRequest.model_validate(movie_payload))["added"][0]
+    saved = queue._find(job["id"])
+    assert controls.quiet_action("cpu", saved) == "finish"  # Unknown progress is conservative.
+    saved.progress_known = True
+    saved.progress = 49.9
+    assert controls.quiet_action("cpu", saved) == "stop"
+    saved.progress = 50
+    assert controls.quiet_action("cpu", saved) == "finish"

@@ -48,6 +48,28 @@
   <p>{{ 'Read-only filesystem inventory ·' if scan_status.backend == 'filesystem' else 'Seed library ·' }} {{ 'real CPU encoding available' if runtime_settings.encoding_enabled else 'simulated workers' if scan_status.backend == 'seed' else 'encoding disabled' }}</p>
   {% if scan_status.backend == 'filesystem' %}<button id="scan-library" class="primary">Scan library</button><p id="scan-status" role="status">{{ scan_status.state }}</p><ul id="scan-errors"></ul>{% else %}<p class="muted">Set KOMPRESSOR_MEDIA_BACKEND=filesystem to enable read-only discovery and ffprobe.</p>{% endif %}
 </section>
+<section class="card worker-schedule-settings" aria-labelledby="worker-schedule-title">
+  <h2 id="worker-schedule-title">Worker operating hours</h2>
+  <p class="muted">Pause state and quiet hours are persisted in SQLite and enforced by standalone worker processes even when the WebUI is down. During quiet hours no new job starts. When quiet hours begin, a known-progress job below the cutoff is stopped; a job at or above the cutoff finishes. Unknown progress is allowed to finish.</p>
+  <form id="worker-schedule-form" class="field-grid">
+    <label class="field">Timezone
+      <input name="timezone" value="{{ worker_controls.timezone }}" maxlength="100" placeholder="Europe/Lisbon">
+    </label>
+    {% for backend, heading in [('cpu', 'CPU'), ('qsv', 'Intel QSV')] %}
+    {% set lane = worker_controls.lanes[backend] %}
+    <fieldset class="worker-schedule-lane">
+      <legend>{{ heading }}</legend>
+      <input type="hidden" name="{{ backend }}_paused" value="{{ 'true' if lane.paused else 'false' }}">
+      <label><input type="checkbox" name="{{ backend }}_quiet_hours_enabled" {% if lane.quiet_hours_enabled %}checked{% endif %}> Enable quiet hours</label>
+      <label class="field">Quiet from<input type="time" name="{{ backend }}_quiet_start" value="{{ lane.quiet_start }}"></label>
+      <label class="field">Quiet until<input type="time" name="{{ backend }}_quiet_end" value="{{ lane.quiet_end }}"></label>
+      <label class="field">Stop if progress below (%)<input type="number" name="{{ backend }}_quiet_cutoff_percent" min="0" max="100" step="1" value="{{ lane.quiet_cutoff_percent }}"></label>
+      <p class="muted">Current manual state: {{ 'paused' if lane.paused else 'enabled' }}{% if lane.quiet_active %} · quiet hours active now{% endif %}.</p>
+    </fieldset>
+    {% endfor %}
+    <div class="settings-actions"><button type="submit" class="primary">Save worker hours</button><span id="worker-schedule-status" class="muted" role="status"></span></div>
+  </form>
+</section>
 <section class="card future-settings" aria-labelledby="encoding-runtime-title">
   <h2 id="encoding-runtime-title">Encoding runtime</h2>
   <dl class="runtime-facts">
