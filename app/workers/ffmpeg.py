@@ -101,6 +101,16 @@ class FFmpegEncoder:
         command.extend(["-map_metadata", "0" if job.preserve_subtitles else "-1",
                         "-map_chapters", "0" if job.preserve_subtitles else "-1",
                         "-c", "copy", "-c:v:0", "libx265"])
+        # MP4 timed-text (mov_text) cannot be stream-copied into Matroska.
+        # Preserve the subtitle track by converting only that text stream to SRT;
+        # every other mapped stream keeps the default stream-copy behaviour.
+        subtitle_output_index = 0
+        for stream in ordered:
+            if stream.kind != "subtitle":
+                continue
+            if stream.codec.lower() == "mov_text":
+                command.extend([f"-c:s:{subtitle_output_index}", "srt"])
+            subtitle_output_index += 1
         if job.preset.rate_control == "crf" and job.preset.quality_value is not None:
             command.extend(["-crf:v:0", str(job.preset.quality_value)])
         elif job.preset.rate_control == "abr" and job.preset.target_video_bitrate is not None:
