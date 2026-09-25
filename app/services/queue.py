@@ -314,7 +314,7 @@ class QueueService:
             job.finished_at = now()
             job.output_path = output_path
             job.output_size = output_size
-            job.measured_saving = max(0, job.source_size - output_size)
+            job.measured_saving = job.source_size - output_size
             job.error_message = None
             self.repository.save(job)
 
