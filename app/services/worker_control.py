@@ -24,12 +24,18 @@ class WorkerControlService:
         lane = getattr(settings, backend).model_copy(update={"paused": paused})
         return self.save(settings.model_copy(update={backend: lane}))
 
-    def pause_all(self) -> WorkerSettings:
+    def set_all_paused(self, paused: bool) -> WorkerSettings:
         settings = self.get()
         return self.save(settings.model_copy(update={
-            "cpu": settings.cpu.model_copy(update={"paused": True}),
-            "qsv": settings.qsv.model_copy(update={"paused": True}),
+            "cpu": settings.cpu.model_copy(update={"paused": paused}),
+            "qsv": settings.qsv.model_copy(update={"paused": paused}),
         }))
+
+    def pause_all(self) -> WorkerSettings:
+        return self.set_all_paused(True)
+
+    def resume_all(self) -> WorkerSettings:
+        return self.set_all_paused(False)
 
     @staticmethod
     def _minutes(value: str) -> int:

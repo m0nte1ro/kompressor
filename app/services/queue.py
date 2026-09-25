@@ -465,6 +465,15 @@ class QueueService:
                 self.stop_active_backend(backend, reason="user_stop")
         return self.controls.snapshot()
 
+    def resume_all_workers(self) -> dict:
+        if self.controls is None:
+            raise InvalidOperation("Worker controls are unavailable.")
+        self.controls.resume_all()
+        wake = getattr(self.worker, "wake", None)
+        if wake:
+            wake()
+        return self.controls.snapshot()
+
     def stop_active_backend(self, backend: str, reason: str = "user_stop") -> bool:
         with self.lock, self.repository.transaction():
             active = next((j for j in self.repository.get_all()

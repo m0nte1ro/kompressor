@@ -1,10 +1,10 @@
-import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js';
-import './presets.js';
-import './settings.js';
-import './discovery.js';
-import {setupTags} from './tags.js';
-import {compressionModal} from './compression.js';
-import {renderHistory, renderQueue} from './queue.js';
+import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js?v=4';
+import './presets.js?v=4';
+import './settings.js?v=4';
+import './discovery.js?v=4';
+import {setupTags} from './tags.js?v=4';
+import {compressionModal} from './compression.js?v=4';
+import {renderHistory, renderQueue} from './queue.js?v=4';
 
 let queue = {lanes: [], history: [], pending_count: 0};
 
@@ -211,16 +211,39 @@ $('#queue-lanes')?.addEventListener('change', event => {
 document.addEventListener('click', event => {
   const button = event.target.closest('[data-worker-action]');
   if (!button) return;
+
   const action = button.dataset.workerAction;
   const backend = button.dataset.backend;
+  const laneControl = backend ? queue.workers?.lanes?.[backend] : null;
+  const allControls = queue.workers?.lanes ? Object.values(queue.workers.lanes) : [];
   let path;
-  if (action === 'pause-all') path = '/api/queue/workers/pause-all';
-  else if (action === 'stop-all') path = '/api/queue/workers/stop-all';
-  else if (action === 'stop-active') path = `/api/queue/workers/${encodeURIComponent(backend)}/stop-active`;
-  else if (action === 'toggle-pause') {
-    path = `/api/queue/workers/${encodeURIComponent(backend)}/${button.dataset.paused === 'true' ? 'resume' : 'pause'}`;
-  } else return;
-  mutate(() => api(path, {method: 'POST'}));
+  let message;
+
+  if (action === 'toggle-pause-all') {
+    const allPaused = allControls.length > 0 && allControls.every(control => control.paused);
+    path = allPaused ? '/api/queue/workers/resume-all' : '/api/queue/workers/pause-all';
+    message = allPaused ? 'All workers resumed.' : 'All workers will pause before claiming another job.';
+  } else if (action === 'stop-all') {
+    path = '/api/queue/workers/stop-all';
+    message = 'Active jobs are stopping and all workers are paused.';
+  } else if (action === 'stop-active') {
+    path = `/api/queue/workers/${encodeURIComponent(backend)}/stop-active`;
+    message = `${backend.toUpperCase()} active job stop requested.`;
+  } else if (action === 'toggle-pause') {
+    const paused = laneControl?.paused ?? button.dataset.paused === 'true';
+    path = `/api/queue/workers/${encodeURIComponent(backend)}/${paused ? 'resume' : 'pause'}`;
+    message = paused
+      ? `${backend.toUpperCase()} worker resumed.`
+      : `${backend.toUpperCase()} worker will pause before claiming another job.`;
+  } else {
+    return;
+  }
+
+  mutate(async () => {
+    const response = await api(path, {method: 'POST'});
+    if (response?.lanes) queue.workers = response;
+    notify(message);
+  });
 });
 
 async function poll() {

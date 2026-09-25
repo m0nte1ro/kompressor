@@ -126,6 +126,9 @@ class MediaProcessor:
     def pause_all_workers(self, *, stop_active: bool = False) -> dict:
         return self.queue.pause_all_workers(stop_active=stop_active)
 
+    def resume_all_workers(self) -> dict:
+        return self.queue.resume_all_workers()
+
     def stop_active_worker(self, backend: str) -> bool:
         return self.queue.stop_active_backend(backend)
 

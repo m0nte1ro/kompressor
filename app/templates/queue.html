@@ -10,8 +10,8 @@
 <div class="toolbar worker-toolbar" id="worker-controls">
   <span class="muted">Worker controls are persistent and shared with the standalone encoder processes.</span>
   <div class="job-controls">
-    <button data-worker-action="pause-all">Pause all after current</button>
-    <button class="danger" data-worker-action="stop-all">Stop active &amp; pause all</button>
+    <button type="button" data-worker-action="toggle-pause-all">Pause all after current</button>
+    <button type="button" class="danger" data-worker-action="stop-all">Stop active &amp; pause all</button>
   </div>
 </div>
 <div class="queue-grid" id="queue-lanes">
@@ -21,8 +21,8 @@
     <header class="lane-head">
       <div><h2>{{ label }}</h2><span class="badge worker-mode">{{ 'ready' if backend_enabled else 'unavailable' }}</span></div>
       {% if backend_enabled %}<div class="job-controls">
-        <button data-worker-action="toggle-pause" data-backend="{{ backend }}">Pause after current</button>
-        <button class="danger" data-worker-action="stop-active" data-backend="{{ backend }}">Stop active</button>
+        <button type="button" data-worker-action="toggle-pause" data-backend="{{ backend }}">Pause after current</button>
+        <button type="button" class="danger" data-worker-action="stop-active" data-backend="{{ backend }}">Stop active</button>
       </div>{% endif %}
     </header>
     <div class="active-slot"><p class="empty">Loading worker…</p></div>

@@ -167,6 +167,35 @@ def test_manual_worker_pause_prevents_claim_until_resumed(client, queue, movie_p
     assert cpu["active"]["id"] == job["id"]
 
 
+def test_pause_all_can_be_resumed_through_api(client, queue, movie_payload):
+    paused = client.post("/api/queue/workers/pause-all")
+    assert paused.status_code == 200
+    assert all(lane["paused"] for lane in paused.json()["lanes"].values())
+
+    job = add(client, movie_payload)["added"][0]
+    queue.tick(0)
+    cpu = next(lane for lane in client.get("/api/queue").json()["lanes"] if lane["backend"] == "cpu")
+    assert cpu["active"] is None
+    assert cpu["queued"][0]["id"] == job["id"]
+
+    resumed = client.post("/api/queue/workers/resume-all")
+    assert resumed.status_code == 200
+    assert all(not lane["paused"] for lane in resumed.json()["lanes"].values())
+
+    queue.tick(0)
+    cpu = next(lane for lane in client.get("/api/queue").json()["lanes"] if lane["backend"] == "cpu")
+    assert cpu["active"]["id"] == job["id"]
+
+
+def test_queue_page_exposes_worker_toggle_controls_and_versioned_script(client):
+    page = client.get("/queue")
+    assert page.status_code == 200
+    assert 'data-worker-action="toggle-pause-all"' in page.text
+    assert 'data-worker-action="toggle-pause"' in page.text
+    assert 'data-worker-action="stop-active"' in page.text
+    assert "app.js?v=4" in page.text
+
+
 def test_stop_all_pauses_workers_and_skips_active_fake_jobs(client, queue, movie_payload, show_payload):
     add(client, movie_payload)
     add(client, show_payload)

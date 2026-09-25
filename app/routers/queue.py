@@ -35,6 +35,11 @@ def pause_all(processor: Processor) -> dict:
     return processor.pause_all_workers()
 
 
+@router.post("/workers/resume-all")
+def resume_all(processor: Processor) -> dict:
+    return processor.resume_all_workers()
+
+
 @router.post("/workers/stop-all")
 def stop_all(processor: Processor) -> dict:
     return processor.pause_all_workers(stop_active=True)

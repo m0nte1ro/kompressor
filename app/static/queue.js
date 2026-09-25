@@ -27,6 +27,16 @@ function jobDetails(job) {
 }
 
 export function renderQueue(queue) {
+  const workerLanes = queue.workers?.lanes;
+  const globalToggle = $('[data-worker-action="toggle-pause-all"]');
+  if (globalToggle && workerLanes) {
+    const lanes = Object.values(workerLanes);
+    const allPaused = lanes.length > 0 && lanes.every(lane => lane.paused);
+    globalToggle.textContent = allPaused ? 'Resume all workers' : 'Pause all after current';
+    globalToggle.dataset.paused = String(allPaused);
+    globalToggle.setAttribute('aria-pressed', String(allPaused));
+  }
+
   for (const lane of queue.lanes) {
     const section = $(`[data-backend="${lane.backend}"]`);
     const control = queue.workers?.lanes?.[lane.backend];
@@ -40,6 +50,7 @@ export function renderQueue(queue) {
       if (toggle) {
         toggle.textContent = control.paused ? 'Resume worker' : 'Pause after current';
         toggle.dataset.paused = String(control.paused);
+        toggle.setAttribute('aria-pressed', String(control.paused));
       }
       const stop = $('[data-worker-action="stop-active"]', section);
       if (stop) stop.disabled = !lane.active;
