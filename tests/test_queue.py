@@ -193,7 +193,7 @@ def test_queue_page_exposes_worker_toggle_controls_and_versioned_script(client):
     assert 'data-worker-action="toggle-pause-all"' in page.text
     assert 'data-worker-action="toggle-pause"' in page.text
     assert 'data-worker-action="stop-active"' in page.text
-    assert "app.js?v=4" in page.text
+    assert "app.js?v=5" in page.text
 
 
 def test_stop_all_pauses_workers_and_skips_active_fake_jobs(client, queue, movie_payload, show_payload):
