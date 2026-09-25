@@ -229,4 +229,6 @@ def test_quiet_hours_cross_midnight_and_apply_progress_cutoff(queue, movie_paylo
     saved.progress = 49.9
     assert controls.quiet_action("cpu", saved) == "stop"
     saved.progress = 50
+    assert controls.quiet_action("cpu", saved) == "stop"
+    saved.progress = 50.1
     assert controls.quiet_action("cpu", saved) == "finish"

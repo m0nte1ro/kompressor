@@ -230,11 +230,13 @@ class QueueService:
                     self.repository.save(job)
             self._start_idle_lanes()
 
-    def recover(self) -> None:
-        """Requeue interrupted real jobs from zero and remove unvalidated workspace outputs."""
+    def recover(self, backends: set[str] | frozenset[str] | None = None) -> None:
+        """Recover only lanes owned by this process; seed recovery still covers all lanes."""
         interrupted = []
         with self.lock, self.repository.transaction():
             for job in self.repository.get_all():
+                if backends is not None and job.backend not in backends:
+                    continue
                 if job.status == "stopping" and job.cancel_requested:
                     if job.backend in self.external_backends:
                         interrupted.append(job.id)

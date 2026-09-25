@@ -66,7 +66,7 @@ class WorkerControlService:
         lane = getattr(self.get(), backend)
         if not job.progress_known:
             return "finish"
-        return "finish" if job.progress >= lane.quiet_cutoff_percent else "stop"
+        return "finish" if job.progress > lane.quiet_cutoff_percent else "stop"
 
     def snapshot(self, at: datetime | None = None) -> dict:
         settings = self.get()
