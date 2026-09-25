@@ -38,6 +38,11 @@ def get_presets(processor: Processor, scope: Literal["movie", "show"] | None = N
     return processor.get_presets(scope)
 
 
+@router.get("/api/media/{scope}/{media_id}")
+def get_media_item(processor: Processor, scope: Literal["movie", "show"], media_id: str):
+    return processor.get_media_item(media_id, scope)
+
+
 @router.get("/api/settings")
 def get_settings(processor: Processor):
     return processor.get_library_paths()

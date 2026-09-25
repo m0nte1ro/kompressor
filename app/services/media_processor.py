@@ -53,6 +53,10 @@ class MediaProcessor:
     def get_presets(self, scope: MediaScope | None = None):
         return self.presets.get_all(scope)
 
+    def get_media_item(self, media_id: str, scope: MediaScope):
+        entry = self.catalog.find(media_id, scope)
+        return {"name": entry.name, "item": entry.item}
+
     def get_library_paths(self) -> LibraryPaths:
         return self.preferences.get_library_paths() if self.preferences else LibraryPaths()
 

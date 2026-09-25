@@ -24,6 +24,23 @@ def test_static_assets(client, asset, content_type):
     assert content_type in response.headers["content-type"]
 
 
+def test_single_media_detail_endpoint_returns_only_requested_item(client):
+    response = client.get("/api/media/show/modern-family-s03e04")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["item"]["id"] == "modern-family-s03e04"
+    assert "name" in payload
+    assert "movies" not in payload and "shows" not in payload
+
+
+def test_compression_modal_does_not_fetch_full_library(client):
+    script = client.get("/static/compression.js")
+    assert script.status_code == 200
+    assert "api('/api/library')" not in script.text
+    assert "/api/media/" in script.text
+    assert "loadPresets().catch" in script.text
+
+
 def test_blocking_reasons_are_visible(client):
     html = client.get("/movies").text
     assert "Dune: Part Two" in html

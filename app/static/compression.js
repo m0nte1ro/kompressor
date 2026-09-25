@@ -3,10 +3,46 @@ import {$, $$, api, bitrate, escapeHTML as esc, label, mapLimit, notify, pending
 export function compressionModal(scope, refreshQueue) {
   const dialog = $('#compression-dialog');
   const form = $('#compression-form');
-  let selected = [], presets = [], library, results = [];
+  let selected = [], presets = [], results = [];
+  let presetsRequest = null;
   let generation = 0, evaluation = 0, submitting = false, preserveAudioTouched = false;
   const errorBox = $('#modal-error');
   const submit = $('#add-to-queue');
+
+  async function loadPresets() {
+    if (presets.length) return presets;
+    if (!presetsRequest) {
+      presetsRequest = api(`/api/presets?scope=${encodeURIComponent(scope)}`)
+        .then(value => {
+          presets = value;
+          return value;
+        })
+        .finally(() => { presetsRequest = null; });
+    }
+    return presetsRequest;
+  }
+
+  async function loadSourceSummary(rows, session) {
+    try {
+      const details = await mapLimit(rows, row =>
+        api(`/api/media/${encodeURIComponent(scope)}/${encodeURIComponent(row.dataset.id)}`));
+      if (session !== generation || !dialog.open) return;
+      $('#source-summary').innerHTML = details.map(({name, item}) => {
+        const audio = item.audio.map(a =>
+          `${label(a.codec)} ${a.channels ?? 'Unknown'} ch${a.language ? ` · ${a.language}` : ''}`
+        ).join(' / ') || 'No audio';
+        const sourceBitrate = item.video_bitrate_estimated ? `≈ ${bitrate(item.video_bitrate)}` : bitrate(item.video_bitrate);
+        return `<div class="source-item"><strong>${esc(name)}</strong><p class="muted">${esc(
+          [item.source, item.resolution, label(item.video_codec), sourceBitrate, size(item.size), label(item.hdr), audio]
+            .filter(Boolean).join(' · ')
+        )}</p></div>`;
+      }).join('');
+    } catch (err) {
+      if (session === generation && dialog.open) {
+        $('#source-summary').textContent = `Source details unavailable: ${err.message}`;
+      }
+    }
+  }
 
   function error(message) {
     errorBox.textContent = message;
@@ -130,6 +166,10 @@ export function compressionModal(scope, refreshQueue) {
     }
   });
 
+  // Presets are tiny and change only via Settings, which reloads its page after edits.
+  // Warm this cache while the user is browsing so first modal open is near-instant.
+  void loadPresets().catch(() => {});
+
   return async function open(rows) {
     selected = rows;
     const session = ++generation;
@@ -151,24 +191,20 @@ export function compressionModal(scope, refreshQueue) {
     $('#preserve-subtitles').checked = true;
     $('#replace-source').value = 'false';
     dialog.showModal();
+
+    // Source details are an indexed per-item lookup and are deliberately not on
+    // the critical path for preset selection or eligibility.
+    void loadSourceSummary(rows, session);
+
     try {
-      const loaded = await Promise.all([api(`/api/presets?scope=${encodeURIComponent(scope)}`), library ? Promise.resolve(library) : api('/api/library')]);
+      await loadPresets();
       if (session !== generation || !dialog.open) return;
-      [presets, library] = loaded;
       $('#preset').innerHTML = presets.map(p => `<option value="${esc(p.id)}" ${!p.enabled || p.destination_codec === 'av1' ? 'disabled' : ''}>${esc(p.name)} · ${esc(label(p.backend))}</option>`).join('');
       const suggested = presets.find(p => p.id === rows[0].dataset.preset && p.enabled && p.destination_codec !== 'av1');
       const chosen = suggested ?? presets.find(p => p.enabled && p.destination_codec !== 'av1');
       if (!chosen) throw new Error('No available presets for this media scope.');
       $('#preset').value = chosen.id;
       properties(chosen);
-      const items = scope === 'movie' ? library.movies : library.shows.flatMap(show => show.seasons.flatMap(season => season.episodes));
-      $('#source-summary').innerHTML = rows.map(row => {
-        const item = items.find(i => i.id === row.dataset.id);
-        if (!item) return `<p>${esc(row.dataset.name)} · Source no longer available</p>`;
-        const audio = item.audio.map(a => `${label(a.codec)} ${a.channels ?? 'Unknown'} ch${a.language ? ` · ${a.language}` : ''}`).join(' / ') || 'No audio';
-        const sourceBitrate = item.video_bitrate_estimated ? `≈ ${bitrate(item.video_bitrate)}` : bitrate(item.video_bitrate);
-        return `<div class="source-item"><strong>${esc(row.dataset.name)}</strong><p class="muted">${esc([item.source, item.resolution, label(item.video_codec), sourceBitrate, size(item.size), label(item.hdr), audio].filter(Boolean).join(' · '))}</p></div>`;
-      }).join('');
       await evaluate();
     } catch (err) {
       if (session === generation && dialog.open) error(err.message);
