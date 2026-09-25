@@ -290,6 +290,22 @@ def test_real_worker_validates_promotes_and_measures_output(tmp_path, monkeypatc
         assert (after.st_ino, after.st_size, after.st_mtime_ns) == (before.st_ino, before.st_size, before.st_mtime_ns)
 
 
+def test_measured_saving_is_negative_when_output_is_larger(tmp_path, monkeypatch, probe_facts):
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        processor.scan_library()
+        movie = processor.get_library().movies[0]
+        added = processor.queue_encode(EnqueueRequest(media_ids=[movie.id], scope="movie",
+            preset_id="movie-streaming-quality"))["added"][0]
+        job = processor.queue.claim_next("cpu")
+        assert job is not None
+        assert processor.queue.set_real_validating(job.id, "/tmp/larger-output.mkv")
+        processor.queue.complete_real_job(job.id, "/tmp/larger-output.mkv", 500_000_000)
+        saved = next(item for item in processor.get_queue()["history"] if item["id"] == added["id"])
+        assert saved["measured_saving"] == -100_000_000
+
+
 def test_ffmpeg_failure_is_persisted_and_partial_is_removed(tmp_path, monkeypatch, probe_facts):
     application, source_path, workspace, spawned = build_real_app(
         tmp_path, monkeypatch, probe_facts, exit_code=7)
