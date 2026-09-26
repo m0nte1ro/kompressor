@@ -6,14 +6,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import PROJECT_ROOT, Settings
+from app.container import build_media_processor
 from app.main import create_app
 from app.models.inventory import SourceReference
 from app.models.media import AudioTrack, Movie
 from app.models.preset import CompressionPreset
+from app.models.preferences import WorkerLaneSettings, WorkerSettings
 from app.models.probe import HDRSignalling, MediaProbeResult
 from app.models.queue import EnqueueRequest, QueueJob
 from app.repositories.preset_seed import SeedPresetRepository
-from app.services.encoding_capability import CPUEncodeCapability
+from app.services.encoding_capability import CPUEncodeCapability, QSVEncodeCapability
 from app.services.errors import Conflict
 from app.services.ffprobe import FFprobeService
 from app.workers.ffmpeg import FFmpegEncoder, FFmpegError
@@ -29,6 +31,12 @@ def probe_facts():
 def movie_preset() -> CompressionPreset:
     presets = SeedPresetRepository(PROJECT_ROOT / "fixtures/presets.json").get_all()
     return next(preset for preset in presets if preset.id == "movie-streaming-quality")
+
+
+def qsv_preset(efficient_audio: bool = False) -> CompressionPreset:
+    presets = SeedPresetRepository(PROJECT_ROOT / "fixtures/presets.json").get_all()
+    preset_id = "show-streaming-efficient-audio" if efficient_audio else "show-streaming-quality"
+    return next(preset for preset in presets if preset.id == preset_id)
 
 
 def queue_job(preset=None, **changes) -> QueueJob:
@@ -69,8 +77,10 @@ def test_runtime_capability_checks_ffmpeg_ffprobe_workspace_and_x265(tmp_path, m
     monkeypatch.setattr(encoding_runtime, "executable", lambda binary: f"/fake/{binary}")
     monkeypatch.setattr(encoding_runtime.FFprobeService, "runtime_check", lambda binary: (True, None))
     monkeypatch.setattr(encoding_runtime.FFmpegEncoder, "runtime_check", lambda binary: (True, None))
+    monkeypatch.setattr(encoding_runtime.FFmpegEncoder, "qsv_runtime_check", lambda binary, device: (True, None))
     status = encoding_runtime.capability_status("ffmpeg", "ffprobe", workspace, {"movie": movie_root})
     assert status["available"] and status["ffprobe_available"] and status["libx265_available"]
+    assert status["hevc_qsv_available"] and status["supported_backends"] == ["cpu", "qsv"]
     assert status["workspace_writable"]
 
 
@@ -89,6 +99,31 @@ def test_tool_runtime_checks_accept_diagnostics_on_stderr(monkeypatch):
     assert FFprobeService.runtime_check("ffprobe") == (True, None)
 
 
+def test_qsv_runtime_check_requires_encoder_device_and_smoke_test(tmp_path, monkeypatch):
+    import subprocess
+    from app.workers import ffmpeg
+
+    device = tmp_path / "renderD128"
+    device.touch()
+    monkeypatch.setattr(ffmpeg.stat, "S_ISCHR", lambda mode: True)
+    monkeypatch.setattr(ffmpeg.os, "access", lambda path, mode: True)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if "-encoders" in command:
+            return subprocess.CompletedProcess(command, 0, stdout=" V....D hevc_qsv", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(ffmpeg.subprocess, "run", fake_run)
+    assert FFmpegEncoder.qsv_runtime_check("ffmpeg", device) == (True, None)
+    assert any(
+        "-qsv_device" in command and "p010le" in command
+        and "main10" in command and "slow" in command
+        for command in calls
+    )
+
+
 def test_command_maps_streams_and_applies_only_supported_crf_settings(probe_facts, tmp_path):
     job = queue_job()
     partial = tmp_path / "Fixture.kompressor.partial.mkv"
@@ -101,12 +136,52 @@ def test_command_maps_streams_and_applies_only_supported_crf_settings(probe_fact
     assert command[command.index("-crf:v:0") + 1] == str(job.preset.quality_value)
     assert command[command.index("-preset:v:0") + 1] == job.preset.encoder_preset
     assert command[command.index("-pix_fmt:v:0") + 1] == "yuv420p10le"
+    assert command[command.index("-color_range:v:0") + 1] == "tv"
     mapped = [command[index + 1] for index, value in enumerate(command[:-1]) if value == "-map"]
     assert mapped == [f"0:{stream.index}" for stream in probe_facts.streams]
     assert "-c" in command and command[command.index("-c") + 1] == "copy"
     assert command[command.index("-map_metadata") + 1] == "0"
     assert command[command.index("-map_chapters") + 1] == "0"
     assert command[-1] == str(partial)
+
+
+def test_qsv_command_uses_render_device_icq_and_10bit_output(probe_facts, tmp_path):
+    preset = qsv_preset()
+    job = queue_job(preset=preset, backend="qsv", scope="show")
+    partial = tmp_path / "Fixture.kompressor.partial.mkv"
+    device = Path("/dev/dri/renderD128")
+    command = FFmpegEncoder.build_command(
+        "/usr/bin/ffmpeg", job, Path("/read-only/Episode.mkv"), partial, probe_facts,
+        qsv_device=device,
+    )
+    assert command[command.index("-qsv_device") + 1] == str(device)
+    assert command[command.index("-c:v:0") + 1] == "hevc_qsv"
+    assert command[command.index("-global_quality:v:0") + 1] == "23"
+    assert command[command.index("-preset:v:0") + 1] == preset.encoder_preset
+    assert command[command.index("-profile:v:0") + 1] == "main10"
+    assert command[command.index("-pix_fmt:v:0") + 1] == "p010le"
+    assert command[command.index("-color_primaries:v:0") + 1] == "bt709"
+    assert command[command.index("-color_trc:v:0") + 1] == "bt709"
+    assert command[command.index("-colorspace:v:0") + 1] == "bt709"
+    assert command[command.index("-color_range:v:0") + 1] == "tv"
+    assert "-crf:v:0" not in command
+    assert command[-1] == str(partial)
+
+
+def test_qsv_efficient_audio_converts_only_tracks_that_need_it(probe_facts, tmp_path):
+    preset = qsv_preset(efficient_audio=True)
+    job = queue_job(preset=preset, backend="qsv", scope="show", preserve_audio=False,
+                    requested_preserve_audio=False)
+    partial = tmp_path / "Fixture.kompressor.partial.mkv"
+    command = FFmpegEncoder.build_command(
+        "/usr/bin/ffmpeg", job, Path("/read-only/Episode.mkv"), partial, probe_facts,
+        qsv_device=Path("/dev/dri/renderD128"),
+    )
+    assert command[command.index("-c:a:0") + 1] == "eac3"
+    assert command[command.index("-b:a:0") + 1] == str(preset.target_audio_bitrate)
+    assert command[command.index("-ac:a:0") + 1] == "6"
+    # The AAC stereo commentary has unknown bitrate and is copied by the preset rules.
+    assert "-c:a:1" not in command
 
 
 def test_command_converts_mov_text_subtitle_for_matroska(probe_facts, tmp_path):
@@ -152,6 +227,58 @@ def test_execution_capability_rejects_unsupported_modes(probe_facts):
         assert any(reason in message for message in guard.reasons(candidate, candidate_job)), (reason, guard.reasons(candidate, candidate_job))
 
 
+def test_qsv_efficient_audio_output_validation_accepts_planned_codecs(
+        probe_facts, tmp_path):
+    guard = QSVEncodeCapability()
+    source_audio = [
+        AudioTrack(codec=stream.codec, channels=stream.channels, bitrate=stream.bitrate,
+                   language=stream.language, title=stream.title, stream_index=stream.index,
+                   channel_layout=stream.channel_layout, dispositions=stream.dispositions)
+        for stream in probe_facts.streams if stream.kind == "audio"
+    ]
+    item = movie_item(probe_facts, audio=source_audio)
+    job = queue_job(
+        preset=qsv_preset(efficient_audio=True), backend="qsv", scope="show",
+        preserve_audio=False, requested_preserve_audio=False,
+    )
+    output_streams = []
+    audio_index = 0
+    for stream in probe_facts.streams:
+        if stream.kind == "video":
+            output_streams.append(stream.model_copy(update={
+                "codec": "hevc", "pixel_format": "p010le",
+                "hdr": stream.hdr.model_copy(update={"bit_depth": 10}),
+            }))
+        elif stream.kind == "audio":
+            if audio_index == 0:
+                output_streams.append(stream.model_copy(update={"codec": "eac3", "channels": 6}))
+            else:
+                output_streams.append(stream)
+            audio_index += 1
+        else:
+            output_streams.append(stream)
+    output_probe = probe_facts.model_copy(update={"streams": output_streams})
+    output_file = tmp_path / "qsv-output.mkv"
+    output_file.write_bytes(b"validated")
+    assert guard.validate_output(item, job, output_probe, output_file) == []
+
+
+def test_qsv_capability_accepts_icq_and_efficient_audio(probe_facts):
+    guard = QSVEncodeCapability()
+    audio = [
+        AudioTrack(codec=stream.codec, channels=stream.channels, bitrate=stream.bitrate,
+                   language=stream.language, title=stream.title, stream_index=stream.index,
+                   channel_layout=stream.channel_layout, dispositions=stream.dispositions)
+        for stream in probe_facts.streams if stream.kind == "audio"
+    ]
+    item = movie_item(probe_facts, audio=audio)
+    job = queue_job(preset=qsv_preset(efficient_audio=True), backend="qsv", scope="show",
+                    preserve_audio=False, requested_preserve_audio=False)
+    assert not guard.reasons(item, job)
+    wrong_backend = job.model_copy(update={"backend": "cpu"})
+    assert any("QSV backend only" in reason for reason in guard.reasons(item, wrong_backend))
+
+
 def test_output_validation_reports_codec_resolution_duration_and_stream_loss(probe_facts, tmp_path):
     guard = CPUEncodeCapability()
     job = queue_job()
@@ -159,13 +286,15 @@ def test_output_validation_reports_codec_resolution_duration_and_stream_loss(pro
     output_file = tmp_path / "partial.mkv"
     output_file.write_bytes(b"fake")
     changed_streams = [
-        stream.model_copy(update={"codec": "h264", "width": 1280}) if stream.kind == "video" else stream
+        stream.model_copy(update={"codec": "h264", "width": 1280, "scan_type": "interlaced"})
+        if stream.kind == "video" else stream
         for stream in probe_facts.streams if stream.kind != "attachment"
     ]
     invalid = probe_facts.model_copy(update={"streams": changed_streams, "duration_seconds": 10})
     errors = guard.validate_output(item, job, invalid, output_file)
     assert any("expected HEVC" in error for error in errors)
     assert any("resolution" in error for error in errors)
+    assert any("scan type" in error for error in errors)
     assert any("duration" in error for error in errors)
     assert any("attachment streams" in error for error in errors)
 
@@ -235,7 +364,7 @@ def build_real_app(tmp_path, monkeypatch, source_probe, output_probe=None, *, ex
 
 
 def test_real_worker_validates_promotes_and_measures_output(tmp_path, monkeypatch, probe_facts):
-    output_streams = [stream.model_copy(update={"codec": "hevc"}) if stream.kind == "video" else stream
+    output_streams = [stream.model_copy(update={"codec": "hevc", "pixel_format": "yuv420p10le", "hdr": stream.hdr.model_copy(update={"bit_depth": 10})}) if stream.kind == "video" else stream
                       for stream in probe_facts.streams]
     output_probe = probe_facts.model_copy(update={"streams": output_streams})
     application, source_path, workspace, spawned = build_real_app(
@@ -371,6 +500,36 @@ def test_ffmpeg_failure_is_persisted_and_partial_is_removed(tmp_path, monkeypatc
         assert source_path.stat().st_size == 400_000_000
 
 
+@pytest.mark.parametrize("progress, expected", [(50.0, "stop"), (50.1, "finish")])
+def test_real_quiet_start_uses_strict_progress_cutoff(tmp_path, monkeypatch, probe_facts,
+                                                     progress, expected):
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        processor.scan_library()
+        movie = processor.get_library().movies[0]
+        added = processor.queue_encode(EnqueueRequest(
+            media_ids=[movie.id], scope="movie", preset_id="movie-streaming-quality"))["added"][0]
+        job = processor.queue.claim_next("cpu")
+        assert job is not None
+        processor.queue.update_real_progress(job.id, progress, 10)
+        processor.queue.controls.save(WorkerSettings(
+            timezone="UTC",
+            cpu=WorkerLaneSettings(quiet_hours_enabled=True, quiet_start="00:00",
+                                   quiet_end="00:00", quiet_cutoff_percent=50),
+            qsv=WorkerLaneSettings(),
+        ))
+        assert processor.queue.enforce_quiet_start("cpu") == expected
+        saved = processor.queue._find(added["id"])
+        if expected == "stop":
+            assert saved.status == "stopping"
+            assert saved.cancel_requested is True
+            assert saved.cancel_reason == "quiet_hours_cutoff"
+        else:
+            assert saved.status == "encoding"
+            assert saved.cancel_requested is False
+
+
 def test_web_stop_request_is_persisted_for_standalone_worker(tmp_path, monkeypatch, probe_facts):
     application, _, _, spawned = build_real_app(tmp_path, monkeypatch, probe_facts)
     with TestClient(application):
@@ -452,9 +611,93 @@ def test_web_restart_does_not_recover_or_stop_active_real_job(tmp_path, monkeypa
         assert active["status"] == "encoding"
 
 
+def test_qsv_worker_claims_validates_and_completes_show_job(tmp_path, monkeypatch, probe_facts):
+    shows_root = tmp_path / "shows"
+    series = shows_root / "Fixture Show"
+    series.mkdir(parents=True)
+    source = series / "Fixture Show S01E01.mkv"
+    with source.open("wb") as handle:
+        handle.truncate(400_000_000)
+    workspace = tmp_path / "workspace"
+    (workspace / "jobs").mkdir(parents=True)
+    config = Settings(
+        media_backend="filesystem",
+        shows_root=shows_root,
+        database_path=tmp_path / "state.sqlite3",
+        workspace_root=workspace,
+        qsv_device=Path("/dev/dri/renderD128"),
+        ffmpeg_binary="/fake/ffmpeg",
+        ffprobe_binary="/fake/ffprobe",
+    )
+
+    from app import container
+    monkeypatch.setattr(container, "capability_status", lambda *args: {
+        "available": True,
+        "cpu_available": True,
+        "qsv_available": True,
+        "supported_backends": ["cpu", "qsv"],
+        "ffmpeg_available": True,
+        "ffprobe_available": True,
+        "libx265_available": True,
+        "hevc_qsv_available": True,
+        "qsv_device": "/dev/dri/renderD128",
+        "ffmpeg_binary": "/fake/ffmpeg",
+        "ffprobe_binary": "/fake/ffprobe",
+        "workspace_root": str(workspace),
+        "workspace_writable": True,
+        "cpu_unavailable_reason": None,
+        "qsv_unavailable_reason": None,
+        "unavailable_reason": None,
+    })
+    output_probe = probe_facts.model_copy(update={"streams": [
+        stream.model_copy(update={
+            "codec": "hevc",
+            "pixel_format": "p010le",
+            "hdr": stream.hdr.model_copy(update={"bit_depth": 10}),
+        }) if stream.kind == "video" else stream
+        for stream in probe_facts.streams
+    ]})
+
+    def inspect(self, path):
+        return output_probe if ".kompressor.partial.mkv" in path.name else probe_facts
+
+    monkeypatch.setattr(FFprobeService, "inspect", inspect)
+    spawned = []
+
+    def popen(command, **kwargs):
+        process = FakeProcess(command)
+        spawned.append(process)
+        return process
+
+    monkeypatch.setattr("app.workers.ffmpeg.subprocess.Popen", popen)
+
+    processor = build_media_processor(config, process_role="worker", worker_backend="qsv")
+    assert processor.queue.supported_backends == frozenset({"qsv"})
+    assert processor.queue.worker.supported_backends == frozenset({"qsv"})
+    processor.scan_library()
+    library = processor.get_library()
+    episode = library.shows[0].seasons[0].episodes[0]
+    added = processor.queue_encode(EnqueueRequest(
+        media_ids=[episode.id], scope="show", preset_id="show-streaming-quality"))["added"][0]
+
+    job = processor.queue.claim_next("qsv")
+    assert job is not None and job.backend == "qsv"
+    processor.queue.worker._execute(job)
+
+    saved = next(item for item in processor.get_queue()["history"] if item["id"] == added["id"])
+    assert saved["status"] == "completed"
+    assert saved["backend"] == "qsv"
+    assert saved["output_size"] == 100_000_000
+    assert spawned
+    command = spawned[0].command
+    assert command[command.index("-c:v:0") + 1] == "hevc_qsv"
+    assert command[command.index("-global_quality:v:0") + 1] == "23"
+    assert command[command.index("-qsv_device") + 1] == "/dev/dri/renderD128"
+
+
 def test_background_worker_claims_and_completes_without_http_encode(tmp_path, monkeypatch, probe_facts):
     output_probe = probe_facts.model_copy(update={"streams": [
-        stream.model_copy(update={"codec": "hevc"}) if stream.kind == "video" else stream
+        stream.model_copy(update={"codec": "hevc", "pixel_format": "yuv420p10le", "hdr": stream.hdr.model_copy(update={"bit_depth": 10})}) if stream.kind == "video" else stream
         for stream in probe_facts.streams]})
     application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts,
         output_probe, start_workers=True)
@@ -471,6 +714,56 @@ def test_background_worker_claims_and_completes_without_http_encode(tmp_path, mo
                 break
             time.sleep(0.01)
         assert saved is not None and saved["status"] == "completed"
+
+
+def test_worker_recovery_requeues_active_job_during_full_runtime_outage(
+        tmp_path, monkeypatch, probe_facts):
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        processor.scan_library()
+        movie = processor.get_library().movies[0]
+        added = processor.queue_encode(EnqueueRequest(
+            media_ids=[movie.id], scope="movie", preset_id="movie-streaming-quality"))["added"][0]
+        active = processor.queue.claim_next("cpu")
+        assert active is not None and active.status == "encoding"
+
+    from app import container
+    workspace = tmp_path / "workspace"
+    monkeypatch.setattr(container, "capability_status", lambda *args: {
+        "available": False,
+        "cpu_available": False,
+        "qsv_available": False,
+        "supported_backends": [],
+        "ffmpeg_available": False,
+        "ffprobe_available": False,
+        "libx265_available": False,
+        "hevc_qsv_available": False,
+        "qsv_device": "/dev/dri/renderD128",
+        "ffmpeg_binary": "/fake/ffmpeg",
+        "ffprobe_binary": "/fake/ffprobe",
+        "workspace_root": str(workspace),
+        "workspace_writable": False,
+        "cpu_unavailable_reason": "runtime unavailable",
+        "qsv_unavailable_reason": "runtime unavailable",
+        "unavailable_reason": "runtime unavailable",
+    })
+    config = Settings(
+        media_backend="filesystem",
+        movies_root=tmp_path / "movies",
+        database_path=tmp_path / "state.sqlite3",
+        workspace_root=workspace,
+        ffmpeg_binary="/fake/ffmpeg",
+        ffprobe_binary="/fake/ffprobe",
+    )
+    restarted = create_app(
+        config=config, start_workers=False, start_real_worker=True)
+    with TestClient(restarted):
+        processor = restarted.state.media_processor
+        saved = processor.queue._find(added["id"])
+        assert saved.status == "queued"
+        assert saved.finished_at is None
+        assert not saved.reasons
 
 
 def test_recovery_requeues_interrupted_job_and_removes_stale_outputs(tmp_path, monkeypatch, probe_facts):
@@ -546,6 +839,56 @@ def test_filesystem_enqueue_returns_runtime_error_when_encoder_prerequisites_fai
         diagnostics = client.get("/api/settings/runtime").json()
         assert diagnostics["encoding_enabled"] is False
         assert diagnostics["workspace_root"] == str(tmp_path / "workspace")
+        lanes = {lane["backend"]: lane for lane in client.get("/api/queue").json()["lanes"]}
+        assert lanes["cpu"]["available"] is False
+        assert lanes["qsv"]["available"] is False
+
+
+def test_modal_eligibility_includes_real_execution_capability_blockers(
+        tmp_path, monkeypatch, probe_facts):
+    hdr_streams = [
+        stream.model_copy(update={
+            "pixel_format": "yuv420p10le",
+            "hdr": HDRSignalling(
+                transfer="smpte2084", primaries="bt2020", matrix="bt2020nc",
+                bit_depth=10, inspection_complete=True,
+                dolby_vision_rpu=False, hdr10plus_metadata=False,
+            ),
+        }) if stream.kind == "video" else stream
+        for stream in probe_facts.streams
+    ]
+    hdr_probe = probe_facts.model_copy(update={"streams": hdr_streams})
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, hdr_probe)
+    with TestClient(application):
+        processor = application.state.media_processor
+        processor.scan_library()
+        movie = processor.get_library().movies[0]
+        result = processor.evaluate_compression(
+            movie.id, "movie", "movie-streaming-quality")
+        assert result.eligible is False
+        assert any("confirmed SDR" in reason for reason in result.reasons)
+
+
+def test_modal_eligibility_reports_unavailable_real_lane(tmp_path, monkeypatch, probe_facts):
+    application, _, _, _ = build_real_app(
+        tmp_path, monkeypatch, probe_facts, runtime_available=False)
+    with TestClient(application):
+        processor = application.state.media_processor
+        processor.scan_library()
+        movie = processor.get_library().movies[0]
+        result = processor.evaluate_compression(
+            movie.id, "movie", "movie-streaming-quality")
+        assert result.eligible is False
+        assert any("CPU real encoding is not available" in reason for reason in result.reasons)
+
+
+def test_queue_snapshot_marks_qsv_unavailable_when_only_cpu_runtime_exists(
+        tmp_path, monkeypatch, probe_facts):
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application) as client:
+        lanes = {lane["backend"]: lane for lane in client.get("/api/queue").json()["lanes"]}
+        assert lanes["cpu"]["available"] is True
+        assert lanes["qsv"]["available"] is False
 
 
 def test_preserve_audio_tag_overrides_modal_and_keeps_all_tracks_copied(tmp_path, monkeypatch, probe_facts):

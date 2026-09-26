@@ -5,11 +5,12 @@ from dataclasses import dataclass
 from pathlib import Path
 import os
 import re
+import stat
 import subprocess
 from threading import Lock, Thread
 from time import monotonic
 
-from app.models.probe import MediaProbeResult
+from app.models.probe import MediaProbeResult, StreamFacts
 from app.models.queue import QueueJob
 from app.services.encoding_capability import SUPPORTED_PIXEL_FORMATS
 
@@ -34,22 +35,72 @@ class FFmpegOutput:
 
 class FFmpegEncoder:
     @staticmethod
-    def runtime_check(binary: str) -> tuple[bool, str | None]:
+    def _encoders(binary: str) -> tuple[str | None, str | None]:
         try:
             result = subprocess.run([binary, "-hide_banner", "-encoders"], stdin=subprocess.DEVNULL,
                                     capture_output=True, text=True, timeout=10, check=False)
         except (OSError, subprocess.TimeoutExpired) as error:
-            return False, f"Could not inspect ffmpeg encoders: {error}"
+            return None, f"Could not inspect ffmpeg encoders: {error}"
         if result.returncode != 0:
-            return False, f"ffmpeg -encoders exited with status {result.returncode}."
-        if "libx265" not in result.stdout + result.stderr:
+            return None, f"ffmpeg -encoders exited with status {result.returncode}."
+        return result.stdout + result.stderr, None
+
+    @classmethod
+    def runtime_check(cls, binary: str) -> tuple[bool, str | None]:
+        encoders, error = cls._encoders(binary)
+        if error:
+            return False, error
+        if "libx265" not in (encoders or ""):
             return False, "ffmpeg does not report the libx265 encoder."
         return True, None
 
-    def __init__(self, binary: str, workspace_root: Path, stop_grace_seconds: float = 5.0):
+    @staticmethod
+    def qsv_device_check(device: Path) -> tuple[bool, str | None]:
+        try:
+            mode = device.stat().st_mode
+        except OSError as error:
+            return False, f"QSV render device is unavailable: {device} ({error})"
+        if not stat.S_ISCHR(mode):
+            return False, f"QSV render device is not a character device: {device}"
+        if not os.access(device, os.R_OK | os.W_OK):
+            return False, f"QSV render device is not readable/writable: {device}"
+        return True, None
+
+    @classmethod
+    def qsv_runtime_check(cls, binary: str, device: Path) -> tuple[bool, str | None]:
+        ready, device_error = cls.qsv_device_check(device)
+        if not ready:
+            return False, device_error
+        encoders, error = cls._encoders(binary)
+        if error:
+            return False, error
+        if "hevc_qsv" not in (encoders or ""):
+            return False, "ffmpeg does not report the hevc_qsv encoder."
+        command = [
+            binary, "-hide_banner", "-v", "error", "-qsv_device", str(device),
+            "-f", "lavfi", "-i", "color=c=black:s=64x64:r=1",
+            "-frames:v", "1", "-an", "-c:v", "hevc_qsv",
+            "-global_quality", "23", "-preset", "slow", "-profile:v", "main10",
+            "-pix_fmt", "p010le", "-f", "null", "-"
+        ]
+        try:
+            result = subprocess.run(
+                command, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                timeout=15, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return False, f"Could not initialize Intel QSV on {device}: {error}"
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()[-500:]
+            return False, f"Intel QSV HEVC smoke test failed on {device}: {detail or 'ffmpeg failed'}"
+        return True, None
+
+    def __init__(self, binary: str, workspace_root: Path, stop_grace_seconds: float = 5.0,
+                 qsv_device: Path | None = None):
         self.binary = binary
         self.workspace_root = workspace_root.expanduser().absolute()
         self.stop_grace_seconds = stop_grace_seconds
+        self.qsv_device = qsv_device.expanduser().absolute() if qsv_device else None
         self._lock = Lock()
         self._processes: dict[str, subprocess.Popen[str]] = {}
         self._cancelled: set[str] = set()
@@ -84,8 +135,31 @@ class FFmpegEncoder:
         return partial, final
 
     @staticmethod
+    def _audio_action(stream: StreamFacts, job: QueueJob) -> tuple[str, str | None, int | None, int | None]:
+        if job.preserve_audio or stream.channels is None:
+            return "copy", None, None, None
+        rules = job.preset.efficient_audio_rules
+        output_channels = stream.channels if rules.channel_handling == "preserve" else min(stream.channels, 2)
+        target = job.preset.stereo_audio_bitrate if output_channels <= 2 else job.preset.target_audio_bitrate or 640000
+        codec = stream.codec.lower()
+        should_copy = (
+            rules.channel_handling == "preserve"
+            and (
+                stream.bitrate is None and rules.copy_unknown_bitrate
+                or rules.copy_channels_above is not None and stream.channels > rules.copy_channels_above
+                or rules.copy_if_bitrate_at_or_below_target and codec in rules.copy_codecs
+                and stream.bitrate is not None and stream.bitrate <= target
+            )
+        )
+        if should_copy:
+            return "copy", None, None, None
+        output_codec = rules.mono_stereo_codec if output_channels <= 2 else rules.multichannel_codec
+        return "encode", output_codec, target, output_channels
+
+    @staticmethod
     def build_command(binary: str, job: QueueJob, source_path: Path,
-                      partial_path: Path, probe: MediaProbeResult) -> list[str]:
+                      partial_path: Path, probe: MediaProbeResult,
+                      qsv_device: Path | None = None) -> list[str]:
         primary = next((s for s in probe.streams if s.kind == "video" and not s.dispositions.get("attached_pic")), None)
         if primary is None:
             raise FFmpegError("Source has no primary video stream.")
@@ -93,33 +167,74 @@ class FFmpegEncoder:
             raise FFmpegError(f"Unsupported or unknown source pixel format: {primary.pixel_format or 'unknown'}.")
         streams = probe.streams if job.preserve_subtitles else [s for s in probe.streams if s.kind in {"video", "audio"}]
         ordered = [primary, *(s for s in streams if s.index != primary.index)]
+
         command = [binary, "-hide_banner", "-nostdin", "-y", "-v", "error",
-                   "-progress", "pipe:1", "-nostats", "-protocol_whitelist", "file,pipe",
-                   "-i", str(source_path)]
+                   "-progress", "pipe:1", "-nostats", "-protocol_whitelist", "file,pipe"]
+        if job.backend == "qsv":
+            if qsv_device is None:
+                raise FFmpegError("QSV job has no configured render device.")
+            command.extend(["-qsv_device", str(qsv_device)])
+        command.extend(["-i", str(source_path)])
+
         for stream in ordered:
             command.extend(["-map", f"0:{stream.index}"])
         command.extend(["-map_metadata", "0" if job.preserve_subtitles else "-1",
                         "-map_chapters", "0" if job.preserve_subtitles else "-1",
-                        "-c", "copy", "-c:v:0", "libx265"])
-        # MP4 timed-text (mov_text) cannot be stream-copied into Matroska.
-        # Preserve the subtitle track by converting only that text stream to SRT;
-        # every other mapped stream keeps the default stream-copy behaviour.
-        subtitle_output_index = 0
-        for stream in ordered:
-            if stream.kind != "subtitle":
-                continue
-            if stream.codec.lower() == "mov_text":
-                command.extend([f"-c:s:{subtitle_output_index}", "srt"])
-            subtitle_output_index += 1
-        if job.preset.rate_control == "crf" and job.preset.quality_value is not None:
-            command.extend(["-crf:v:0", str(job.preset.quality_value)])
-        elif job.preset.rate_control == "abr" and job.preset.target_video_bitrate is not None:
-            command.extend(["-b:v:0", str(job.preset.target_video_bitrate)])
+                        "-c", "copy"])
+
+        if job.backend == "cpu":
+            command.extend(["-c:v:0", "libx265"])
+            if job.preset.rate_control == "crf" and job.preset.quality_value is not None:
+                command.extend(["-crf:v:0", str(job.preset.quality_value)])
+            elif job.preset.rate_control == "abr" and job.preset.target_video_bitrate is not None:
+                command.extend(["-b:v:0", str(job.preset.target_video_bitrate)])
+            else:
+                raise FFmpegError(f"Unsupported CPU video rate control: {job.preset.rate_control}.")
+            command.extend(["-preset:v:0", job.preset.encoder_preset,
+                            "-pix_fmt:v:0", "yuv420p10le" if job.preset.output_bit_depth == 10 else "yuv420p"])
+        elif job.backend == "qsv":
+            command.extend(["-c:v:0", "hevc_qsv"])
+            if job.preset.rate_control == "icq" and job.preset.quality_value is not None:
+                command.extend(["-global_quality:v:0", str(int(job.preset.quality_value))])
+            elif job.preset.rate_control == "abr" and job.preset.target_video_bitrate is not None:
+                command.extend(["-b:v:0", str(job.preset.target_video_bitrate)])
+            else:
+                raise FFmpegError(f"Unsupported QSV video rate control: {job.preset.rate_control}.")
+            command.extend([
+                "-preset:v:0", job.preset.encoder_preset,
+                "-profile:v:0", "main10" if job.preset.output_bit_depth == 10 else "main",
+                "-pix_fmt:v:0", "p010le" if job.preset.output_bit_depth == 10 else "nv12",
+            ])
+            if (primary.hdr is not None and primary.hdr.primaries
+                    and primary.hdr.transfer and primary.hdr.matrix):
+                command.extend([
+                    "-color_primaries:v:0", primary.hdr.primaries,
+                    "-color_trc:v:0", primary.hdr.transfer,
+                    "-colorspace:v:0", primary.hdr.matrix,
+                ])
         else:
-            raise FFmpegError(f"Unsupported video rate control: {job.preset.rate_control}.")
-        command.extend(["-preset:v:0", job.preset.encoder_preset,
-                        "-pix_fmt:v:0", "yuv420p10le" if job.preset.output_bit_depth == 10 else "yuv420p",
-                        "-f", "matroska", str(partial_path)])
+            raise FFmpegError(f"Unsupported encoder backend: {job.backend}.")
+
+        if primary.color_range in {"tv", "pc"}:
+            command.extend(["-color_range:v:0", primary.color_range])
+
+        subtitle_output_index = 0
+        audio_output_index = 0
+        for stream in ordered:
+            if stream.kind == "subtitle":
+                if stream.codec.lower() == "mov_text":
+                    command.extend([f"-c:s:{subtitle_output_index}", "srt"])
+                subtitle_output_index += 1
+            elif stream.kind == "audio":
+                action, codec, bitrate, channels = FFmpegEncoder._audio_action(stream, job)
+                if action == "encode":
+                    assert codec is not None and bitrate is not None and channels is not None
+                    command.extend([f"-c:a:{audio_output_index}", codec,
+                                    f"-b:a:{audio_output_index}", str(bitrate),
+                                    f"-ac:a:{audio_output_index}", str(channels)])
+                audio_output_index += 1
+
+        command.extend(["-f", "matroska", str(partial_path)])
         return command
 
     def encode(self, job: QueueJob, source_path: Path, probe: MediaProbeResult,
@@ -127,9 +242,11 @@ class FFmpegEncoder:
                before_start: Callable[[], None] | None = None) -> FFmpegOutput:
         partial, final = self.paths(job, source_path)
         partial.unlink(missing_ok=True)
-        # A prior interrupted attempt can leave a final file in the same job directory.
         final.unlink(missing_ok=True)
-        command = self.build_command(self.binary, job, source_path, partial, probe)
+        command = self.build_command(
+            self.binary, job, source_path, partial, probe,
+            qsv_device=self.qsv_device if job.backend == "qsv" else None,
+        )
         started = monotonic()
         output_us = 0
         stderr_tail: deque[str] = deque()
@@ -228,7 +345,6 @@ class FFmpegEncoder:
                     if path.is_file() or path.is_symlink():
                         path.unlink(missing_ok=True)
                 except OSError:
-                    # A read-only/unmounted workspace must not prevent startup recovery.
                     continue
 
     def cleanup(self, job_id: str, remove_final: bool = False) -> None:
@@ -241,7 +357,6 @@ class FFmpegEncoder:
             try:
                 path.unlink(missing_ok=True)
             except OSError:
-                # Preserve job failure/skip state if the workspace turned read-only.
                 continue
 
     def _terminate(self, process: subprocess.Popen[str]) -> None:
@@ -250,7 +365,6 @@ class FFmpegEncoder:
         try:
             process.terminate()
         except OSError:
-            # It may have exited between poll() and terminate().
             pass
         try:
             process.wait(timeout=self.stop_grace_seconds)
@@ -267,8 +381,6 @@ class FFmpegEncoder:
             process = self._processes.get(job_id)
         if process is not None:
             self._terminate(process)
-        # A Stop & Skip removes only the unvalidated partial; a completed output
-        # is never deleted as a side effect of a late stop request.
         self.cleanup(job_id)
 
     def stop_all(self) -> None:

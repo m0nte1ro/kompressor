@@ -1,10 +1,10 @@
-import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js?v=5';
-import './presets.js?v=5';
-import './settings.js?v=5';
-import './discovery.js?v=5';
-import {setupTags} from './tags.js?v=5';
-import {compressionModal} from './compression.js?v=5';
-import {renderHistory, renderQueue} from './queue.js?v=5';
+import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js?v=8';
+import './presets.js?v=8';
+import './settings.js?v=8';
+import './discovery.js?v=8';
+import {setupTags} from './tags.js?v=8';
+import {compressionModal} from './compression.js?v=8';
+import {renderHistory, renderQueue} from './queue.js?v=8';
 
 let queue = {lanes: [], history: [], pending_count: 0};
 
@@ -124,7 +124,8 @@ async function refreshQueue() {
   $('#queue-count').textContent = queue.pending_count;
   queue.lanes.forEach(lane => {
     const control = queue.workers?.lanes?.[lane.backend];
-    const state = control?.paused ? 'paused'
+    const state = !lane.available ? 'unavailable'
+      : control?.paused ? 'paused'
       : control?.quiet_active ? 'quiet hours'
       : lane.active?.status ?? 'idle';
     $(`#${lane.backend}-state`).textContent = `${lane.backend.toUpperCase()} · ${state}`;

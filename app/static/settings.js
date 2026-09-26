@@ -38,7 +38,6 @@ if (workerForm) {
     button.disabled = true;
     status.textContent = 'Saving…';
     const lane = backend => ({
-      paused: workerForm.elements[`${backend}_paused`].value === 'true',
       quiet_hours_enabled: workerForm.elements[`${backend}_quiet_hours_enabled`].checked,
       quiet_start: workerForm.elements[`${backend}_quiet_start`].value,
       quiet_end: workerForm.elements[`${backend}_quiet_end`].value,

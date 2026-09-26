@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block content %}
-<p class="notice">Preset quality values and QSV settings are experimental starting points, not exact or Netflix-equivalent guarantees. Changes are saved locally and affect new job plans and eligibility. Queued jobs retain their original preset configuration. Real encoding, when enabled, is limited to CPU/libx265, confirmed SDR, progressive sources, copied audio and keep-output MKV files.</p>
+<p class="notice">Preset quality values and QSV settings are experimental starting points, not exact or Netflix-equivalent guarantees. Changes are saved locally and affect new job plans and eligibility. Queued jobs retain their original preset configuration. Real encoding, when enabled, supports CPU/libx265 and Intel QSV/hevc_qsv lanes for confirmed SDR progressive sources and keep-output MKV files.</p>
 {% for scope, heading in [('movie', 'Movie presets'), ('show', 'Show presets')] %}
 <details class="preset-section" aria-label="{{ heading }}" open>
   <summary><h2>{{ heading }}</h2><span class="badge">{{ presets | selectattr('scope', 'equalto', scope) | list | length }} presets</span></summary>
@@ -45,12 +45,12 @@
 <section class="card future-settings"><h2>Library discovery</h2>
   <p class="muted">Scans run in the background. Movies and Shows update automatically while discovery and probing proceed. Run a single application worker.</p>
   <p class="muted">Environment configuration requires restart: backend {{ runtime_settings.startup.media_backend or scan_status.backend }}, ffprobe {{ runtime_settings.startup.ffprobe_binary or 'ffprobe' }}, timeout {{ runtime_settings.startup.ffprobe_timeout or 30 }} seconds. These are not editable in this form.</p>
-  <p>{{ 'Read-only filesystem inventory ·' if scan_status.backend == 'filesystem' else 'Seed library ·' }} {{ 'real CPU encoding available' if runtime_settings.encoding_enabled else 'simulated workers' if scan_status.backend == 'seed' else 'encoding disabled' }}</p>
+  <p>{{ 'Read-only filesystem inventory ·' if scan_status.backend == 'filesystem' else 'Seed library ·' }} {{ 'real encoding available' if runtime_settings.encoding_enabled else 'simulated workers' if scan_status.backend == 'seed' else 'encoding disabled' }}</p>
   {% if scan_status.backend == 'filesystem' %}<button id="scan-library" class="primary">Scan library</button><p id="scan-status" role="status">{{ scan_status.state }}</p><ul id="scan-errors"></ul>{% else %}<p class="muted">Set KOMPRESSOR_MEDIA_BACKEND=filesystem to enable read-only discovery and ffprobe.</p>{% endif %}
 </section>
 <section class="card worker-schedule-settings" aria-labelledby="worker-schedule-title">
   <h2 id="worker-schedule-title">Worker operating hours</h2>
-  <p class="muted">Pause state and quiet hours are persisted in SQLite and enforced by standalone worker processes even when the WebUI is down. During quiet hours no new job starts. When quiet hours begin, a known-progress job below the cutoff is stopped; a job at or above the cutoff finishes. Unknown progress is allowed to finish.</p>
+  <p class="muted">Pause state and quiet hours are persisted in SQLite and enforced by standalone worker processes even when the WebUI is down. During quiet hours no new job starts. When quiet hours begin, a known-progress job at or below the cutoff is stopped; only a job above the cutoff finishes. Unknown progress is allowed to finish.</p>
   <form id="worker-schedule-form" class="field-grid">
     <label class="field">Timezone
       <input name="timezone" value="{{ worker_controls.timezone }}" maxlength="100" placeholder="Europe/Lisbon">
@@ -59,11 +59,10 @@
     {% set lane = worker_controls.lanes[backend] %}
     <fieldset class="worker-schedule-lane">
       <legend>{{ heading }}</legend>
-      <input type="hidden" name="{{ backend }}_paused" value="{{ 'true' if lane.paused else 'false' }}">
       <label><input type="checkbox" name="{{ backend }}_quiet_hours_enabled" {% if lane.quiet_hours_enabled %}checked{% endif %}> Enable quiet hours</label>
       <label class="field">Quiet from<input type="time" name="{{ backend }}_quiet_start" value="{{ lane.quiet_start }}"></label>
       <label class="field">Quiet until<input type="time" name="{{ backend }}_quiet_end" value="{{ lane.quiet_end }}"></label>
-      <label class="field">Stop if progress below (%)<input type="number" name="{{ backend }}_quiet_cutoff_percent" min="0" max="100" step="1" value="{{ lane.quiet_cutoff_percent }}"></label>
+      <label class="field">Stop if progress at or below (%)<input type="number" name="{{ backend }}_quiet_cutoff_percent" min="0" max="100" step="1" value="{{ lane.quiet_cutoff_percent }}"></label>
       <p class="muted">Current manual state: {{ 'paused' if lane.paused else 'enabled' }}{% if lane.quiet_active %} · quiet hours active now{% endif %}.</p>
     </fieldset>
     {% endfor %}
@@ -77,12 +76,15 @@
     <dt>ffmpeg</dt><dd>{{ runtime_settings.ffmpeg_binary }} · {{ 'available' if runtime_settings.ffmpeg_available is sameas true else 'not found' if runtime_settings.ffmpeg_available is sameas false else 'not checked' }}</dd>
     <dt>ffprobe</dt><dd>{{ runtime_settings.ffprobe_binary }} · {{ 'available' if runtime_settings.ffprobe_available is sameas true else 'not found' if runtime_settings.ffprobe_available is sameas false else 'not checked' }}</dd>
     <dt>libx265</dt><dd>{{ 'available' if runtime_settings.libx265_available is sameas true else 'unavailable' if runtime_settings.libx265_available is sameas false else 'not checked' }}</dd>
+    <dt>Intel QSV HEVC</dt><dd>{{ 'available' if runtime_settings.hevc_qsv_available is sameas true else 'unavailable' if runtime_settings.hevc_qsv_available is sameas false else 'not checked' }} · <code>{{ runtime_settings.qsv_device }}</code></dd>
     <dt>Workspace</dt><dd><code>{{ runtime_settings.workspace_root }}</code> · {{ 'writable' if runtime_settings.workspace_writable is sameas true else 'not writable' if runtime_settings.workspace_writable is sameas false and runtime_settings.media_backend == 'filesystem' else 'not checked' }}</dd>
     <dt>Encoding</dt><dd>{{ 'enabled' if runtime_settings.encoding_enabled else 'disabled' }} · {{ runtime_settings.encoder_mode }}</dd>
     <dt>Supported backends</dt><dd>{{ runtime_settings.supported_backends | join(', ') if runtime_settings.supported_backends else 'none' }}</dd>
   </dl>
+  {% if runtime_settings.cpu_unavailable_reason and 'cpu' not in runtime_settings.supported_backends %}<p class="reason">CPU: {{ runtime_settings.cpu_unavailable_reason }}</p>{% endif %}
+  {% if runtime_settings.qsv_unavailable_reason and 'qsv' not in runtime_settings.supported_backends %}<p class="reason">QSV: {{ runtime_settings.qsv_unavailable_reason }}</p>{% endif %}
   {% if runtime_settings.unavailable_reason %}<p class="reason">{{ runtime_settings.unavailable_reason }}</p>{% endif %}
-  <p class="muted">Runtime binary and workspace settings come from the environment and require restart. Real output is written only below the configured workspace.</p>
+  <p class="muted">Runtime binary, QSV device and workspace settings come from the environment and require restart. Real output is written only below the configured workspace.</p>
 </section>
 {% endblock %}
 

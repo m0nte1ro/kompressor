@@ -2,7 +2,7 @@
   "format": {"format_name": "matroska,webm", "duration": "120.5", "bit_rate": "12345678", "tags": {"title": "Fixture film"}},
   "streams": [
     {"index": 0, "codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080,
-     "pix_fmt": "yuv420p", "field_order": "progressive", "avg_frame_rate": "24000/1001", "bit_rate": "12000000",
+     "pix_fmt": "yuv420p", "color_range": "tv", "field_order": "progressive", "avg_frame_rate": "24000/1001", "bit_rate": "12000000",
      "color_primaries": "bt709", "color_transfer": "bt709", "color_space": "bt709"},
     {"index": 1, "codec_type": "audio", "codec_name": "dts", "channels": 6, "channel_layout": "5.1(side)",
      "sample_rate": "48000", "bit_rate": "1500000", "tags": {"language": "eng", "title": "Original"}, "disposition": {"default": 1}},

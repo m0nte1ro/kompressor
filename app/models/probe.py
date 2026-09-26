@@ -63,9 +63,21 @@ class StreamFacts(BaseModel):
     scan_type: Literal["progressive", "interlaced", "mixed", "unknown"] = "unknown"
     frame_rate: str | None = None
     pixel_format: str | None = None
+    color_range: Literal["tv", "pc"] | None = None
     field_order: Literal["top_first", "bottom_first", "unknown"] = "unknown"
     hdr: HDRSignalling | None = None
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def infer_legacy_full_range(self):
+        # Older persisted probes predate the explicit colour-range field. FFmpeg's
+        # yuvj formats are the legacy full-range JPEG variants, so this inference
+        # is safe and lets those observations retain their range without a rescan.
+        if self.color_range is None and self.pixel_format in {
+            "yuvj420p", "yuvj422p", "yuvj444p",
+        }:
+            self.color_range = "pc"
+        return self
 
 
 class ChapterFacts(BaseModel):

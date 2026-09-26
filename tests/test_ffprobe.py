@@ -27,6 +27,7 @@ def test_progressive_streams_chapters_and_metadata():
     assert result.duration_seconds == 120.5 and result.container == 'matroska,webm'
     assert video.resolution_class == 1080 and video.scan_type == 'progressive'
     assert video.frame_rate == '24000/1001' and video.bitrate == 12000000
+    assert video.color_range == 'tv'
     assert video.hdr is not None and video.hdr.classify().base == 'sdr'
     assert video.hdr.bit_depth == 8
     assert result.streams[1].channel_layout == '5.1(side)'
@@ -74,6 +75,13 @@ def test_unknown_values_are_not_guessed(probe_payload):
     assert video.scan_type == 'unknown' and video.frame_rate is None and video.bitrate is None
     assert video.hdr is not None and video.hdr.classify().base == 'unknown'
     assert video.codec == 'unknown'
+
+
+def test_legacy_yuvj_probe_infers_full_colour_range(probe_payload):
+    probe_payload["streams"][0]["pix_fmt"] = "yuvj420p"
+    probe_payload["streams"][0].pop("color_range", None)
+    video = parse_ffprobe(probe_payload).streams[0]
+    assert video.color_range == "pc"
 
 
 def test_mixed_frames_override_progressive_stream_flag(probe_payload):

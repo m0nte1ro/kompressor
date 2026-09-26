@@ -64,6 +64,7 @@ class QueueService:
                 active = next((j for j in jobs if j.backend == backend and j.status in ACTIVE), None)
                 lanes.append({
                     "backend": backend,
+                    "available": backend in self.supported_backends,
                     "active": self._payload(active) if active else None,
                     "queued": [self._payload(j) for j in self._queued(backend)],
                 })
@@ -73,6 +74,55 @@ class QueueService:
                 "pending_count": sum(j.status in PENDING for j in jobs),
                 "workers": self.controls.snapshot() if self.controls else None,
             }
+
+    def _candidate_job(self, entry, preset, result, *, job_id: str,
+                       requested_preserve_audio: bool | None,
+                       preserve_subtitles: bool, replace_source: bool) -> QueueJob:
+        return QueueJob(
+            id=job_id, media_id=entry.item.id, scope=entry.scope,
+            name=entry.name, backend=preset.backend, preset=preset.model_copy(deep=True),
+            preserve_audio=result.preserve_audio,
+            requested_preserve_audio=requested_preserve_audio,
+            preserve_subtitles=preserve_subtitles,
+            source_size=result.source_size, source_codec=entry.item.video_codec,
+            source_file_id=entry.item.id if entry.item.revision_id else None,
+            source_revision_id=entry.item.revision_id,
+            source_reference=(
+                getattr(self.worker, "capture_source_reference", lambda item: None)(entry.item)
+            ),
+            replace_source=replace_source,
+            execution_mode=self.execution_mode,
+            estimate_basis=result.estimate_basis,
+            estimated_saving_low=result.estimated_saving_low,
+            estimated_saving_high=result.estimated_saving_high,
+            estimated_output_size=result.estimated_output_size,
+            estimated_saving=result.estimated_saving,
+            created_at=now(),
+            planning_output_size=result.planning_output_size,
+            planning_saving=result.planning_saving,
+            planning_saving_percent=result.planning_saving_percent,
+        )
+
+    def execution_reasons(self, entry, preset, result, *,
+                          requested_preserve_audio: bool | None,
+                          preserve_subtitles: bool, replace_source: bool = False) -> list[str]:
+        reasons = []
+        if preset.backend not in self.supported_backends:
+            reasons.append(f"{preset.backend.upper()} real encoding is not available in this runtime.")
+        if preset.destination_codec != "hevc":
+            reasons.append("AV1 is not available in this workflow.")
+        if result.reasons or reasons:
+            return reasons
+        job = self._candidate_job(
+            entry, preset, result, job_id="eligibility-preview",
+            requested_preserve_audio=requested_preserve_audio,
+            preserve_subtitles=preserve_subtitles,
+            replace_source=replace_source,
+        )
+        capability_check = getattr(self.worker, "enqueue_reasons", None)
+        if capability_check:
+            reasons.extend(capability_check(entry.item, job))
+        return list(dict.fromkeys(reasons))
 
     def enqueue(self, request: EnqueueRequest) -> dict:
         # Validate the preset before any mutation. Scope mismatches are also
@@ -92,7 +142,7 @@ class QueueService:
                                                request.preserve_subtitles)
                 reasons = list(result.reasons)
                 if preset.backend not in self.supported_backends:
-                    reasons.append(f"{preset.backend.upper()} real encoding is not enabled.")
+                    reasons.append(f"{preset.backend.upper()} real encoding is not available in this runtime.")
                 if any(j.media_id == media_id and j.scope == request.scope and j.status in PENDING
                        for j in self.repository.get_all()):
                     reasons.append("Already queued or active.")
@@ -101,26 +151,11 @@ class QueueService:
                 if reasons:
                     excluded.append({"media_id": media_id, "reasons": reasons})
                     continue
-                job = QueueJob(
-                    id=str(uuid4()), media_id=media_id, scope=request.scope,
-                    name=entry.name, backend=preset.backend, preset=preset.model_copy(deep=True),
-                    preserve_audio=result.preserve_audio,
+                job = self._candidate_job(
+                    entry, preset, result, job_id=str(uuid4()),
                     requested_preserve_audio=request.preserve_audio,
                     preserve_subtitles=result.preserve_subtitles,
-                    source_size=result.source_size, source_codec=entry.item.video_codec,
-                    source_file_id=entry.item.id if entry.item.revision_id else None,
-                    source_revision_id=entry.item.revision_id,
-                    source_reference=(getattr(self.worker, "capture_source_reference", lambda item: None)(entry.item)),
                     replace_source=request.replace_source,
-                    execution_mode=self.execution_mode,
-                    estimate_basis=result.estimate_basis,
-                    estimated_saving_low=result.estimated_saving_low,
-                    estimated_saving_high=result.estimated_saving_high,
-                    estimated_output_size=result.estimated_output_size,
-                    estimated_saving=result.estimated_saving, created_at=now(),
-                    planning_output_size=result.planning_output_size,
-                    planning_saving=result.planning_saving,
-                    planning_saving_percent=result.planning_saving_percent,
                 )
                 capability_check = getattr(self.worker, "enqueue_reasons", None)
                 if capability_check:
@@ -243,7 +278,7 @@ class QueueService:
                     job.status = "skipped"
                     job.finished_at = now()
                     if job.cancel_reason == "quiet_hours_cutoff":
-                        job.reasons = [*job.reasons, "Stopped at quiet-hours start below the configured progress cutoff."]
+                        job.reasons = [*job.reasons, "Stopped at quiet-hours start at or below the configured progress cutoff."]
                     elif job.cancel_reason == "user_stop":
                         job.reasons = [*job.reasons, "Stopped by user."]
                     job.output_path = None
@@ -259,11 +294,11 @@ class QueueService:
                         job.status = "blocked"
                         job.reasons = [f"This {job.execution_mode} job cannot resume in {self.execution_mode} mode."]
                         job.finished_at = now()
-                    elif job.backend not in self.supported_backends:
-                        job.status = "blocked"
-                        job.reasons = [f"{job.backend.upper()} worker is not available in this runtime."]
-                        job.finished_at = now()
                     else:
+                        # Runtime lane availability is transient (for example a
+                        # render device can disappear across a host/LXC restart).
+                        # An owned interrupted real job is requeued and waits for
+                        # its worker instead of becoming permanently blocked.
                         if job.backend in self.external_backends:
                             interrupted.append(job.id)
                         job.status = "queued"
@@ -285,17 +320,17 @@ class QueueService:
                     job.reasons = [f"This {job.execution_mode} job cannot run in {self.execution_mode} mode."]
                     job.finished_at = now()
                     self.repository.save(job)
-                elif job.status == "queued" and job.backend not in self.supported_backends:
-                    job.status = "blocked"
-                    job.reasons = [f"{job.backend.upper()} worker is not available in this runtime."]
-                    job.finished_at = now()
-                    self.repository.save(job)
                 elif job.status == "blocked" and job.cancel_requested:
                     # A prior worker may have died after policy revalidation made
                     # the job terminal but before acknowledging the stop request.
                     job.cancel_requested = False
                     self.repository.save(job)
-            self.revalidate()
+            if backends is None:
+                self.revalidate()
+            else:
+                ready_backends = frozenset(backends) & self.supported_backends
+                if ready_backends:
+                    self.revalidate(backends=ready_backends)
         cleanup = getattr(self.worker, "cleanup_interrupted", None)
         if cleanup:
             for job_id in interrupted:
@@ -309,7 +344,7 @@ class QueueService:
                 return None
             if any(j.backend == backend and j.status in ACTIVE for j in self.repository.get_all()):
                 return None
-            self.revalidate()
+            self.revalidate(backends={backend})
             queued = self._queued(backend)
             if not queued:
                 return None
@@ -401,7 +436,7 @@ class QueueService:
                 job.ffmpeg_exit_code = None
                 job.validation_errors = []
                 if reason == "quiet_hours_cutoff":
-                    job.reasons = [*job.reasons, "Stopped at quiet-hours start below the configured progress cutoff."]
+                    job.reasons = [*job.reasons, "Stopped at quiet-hours start at or below the configured progress cutoff."]
                 elif reason == "user_stop":
                     job.reasons = [*job.reasons, "Stopped by user."]
                 job.cancel_requested = False
@@ -441,40 +476,53 @@ class QueueService:
     def update_worker_settings(self, settings: WorkerSettings) -> dict:
         if self.controls is None:
             raise InvalidOperation("Worker controls are unavailable.")
-        self.controls.save(settings)
+        with self.lock:
+            current = self.controls.get()
+            settings = settings.model_copy(update={
+                "cpu": settings.cpu.model_copy(update={"paused": current.cpu.paused}),
+                "qsv": settings.qsv.model_copy(update={"paused": current.qsv.paused}),
+            })
+            self.controls.save(settings)
+            snapshot = self.controls.snapshot()
         wake = getattr(self.worker, "wake", None)
         if wake:
             wake()
-        return self.controls.snapshot()
+        return snapshot
 
     def set_worker_paused(self, backend: str, paused: bool) -> dict:
         if self.controls is None:
             raise InvalidOperation("Worker controls are unavailable.")
         if backend not in {"cpu", "qsv"}:
             raise InvalidOperation("Unknown worker backend.")
-        self.controls.set_paused(backend, paused)
+        with self.lock:
+            self.controls.set_paused(backend, paused)
+            snapshot = self.controls.snapshot()
         wake = getattr(self.worker, "wake", None)
         if wake:
             wake()
-        return self.controls.snapshot()
+        return snapshot
 
     def pause_all_workers(self, *, stop_active: bool = False) -> dict:
         if self.controls is None:
             raise InvalidOperation("Worker controls are unavailable.")
-        self.controls.pause_all()
-        if stop_active:
-            for backend in ("cpu", "qsv"):
-                self.stop_active_backend(backend, reason="user_stop")
-        return self.controls.snapshot()
+        with self.lock:
+            self.controls.pause_all()
+            if stop_active:
+                for backend in ("cpu", "qsv"):
+                    self.stop_active_backend(backend, reason="user_stop")
+            snapshot = self.controls.snapshot()
+        return snapshot
 
     def resume_all_workers(self) -> dict:
         if self.controls is None:
             raise InvalidOperation("Worker controls are unavailable.")
-        self.controls.resume_all()
+        with self.lock:
+            self.controls.resume_all()
+            snapshot = self.controls.snapshot()
         wake = getattr(self.worker, "wake", None)
         if wake:
             wake()
-        return self.controls.snapshot()
+        return snapshot
 
     def stop_active_backend(self, backend: str, reason: str = "user_stop") -> bool:
         with self.lock, self.repository.transaction():
@@ -486,11 +534,14 @@ class QueueService:
         self.skip(job_id, reason=reason)
         return True
 
-    def revalidate(self, *, defer_external_stops: bool = False) -> list[str]:
-        """Apply current protections; optionally let a caller stop real workers after its transaction."""
+    def revalidate(self, *, defer_external_stops: bool = False,
+                   backends: set[str] | frozenset[str] | None = None) -> list[str]:
+        """Apply current protections, optionally restricted to process-owned lanes."""
         stop_after_commit = []
         with self.lock, self.repository.transaction():
             for job in self.repository.get_all():
+                if backends is not None and job.backend not in backends:
+                    continue
                 if job.status not in PENDING:
                     continue
                 before = job.model_dump()
@@ -501,15 +552,31 @@ class QueueService:
                     result = self.catalog.evaluate(entry, job.preset,
                         job.preserve_audio if requested is None else requested, job.preserve_subtitles)
                     reasons = list(result.reasons)
+                    if job.execution_mode == "real":
+                        # Runtime availability is checked when new work is
+                        # submitted/claimed. Do not turn durable queued work
+                        # terminal merely because binaries, workspace or a
+                        # render device are temporarily unavailable.
+                        reasons = [
+                            reason for reason in reasons
+                            if reason != "Read-only filesystem inventory: encoding is not enabled."
+                        ]
                     if job.execution_mode != self.execution_mode:
                         reasons.append(f"This {job.execution_mode} job cannot run in {self.execution_mode} mode.")
-                    if job.backend not in self.supported_backends:
-                        reasons.append(f"{job.backend.upper()} real encoding is not enabled.")
+                    # Runtime lane availability is not a terminal policy.
+                    # Existing jobs remain queued while a CPU/QSV worker is
+                    # temporarily unavailable and resume when that lane returns.
                     if job.status in ACTIVE and result.preserve_audio != job.preserve_audio:
                         reasons.append("Audio policy changed during execution. Submit a new job.")
                     capability_check = getattr(self.worker, "enqueue_reasons", None)
                     if capability_check and job.status == "queued":
-                        reasons.extend(capability_check(entry.item, job))
+                        capability_reasons = capability_check(entry.item, job)
+                        if job.execution_mode == "real":
+                            capability_reasons = [
+                                reason for reason in capability_reasons
+                                if reason != "Real encoding prerequisites are unavailable."
+                            ]
+                        reasons.extend(capability_reasons)
                 except LookupError as error:
                     reasons = [str(error)]
                 if reasons:

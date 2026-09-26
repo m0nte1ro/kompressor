@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block content %}
 {% if scan_status.backend == 'filesystem' and runtime_settings.encoding_enabled %}
-<p class="notice">CPU jobs run through FFmpeg/libx265 for confirmed SDR progressive sources. Audio is copied, output stays in the Kompressor workspace, and source files are never replaced. QSV is unavailable. Progress and measured savings come from the real encode.</p>
+<p class="notice">Real jobs run only on available lanes: {% if 'cpu' in runtime_settings.supported_backends %}CPU/libx265{% endif %}{% if 'cpu' in runtime_settings.supported_backends and 'qsv' in runtime_settings.supported_backends %} + {% endif %}{% if 'qsv' in runtime_settings.supported_backends %}Intel QSV/hevc_qsv{% endif %}. Confirmed SDR progressive sources keep their resolution; validated MKV output stays in the Kompressor workspace and source files are never replaced. Progress and measured savings come from the real encode.</p>
 {% elif scan_status.backend == 'filesystem' %}
 <p class="notice">Filesystem queue is read-only until runtime prerequisites are available. {{ runtime_settings.unavailable_reason or 'Encoding is disabled.' }}</p>
 {% else %}

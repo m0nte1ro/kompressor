@@ -79,7 +79,8 @@ def parse_stream(raw: dict, frames: list[dict]) -> StreamFacts:
         sample_rate=integer(raw.get('sample_rate')), bitrate=integer(raw.get('bit_rate')),
         width=integer(raw.get('width')), height=integer(raw.get('height')),
         frame_rate=frame_rate(raw.get('avg_frame_rate')) or frame_rate(raw.get('r_frame_rate')),
-        pixel_format=raw.get('pix_fmt'))
+        pixel_format=raw.get('pix_fmt'),
+        color_range=raw.get('color_range') if raw.get('color_range') in {'tv', 'pc'} else None)
     if kind != 'video':
         return facts
     facts.resolution_class = resolution_class(facts.width, facts.height)

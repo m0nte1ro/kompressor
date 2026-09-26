@@ -167,6 +167,31 @@ def test_manual_worker_pause_prevents_claim_until_resumed(client, queue, movie_p
     assert cpu["active"]["id"] == job["id"]
 
 
+def test_saving_quiet_hours_does_not_clear_manual_pause(client):
+    assert client.post("/api/queue/workers/cpu/pause").status_code == 200
+    payload = {
+        "timezone": "Europe/Lisbon",
+        "cpu": {
+            "paused": False,
+            "quiet_hours_enabled": True,
+            "quiet_start": "18:00",
+            "quiet_end": "01:00",
+            "quiet_cutoff_percent": 50,
+        },
+        "qsv": {
+            "paused": False,
+            "quiet_hours_enabled": False,
+            "quiet_start": "18:00",
+            "quiet_end": "01:00",
+            "quiet_cutoff_percent": 50,
+        },
+    }
+    response = client.put("/api/queue/workers/settings", json=payload)
+    assert response.status_code == 200
+    assert response.json()["lanes"]["cpu"]["paused"] is True
+    assert response.json()["lanes"]["cpu"]["quiet_hours_enabled"] is True
+
+
 def test_pause_all_can_be_resumed_through_api(client, queue, movie_payload):
     paused = client.post("/api/queue/workers/pause-all")
     assert paused.status_code == 200
@@ -193,7 +218,7 @@ def test_queue_page_exposes_worker_toggle_controls_and_versioned_script(client):
     assert 'data-worker-action="toggle-pause-all"' in page.text
     assert 'data-worker-action="toggle-pause"' in page.text
     assert 'data-worker-action="stop-active"' in page.text
-    assert "app.js?v=5" in page.text
+    assert "app.js?v=8" in page.text
 
 
 def test_stop_all_pauses_workers_and_skips_active_fake_jobs(client, queue, movie_payload, show_payload):
@@ -208,6 +233,38 @@ def test_stop_all_pauses_workers_and_skips_active_fake_jobs(client, queue, movie
     state = client.get("/api/queue").json()
     assert all(lane["active"] is None for lane in state["lanes"])
     assert sum(job["status"] == "skipped" for job in state["history"]) == 2
+
+
+def test_recovery_keeps_owned_job_queued_when_lane_is_temporarily_unavailable(
+        client, queue, show_payload):
+    job = add(client, show_payload)["added"][0]
+    queue.tick(0)
+    active = queue._find(job["id"])
+    assert active.status == "encoding"
+
+    queue.supported_backends = frozenset({"cpu"})
+    queue.recover(backends={"qsv"})
+
+    recovered = queue._find(job["id"])
+    assert recovered.status == "queued"
+    assert recovered.finished_at is None
+    assert not recovered.reasons
+
+
+def test_lane_scoped_recovery_does_not_touch_other_active_lane(client, queue, movie_payload, show_payload):
+    movie = add(client, movie_payload)["added"][0]
+    show = add(client, show_payload)["added"][0]
+    queue.tick(0)
+    before = client.get("/api/queue").json()
+    assert next(l for l in before["lanes"] if l["backend"] == "cpu")["active"]["id"] == movie["id"]
+    assert next(l for l in before["lanes"] if l["backend"] == "qsv")["active"]["id"] == show["id"]
+
+    queue.recover(backends={"cpu"})
+
+    after = client.get("/api/queue").json()
+    qsv = next(l for l in after["lanes"] if l["backend"] == "qsv")
+    assert qsv["active"]["id"] == show["id"]
+    assert qsv["active"]["status"] == "encoding"
 
 
 def test_quiet_hours_cross_midnight_and_apply_progress_cutoff(queue, movie_payload):
