@@ -1,4 +1,4 @@
-import {$, $$, escapeHTML as esc, label, size} from './common.js';
+import {$, $$, duration, escapeHTML as esc, label, size} from './common.js';
 
 function planningSaving(job) {
   return job.planning_saving ?? job.estimated_saving ?? 0;
@@ -11,6 +11,12 @@ function measuredChange(job) {
   return saving < 0
     ? `${size(-saving)} larger (${Math.abs(percent).toFixed(1)}%) measured`
     : `${size(saving)} saved (${percent.toFixed(1)}%) measured`;
+}
+
+// Linear extrapolation from progress so far; hidden until 1% so early noise is not shown.
+function remaining(job) {
+  if (job.status !== 'encoding' || !(job.progress >= 1 && job.progress < 100) || !(job.elapsed_seconds > 0)) return null;
+  return `estimated: ${duration(job.elapsed_seconds * (100 - job.progress) / job.progress)} left`;
 }
 
 function jobDetails(job) {
@@ -71,9 +77,9 @@ export function renderQueue(queue) {
     if (lane.active) {
       $('progress', active).value = lane.active.progress;
       const progress = lane.active.progress > 0 ? `${lane.active.progress.toFixed(1)}%` : 'Progress unavailable';
-      const elapsed = `${Math.floor(lane.active.elapsed_seconds)}s elapsed`;
-      const clock = lane.active.execution_mode === 'real' ? elapsed : `${Math.floor(lane.active.elapsed_seconds)}s simulated`;
-      $('.progress-text', active).textContent = `${progress} · ${clock}`;
+      const seconds = Math.floor(lane.active.elapsed_seconds);
+      const clock = `${duration(seconds)} ${lane.active.execution_mode === 'real' ? 'elapsed' : 'simulated'}`;
+      $('.progress-text', active).textContent = [progress, clock, remaining(lane.active)].filter(Boolean).join(' · ');
       $('.active-status', active).textContent = lane.active.status === 'validating' ? 'VALIDATING' : lane.active.status.toUpperCase();
     }
     $('.queued-count', section).textContent = lane.queued.length;
@@ -135,7 +141,7 @@ export function renderHistory(queue) {
     <td>${actualOutput ? esc(size(job.output_size)) : job.status === 'completed' ? job.estimate_basis === 'planning_range' ? `${esc(size(job.estimated_output_size_low))} – ${esc(size(job.estimated_output_size_high))} planning` : `~${esc(size(job.estimated_output_size))} estimate` : '—'}${outputPath}</td>
     <td class="saving">${savingText}</td>
     <td>${esc(label(job.source_codec))} → ${esc(label(job.preset.destination_codec))}</td>
-    <td>${Math.round(job.elapsed_seconds)}s</td><td>${esc(finished)}</td>
+    <td>${esc(duration(job.elapsed_seconds))}</td><td>${esc(finished)}</td>
   </tr>`;
   }).join('') || '<tr><td colspan="9" class="empty">No completed or stopped jobs yet. Add jobs from Movies or Shows to get started.</td></tr>';
   window.dispatchEvent(new CustomEvent('table-updated', {detail: {table: rows.closest('table')}}));
