@@ -89,7 +89,10 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
     )
     if initial_presets is None:
         from app.repositories.preset_migration import upgrade_streaming_presets
-        upgrade_streaming_presets(database, SeedPresetRepository(config.seed_presets_path).get_all())
+        seeded_presets = SeedPresetRepository(config.seed_presets_path).get_all()
+        upgrade_streaming_presets(database, seeded_presets)
+        from app.repositories.preset_migration import upgrade_gpu_qvbr_presets
+        upgrade_gpu_qvbr_presets(database, seeded_presets)
     tagger = TagService(media_repository, SQLiteTagRepository(database))
     catalog = CatalogService(media_repository, presets, PolicyEngine(), tagger)
     if worker is None:

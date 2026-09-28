@@ -73,7 +73,7 @@ class PolicyEngine:
                 if height < quality_floor.minimum_height:
                     reasons.append("Output resolution is below the inherited Quality Floor.")
                 if preset.rate_control != "abr":
-                    reasons.append("Quality Floor bitrate cannot be guaranteed by CRF/ICQ. Use a bitrate preset or revise the tag.")
+                    reasons.append("Quality Floor bitrate cannot be guaranteed by CRF/ICQ/QVBR. Use a bitrate preset or revise the tag.")
                 else:
                     # Preset validation requires a target bitrate for ABR.
                     assert preset.target_video_bitrate is not None

@@ -39,7 +39,8 @@ def test_preservation_and_preset_snapshot(client, catalog, show_payload):
     job = add(client, show_payload)["added"][0]
     assert job["preserve_audio"] is True
     assert job["preserve_subtitles"] is False
-    assert job["preset"]["rate_control"] == "icq"
+    assert job["preset"]["rate_control"] == "qvbr"
+    assert job["preset"]["target_video_bitrate"] == 4_000_000
     assert job["preset"]["quality_value"] == 23
     assert job["backend"] == "qsv"
     assert client.post("/api/queue", json={**show_payload, "target_video_bitrate": 1}).status_code == 422

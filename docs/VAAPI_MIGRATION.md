@@ -11,8 +11,9 @@ pauses and user-owned preset names survive unchanged. No data reset is needed.
 The runtime diagnostics field is now `hevc_vaapi_available`. History labels use
 the generic GPU lane name so old outputs are not relabeled with a new encoder.
 
-ICQ uses `-rc_mode:v:0 ICQ -global_quality:v:0 N`; ABR uses
-`-rc_mode:v:0 VBR -b:v:0 N`. GPU jobs do not emit `-preset`, CRF or low-power flags.
+QVBR uses `-rc_mode:v:0 QVBR -b:v:0 N -global_quality:v:0 Q`;
+ABR uses `-rc_mode:v:0 VBR -b:v:0 N`. Legacy ICQ preset snapshots still
+produce ICQ arguments; they are not silently converted. GPU jobs do not emit `-preset`, CRF or low-power flags.
 Their old encoder-effort property remains stored but is ignored. VA-API requires
 hardware surfaces, so jobs either decode in hardware and use `scale_vaapi`, or
 decode in software and use `format=...,hwupload`. These options follow the
@@ -32,21 +33,23 @@ reprobed. New/changed media acquires profiles during ordinary probing.
 ## Runtime and remaining limits
 
 Startup checks the render node and access, the encoder listing, and a ten-frame
-Main10/ICQ-23 smoke encode. Its private temporary directory is under workspace/jobs
+Main10/QVBR-23 at 4 Mbps smoke encode. Its private temporary directory is under workspace/jobs
 and is removed on success or failure. ffprobe must report HEVC, Main 10,
 yuv420p10le and a positive decoded frame count. Common prerequisite failures skip
 the encode. Missing hardware disables only the GPU lane and leaves queued GPU
 jobs queued. CPU remains independently available.
 
-ICQ rejection fails the check explicitly; there is no switch to CQP/VBR.
-The startup diagnostic retains FFmpeg's first error line as well as the final
-shutdown lines, since `-22 (Invalid argument)` alone does not identify the cause. The
-Main10/ICQ smoke gates the whole GPU lane, including custom 8-bit/ABR presets.
-If this driver cannot pass ICQ, a different product mapping requires an explicit
-decision. No hardware or CT validation was performed during this implementation.
-Hardware decode, 10-bit conversion, ICQ support and perceptual quality still need
-the manual checks below. Passing the smoke proves only this small encode, not
-all source profiles/resolutions or the quality of a full episode.
+The operator tested this render node manually: ICQ failed with “Driver does not
+support ICQ RC mode (supported modes: CQP, CBR, VBR, QVBR).” The same Main10
+upload path passed VBR and QVBR; QVBR reported quality 23 and encoded ten frames.
+The application now checks QVBR directly, with no fallback. This gates the GPU
+lane. Untouched built-in GPU presets migrate to QVBR at nominal 4 Mbps and apply
+only to 1080p. Edited presets and queued job snapshots are preserved. Legacy ICQ
+presets may still be edited, but this particular driver will reject them; they
+must be deliberately changed to QVBR or VBR before use. QVBR's quality number
+is not interchangeable with ICQ or CPU CRF. A ten-frame smoke does not establish
+perceptual quality, actual size or throughput on a full episode; start with
+keep-output and inspect real content before considering replacement.
 
 Source guards, hardlink restrictions, confirmed-SDR/progressive-only eligibility,
 source-resolution preservation and keep-output remain in force. GPU validation
@@ -99,8 +102,7 @@ PY
 ```
 
 Expect `GPU ready: True reason: None`. Failure reports the device/encoder issue or
-`GPU VA-API Main10 ICQ smoke test failed: ...`. Keep an ICQ rejection for review;
-do not silently change presets. The temporary smoke output is automatically removed.
+`GPU VA-API Main10 QVBR smoke test failed: ...`. A failure leaves the GPU lane unavailable. The temporary smoke output is automatically removed.
 
 If the service reports only `-22 (Invalid argument)`, run the same video path
 with verbose FFmpeg logging. Its first error line often names the rejected option.
@@ -111,7 +113,7 @@ ffmpeg -hide_banner -nostdin -loglevel verbose \
   -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va \
   -f lavfi -i 'testsrc2=size=320x240:rate=30' -frames:v 10 -an \
   -filter:v:0 'format=p010le,hwupload' -c:v:0 hevc_vaapi \
-  -profile:v:0 main10 -rc_mode:v:0 ICQ -global_quality:v:0 23 \
+  -profile:v:0 main10 -rc_mode:v:0 QVBR -b:v:0 4000000 -global_quality:v:0 23 \
   -f null - 2>&1
 ```
 
@@ -127,10 +129,8 @@ ffmpeg -hide_banner -nostdin -loglevel verbose \
   -f null - 2>&1
 ```
 
-If VBR passes and ICQ fails, the driver rejects ICQ on this path. If both fail,
-inspect the first errors for Main10 and surface-upload constraints. The worker
-remains disabled until its required ICQ smoke test succeeds; there is no automatic
-rate-control substitution.
+The earlier VBR/ICQ comparison established the driver limitation. The commands
+below use the verified QVBR syntax; they remain operator-run CT checks.
 
 ### 3. Sixty seconds with hardware decode
 
@@ -148,7 +148,7 @@ ffmpeg -hide_banner -nostdin -n \
   -hwaccel:v:0 vaapi -hwaccel_device:v:0 va -hwaccel_output_format:v:0 vaapi \
   -i "$SRC" -t 60 -map 0:v:0 -an \
   -filter:v:0 'scale_vaapi=format=p010' -c:v:0 hevc_vaapi \
-  -profile:v:0 main10 -rc_mode:v:0 ICQ -global_quality:v:0 23 \
+  -profile:v:0 main10 -rc_mode:v:0 QVBR -b:v:0 4000000 -global_quality:v:0 23 \
   "$CHECK_DIR/hardware.mkv"
 ```
 
@@ -164,7 +164,7 @@ ffmpeg -hide_banner -nostdin -n \
   -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va \
   -i "$SRC" -t 60 -map 0:v:0 -an \
   -filter:v:0 'format=p010le,hwupload' -c:v:0 hevc_vaapi \
-  -profile:v:0 main10 -rc_mode:v:0 ICQ -global_quality:v:0 23 \
+  -profile:v:0 main10 -rc_mode:v:0 QVBR -b:v:0 4000000 -global_quality:v:0 23 \
   "$CHECK_DIR/software-decode.mkv"
 ffprobe -v error -select_streams v:0 -count_frames \
   -show_entries stream=codec_name,profile,pix_fmt,nb_read_frames:stream_tags=ENCODER \

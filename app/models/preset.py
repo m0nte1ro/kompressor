@@ -109,7 +109,7 @@ class PresetSettings(BaseModel):
     destination_codec: DestinationCodec
 
     target_video_bitrate: int | None = Field(default=None, gt=0, le=200_000_000)
-    rate_control: Literal["abr", "crf", "icq"] = "abr"
+    rate_control: Literal["abr", "crf", "icq", "qvbr"] = "abr"
     quality_value: float | None = Field(default=None, ge=0, le=51)
     encoder_preset: Literal["fast", "medium", "slow", "slower"] = "slow"
     output_bit_depth: Literal[8, 10] = 10
@@ -150,7 +150,7 @@ class PresetSettings(BaseModel):
             return value
         normalized = dict(value)
         if (
-            normalized.get("rate_control") in {"crf", "icq"}
+            normalized.get("rate_control") in {"crf", "icq", "qvbr"}
             and "planning_video_bitrate_low" not in normalized
             and "planning_video_bitrate_high" not in normalized
         ):
@@ -205,10 +205,15 @@ class PresetSettings(BaseModel):
             expected = "cpu" if self.rate_control == "crf" else "qsv"
             if self.backend != expected:
                 raise ValueError(f"{self.rate_control.upper()} requires backend {'GPU' if expected == 'qsv' else 'CPU'}.")
-            if self.quality_value is None or self.target_video_bitrate is not None:
-                raise ValueError("Quality mode requires a quality value and no target bitrate.")
-            if self.rate_control == "icq" and (self.quality_value < 1 or self.quality_value % 1):
-                raise ValueError("ICQ quality must be an integer from 1 to 51.")
+            if self.quality_value is None:
+                raise ValueError("Quality mode requires a quality value.")
+            if self.rate_control == "qvbr":
+                if self.target_video_bitrate is None:
+                    raise ValueError("QVBR requires a nominal target bitrate.")
+            elif self.target_video_bitrate is not None:
+                raise ValueError("CRF/ICQ cannot have a target bitrate.")
+            if self.rate_control in {"icq", "qvbr"} and (self.quality_value < 1 or self.quality_value % 1):
+                raise ValueError("GPU quality must be an integer from 1 to 51.")
             if not self.planning_video_bitrate_low or not self.planning_video_bitrate_high:
                 raise ValueError("Quality mode requires a planning bitrate range, not an encoder target.")
         if (self.planning_video_bitrate_low is None) != (self.planning_video_bitrate_high is None):

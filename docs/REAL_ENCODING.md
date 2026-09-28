@@ -23,7 +23,7 @@ one another, the database, or the output workspace.
 
 The supported slice remains conservative: HEVC, confirmed SDR, progressive video,
 unchanged resolution and keep-output MKV. CPU/libx265 supports CRF/ABR and copied
-audio. Intel GPU supports ICQ/ABR and can apply the existing Efficient Audio rules
+audio. Intel GPU supports QVBR/legacy ICQ/ABR and can apply the existing Efficient Audio rules
 (AAC for mono/stereo and E-AC3 for multichannel when a track is not copied). AV1,
 HDR/unknown colour signalling, interlaced or unknown scan, source replacement and
 presets requesting resolution changes are refused. The
@@ -65,7 +65,7 @@ User preset names and queued preset snapshots are unchanged. GPU `encoder_preset
 values remain stored for compatibility but are not emitted as x265 effort options.
 See [VA-API migration and manual checks](VAAPI_MIGRATION.md) for command details.
 
-The runtime check encodes ten Main10/ICQ-23 frames into a private temporary folder
+The runtime check encodes ten Main10/QVBR-23 at 4 Mbps frames into a private temporary folder
 under workspace/jobs, probes their codec/profile/pixel format/frame count, then
 removes the folder. Failure disables only the GPU lane; there is no silent
 rate-control fallback. The check does not run when common prerequisites fail.

@@ -53,7 +53,9 @@ def test_default_catalogue_has_exactly_five_enabled_built_ins(streaming):
         "show-preserve-quality", "show-streaming-quality", "show-streaming-efficient-audio",
     }
     assert all(p["target_resolution"] == "keep" for p in enabled)
-    assert all(p["source_resolutions"] == ["480p", "576p", "720p", "1080p", "2160p"] for p in enabled)
+    assert all(p["source_resolutions"] == ["1080p"] if p["backend"] == "qsv"
+               else p["source_resolutions"] == ["480p", "576p", "720p", "1080p", "2160p"]
+               for p in enabled)
     assert all(p["hdr_support"] == "hdr10_experimental" and p["hdr_policy"] == "preserve_source" for p in enabled)
     assert all(set(p["hdr_metadata"]) >= {
         "validate_signalling", "preserve_color_primaries", "preserve_transfer_characteristics",

@@ -178,9 +178,11 @@ class GPUEncodeCapability(_HEVCEncodeCapability):
         if job.backend != "qsv":
             reasons.append("Real GPU encoding supports the GPU backend only.")
             return reasons
-        if job.preset.rate_control == "icq":
+        if job.preset.rate_control in {"icq", "qvbr"}:
             if job.preset.quality_value is None:
-                reasons.append("GPU ICQ preset has no quality value.")
+                reasons.append("GPU preset has no quality value.")
+            if job.preset.rate_control == "qvbr" and job.preset.target_video_bitrate is None:
+                reasons.append("GPU QVBR preset has no nominal target bitrate.")
         elif job.preset.rate_control == "abr":
             if job.preset.target_video_bitrate is None:
                 reasons.append("GPU ABR preset has no target bitrate.")

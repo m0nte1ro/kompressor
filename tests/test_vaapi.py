@@ -50,13 +50,13 @@ def test_decode_selection(codec, profile, pixel, expected):
 
 @pytest.mark.parametrize('hardware', [False, True])
 @pytest.mark.parametrize('depth', [8, 10])
-@pytest.mark.parametrize('mode', ['icq', 'abr'])
+@pytest.mark.parametrize('mode', ['icq', 'qvbr', 'abr'])
 def test_gpu_command_pipeline(facts, tmp_path, hardware, depth, mode):
     facts.streams[0].profile = 'High' if hardware else None
     preset = qsv_preset().model_copy(update={
         'output_bit_depth': depth, 'rate_control': mode, 'hdr_support': 'sdr_only',
-        'quality_value': 23 if mode == 'icq' else None,
-        'target_video_bitrate': 4_000_000 if mode == 'abr' else None})
+        'quality_value': 23 if mode in {'icq', 'qvbr'} else None,
+        'target_video_bitrate': 4_000_000 if mode in {'qvbr', 'abr'} else None})
     command = FFmpegEncoder.build_command('ffmpeg', queue_job(preset, backend='qsv'),
         Path('/source.mkv'), tmp_path / 'out.mkv', facts, Path('/dev/dri/renderD128'))
     assert command[command.index('-init_hw_device') + 1] == 'vaapi=va:/dev/dri/renderD128'
@@ -67,9 +67,9 @@ def test_gpu_command_pipeline(facts, tmp_path, hardware, depth, mode):
                        else 'format=' + ('p010le' if depth == 10 else 'nv12') + ',hwupload')
     assert command[command.index('-filter:v:0') + 1] == expected_filter
     assert command[command.index('-profile:v:0') + 1] == ('main10' if depth == 10 else 'main')
-    assert command[command.index('-rc_mode:v:0') + 1] == ('ICQ' if mode == 'icq' else 'VBR')
-    assert ('-global_quality:v:0' in command) is (mode == 'icq')
-    assert ('-b:v:0' in command) is (mode == 'abr')
+    assert command[command.index('-rc_mode:v:0') + 1] == (mode.upper() if mode in {'icq', 'qvbr'} else 'VBR')
+    assert ('-global_quality:v:0' in command) is (mode in {'icq', 'qvbr'})
+    assert ('-b:v:0' in command) is (mode in {'qvbr', 'abr'})
     assert not {'-preset:v:0', '-crf:v:0', '-low_power', 'hevc_qsv'} & set(command)
 
 
@@ -91,7 +91,7 @@ def test_gpu_cover_art_mapping_subtitles_and_unknown_colour(facts, tmp_path):
     assert not {'-color_primaries:v:0', '-color_trc:v:0', '-colorspace:v:0', 'None', ''} & set(command)
 
 
-@pytest.mark.parametrize('failure', ['icq', 'wrong_profile', 'no_frames', 'timeout'])
+@pytest.mark.parametrize('failure', ['qvbr', 'wrong_profile', 'no_frames', 'timeout'])
 def test_smoke_failure_is_explicit_and_cleans_workspace(tmp_path, monkeypatch, failure):
     (tmp_path / 'jobs').mkdir()
     calls = []
@@ -101,13 +101,13 @@ def test_smoke_failure_is_explicit_and_cleans_workspace(tmp_path, monkeypatch, f
             Path(command[-1]).write_bytes(b'partial')
             if failure == 'timeout':
                 raise subprocess.TimeoutExpired(command, 15)
-            return subprocess.CompletedProcess(command, int(failure == 'icq'), '', 'ICQ not supported' if failure == 'icq' else '')
+            return subprocess.CompletedProcess(command, int(failure == 'qvbr'), '', 'QVBR not supported' if failure == 'qvbr' else '')
         stream = {'codec_name': 'hevc', 'profile': 'Main' if failure == 'wrong_profile' else 'Main 10',
                   'pix_fmt': 'yuv420p10le', 'nb_read_frames': '0' if failure == 'no_frames' else '10'}
         return subprocess.CompletedProcess(command, 0, json.dumps({'streams': [stream]}), '')
     monkeypatch.setattr(vaapi.subprocess, 'run', run)
     ready, reason = vaapi.smoke_check('ffmpeg', Path('/dev/dri/renderD128'), 'ffprobe', tmp_path)
-    assert not ready and reason is not None and 'ICQ' in reason
+    assert not ready and reason is not None and 'QVBR' in reason
     assert len([command for command in calls if command[0] == 'ffmpeg']) == 1
     assert not list((tmp_path / 'jobs').iterdir())
 
@@ -242,7 +242,7 @@ def test_smoke_report_preserves_first_driver_error_when_ffmpeg_shutdown_is_noisy
         tmp_path, monkeypatch):
     (tmp_path / 'jobs').mkdir()
     def run(command, **kwargs):
-        detail = ('[hevc_vaapi] Requested rate control mode ICQ is not supported\n'
+        detail = ('[hevc_vaapi] Requested rate control mode QVBR is not supported\n'
                   + '[ffmpeg] cleanup noise\n' * 150
                   + 'Nothing was written into output file\n')
         return subprocess.CompletedProcess(command, 1, '', detail)
@@ -250,6 +250,45 @@ def test_smoke_report_preserves_first_driver_error_when_ffmpeg_shutdown_is_noisy
     ready, reason = vaapi.smoke_check('ffmpeg', Path('/dev/dri/renderD128'),
                                       'ffprobe', tmp_path)
     assert ready is False and reason is not None
-    assert 'Requested rate control mode ICQ is not supported' in reason
+    assert 'Requested rate control mode QVBR is not supported' in reason
     assert 'Nothing was written into output file' in reason
     assert not list((tmp_path / 'jobs').iterdir())
+
+
+def test_qvbr_preset_requires_both_quality_and_nominal_bitrate():
+    from pydantic import ValidationError
+    from app.models.preset import CompressionPreset
+
+    preset = qsv_preset()
+    assert preset.rate_control == 'qvbr' and preset.target_video_bitrate == 4_000_000
+    for changes in ({'quality_value': None}, {'target_video_bitrate': None},
+                    {'backend': 'cpu'}, {'quality_value': 23.5}):
+        with pytest.raises(ValidationError):
+            CompressionPreset.model_validate({**preset.model_dump(), **changes})
+
+
+def test_qvbr_migration_only_updates_untouched_built_ins(tmp_path):
+    from app.main import create_app
+    from app.models.preset import SUPPORTED_SOURCE_RESOLUTIONS
+
+    path = tmp_path / 'state.sqlite3'
+    seeds = [qsv_preset(), qsv_preset(efficient_audio=True)]
+    old = [p.model_copy(update={'rate_control': 'icq', 'target_video_bitrate': None,
+                                'source_resolutions': list(SUPPORTED_SOURCE_RESOLUTIONS)}) for p in seeds]
+    edited = old[1].model_copy(update={'name': 'My edited GPU preset'})
+    database = Database(path)
+    with database.transaction() as connection:
+        for preset in (old[0], edited):
+            connection.execute('INSERT INTO presets VALUES (?, ?)',
+                               (preset.id, preset.model_dump_json()))
+        connection.executemany('INSERT INTO metadata VALUES (?, ?)', [
+            ('presets_initialized', 'true'), ('preset_catalog_v8', 'true')])
+    with TestClient(create_app(path, start_workers=False)) as client:
+        presets = {p['id']: p for p in client.get('/api/presets').json()}
+        assert presets[old[0].id]['rate_control'] == 'qvbr'
+        assert presets[old[0].id]['target_video_bitrate'] == 4_000_000
+        assert presets[old[0].id]['source_resolutions'] == ['1080p']
+        assert presets[edited.id]['rate_control'] == 'icq'
+        assert presets[edited.id]['name'] == 'My edited GPU preset'
+    with TestClient(create_app(path, start_workers=False)) as client:
+        assert client.get('/api/presets').status_code == 200

@@ -50,7 +50,9 @@ export function compressionModal(scope, refreshQueue) {
   }
 
   function properties(preset) {
-    const rateControl = `${preset.rate_control.toUpperCase()} ${preset.quality_value ?? bitrate(preset.target_video_bitrate)}`;
+    const rateControl = preset.rate_control === 'qvbr'
+      ? `QVBR ${preset.quality_value} · nominal ${bitrate(preset.target_video_bitrate)}`
+      : `${preset.rate_control.toUpperCase()} ${preset.quality_value ?? bitrate(preset.target_video_bitrate)}`;
     const fields = [
       ['Backend', label(preset.backend)], ['Destination codec', label(preset.destination_codec)],
       ['Rate control', rateControl], ...(preset.backend === 'qsv' ? [['Output bit depth', `${preset.output_bit_depth} bit`], ['Validation', 'Experimental']] : [['Encoder effort', preset.encoder_preset], ['Output bit depth', `${preset.output_bit_depth} bit`]]), ['Target resolution', label(preset.target_resolution)],
@@ -93,7 +95,7 @@ export function compressionModal(scope, refreshQueue) {
       $('#estimated-saving').textContent = included.length ? `${size(total('estimated_saving_low'))} – ${size(total('estimated_saving_high'))}` : '—';
       $('#estimated-percent').textContent = total('source_size') ? `${(total('estimated_saving_low') / total('source_size') * 100).toFixed(0)}–${(total('estimated_saving_high') / total('source_size') * 100).toFixed(0)}%` : '—';
       $('#eligibility').innerHTML = `<strong>${included.length} eligible · ${results.length - included.length} excluded</strong>
-        <p class="muted">Planning estimates for eligible, unqueued items only. CRF/ICQ ranges are assumptions, not output bounds. Keeping originals reclaims 0 bytes.</p>
+        <p class="muted">Planning estimates for eligible, unqueued items only. CRF/ICQ/QVBR ranges are assumptions, not output bounds. Keeping originals reclaims 0 bytes.</p>
         <div class="eligibility-items">${results.map(r => `<div class="eligibility-item">
           <strong>${esc(r.row.dataset.name)}</strong> <span class="badge ${r.excluded ? 'red' : 'green'}">${r.excluded ? 'Excluded' : 'Eligible'}</span>
           <p class="muted">Audio: ${r.preserve_audio ? 'preserved by effective policy' : 'preset conversion policy'} · ${r.estimate_basis === 'planning_range' ? `Planning saving ${esc(size(r.estimated_saving_low))} – ${esc(size(r.estimated_saving_high))}` : `Estimated saving ~${esc(size(r.estimated_saving))}`}</p>

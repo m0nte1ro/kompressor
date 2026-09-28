@@ -42,6 +42,9 @@ def video_args(depth: int, rate_control: str, quality: float | None,
             '-profile:v:0', 'main10' if depth == 10 else 'main']
     if rate_control == 'icq' and quality is not None:
         return args + ['-rc_mode:v:0', 'ICQ', '-global_quality:v:0', str(int(quality))]
+    if rate_control == 'qvbr' and quality is not None and bitrate is not None:
+        return args + ['-rc_mode:v:0', 'QVBR', '-b:v:0', str(bitrate),
+                       '-global_quality:v:0', str(int(quality))]
     if rate_control == 'abr' and bitrate is not None:
         return args + ['-rc_mode:v:0', 'VBR', '-b:v:0', str(bitrate)]
     raise ValueError(f'Unsupported GPU video rate control: {rate_control}.')
@@ -56,14 +59,14 @@ def _failure_detail(stderr: str, stdout: str) -> str:
 
 
 def smoke_check(binary: str, device: Path, ffprobe: str, workspace: Path) -> tuple[bool, str | None]:
-    """Bounded Main10/ICQ encode and decoded-frame verification; no rate fallback."""
-    prefix = 'GPU VA-API Main10 ICQ smoke test failed'
+    """Bounded Main10/QVBR encode and decoded-frame verification; no rate fallback."""
+    prefix = 'GPU VA-API Main10 QVBR smoke test failed'
     try:
         with TemporaryDirectory(prefix='.vaapi-smoke-', dir=workspace / 'jobs') as temporary:
             output = Path(temporary) / 'smoke.mkv'
             command = [binary, '-hide_banner', '-nostdin', '-v', 'error', *device_args(device),
                        '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=30',
-                       '-frames:v', '10', '-an', *video_args(10, 'icq', 23, None),
+                       '-frames:v', '10', '-an', *video_args(10, 'qvbr', 23, 4_000_000),
                        '-f', 'matroska', str(output)]
             result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
                                     text=True, timeout=15, check=False)

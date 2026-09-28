@@ -61,7 +61,7 @@ checks in `services/presets.py`. API-only nested controls are included.
 | Preset `enabled` | P / editor/toggle | Persisted edit > seed | Yes | Preview/modal filtering, Policy, supported-codec validation | Immediately; existing job snapshot unchanged | WIRED |
 | Preset `backend` | P / editor | Persisted edit > seed | Yes | Lane selection, Quality CPU tag, CRF/ICQ validation, warnings | New jobs | WIRED |
 | Preset `destination_codec` | P / editor | Persisted edit > seed | Yes | Validation, eligibility, snapshot; real worker accepts HEVC and rejects AV1 | New jobs | PARTIALLY WIRED |
-| `rate_control` | P / editor | Persisted edit > seed | Yes | CPU consumes CRF/ABR; GPU consumes ICQ/ABR | Eligibility/new jobs | WIRED for current HEVC lanes |
+| `rate_control` | P / editor | Persisted edit > seed | Yes | CPU consumes CRF/ABR; GPU consumes QVBR/legacy ICQ/ABR | Eligibility/new jobs | WIRED for current HEVC lanes |
 | `target_video_bitrate` | P / editor | ABR requires positive value; quality modes require null | Yes | E estimate/floor; CPU/GPU ABR pass bitrate to the selected HEVC encoder | Eligibility/new jobs | WIRED for ABR |
 | `quality_value` | P / editor | Persisted edit; ICQ integer practical range 18–30 in the UI | Yes | CPU CRF is passed to libx265; GPU ICQ is passed as `global_quality` | New job plan | WIRED |
 | `encoder_preset` | P / editor (hidden as x265 effort for GPU) | Persisted edit > seed | Yes | Passed only to libx265; retained but ignored for GPU presets (VA-API has no x265 effort preset) | New job plan | WIRED |
@@ -104,7 +104,7 @@ checks in `services/presets.py`. API-only nested controls are included.
 `WIRED` for planning fields means the planning/policy consumer runs. Real
 filesystem jobs are accepted only when the selected lane's startup diagnostics
 and per-item execution guards pass. CPU consumes CRF/ABR plus libx265 settings;
-GPU consumes ICQ/ABR, VA-API profile/bit depth and optional Efficient
+GPU consumes QVBR/legacy ICQ/ABR, VA-API profile/bit depth and optional Efficient
 Audio rules. Both enforce stream preservation, keep-resolution and keep-output
 semantics; unsupported combinations are excluded with a reason.
 

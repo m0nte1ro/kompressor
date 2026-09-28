@@ -25,7 +25,7 @@ if (dialog) {
     return {
       backend: preserve || scope === 'movie' ? 'cpu' : 'qsv',
       destination_codec: 'hevc',
-      rate_control: preserve || scope === 'movie' ? 'crf' : 'icq',
+      rate_control: preserve || scope === 'movie' ? 'crf' : 'qvbr',
       quality_value: preserve ? 18 : scope === 'movie' ? 22 : 23,
       encoder_preset: 'slow',
       output_bit_depth: 10,
@@ -33,7 +33,7 @@ if (dialog) {
       hdr_policy: 'preserve_source',
       planning_video_bitrate_low: planning[0],
       planning_video_bitrate_high: planning[1],
-      target_video_bitrate: '',
+      target_video_bitrate: preserve || scope === 'movie' ? '' : 4,
       target_resolution: 'keep',
       audio_policy: 'preserve',
       audio_conversion_policy: 'preserve',
@@ -70,15 +70,18 @@ if (dialog) {
   }
   function backendFields() {
     const qsv = field('backend').value === 'qsv';
+    if (qsv && editing === null) sourceApplicability = ['1080p'];
     $('#encoder-effort-field').hidden = qsv;
     $('#qsv-validation-field').hidden = !qsv;
     const rateControl = field('rate_control');
     const crf = rateControl.querySelector('option[value="crf"]');
     const icq = rateControl.querySelector('option[value="icq"]');
+    const qvbr = rateControl.querySelector('option[value="qvbr"]');
     crf.disabled = qsv;
     icq.disabled = !qsv;
-    if (qsv && rateControl.value === 'crf') rateControl.value = 'icq';
-    if (!qsv && rateControl.value === 'icq') rateControl.value = 'crf';
+    qvbr.disabled = !qsv;
+    if (qsv && rateControl.value === 'crf') rateControl.value = 'qvbr';
+    if (!qsv && ['icq', 'qvbr'].includes(rateControl.value)) rateControl.value = 'crf';
     rateFields();
   }
   function hdrPolicyFields() {
@@ -96,12 +99,13 @@ if (dialog) {
     if (toneMap || sdrOnly) preserveMetadata.checked = false;
   }
   function rateFields() {
-    const quality = field('rate_control').value !== 'abr';
-    const icq = field('rate_control').value === 'icq';
+    const mode = field('rate_control').value;
+    const quality = mode !== 'abr';
+    const gpuQuality = ['icq', 'qvbr'].includes(mode);
     const qualityValue = field('quality_value');
-    field('target_video_bitrate').disabled = quality;
-    field('target_video_bitrate').required = !quality;
-    $('#abr-target-field').hidden = quality;
+    field('target_video_bitrate').disabled = !['abr', 'qvbr'].includes(mode);
+    field('target_video_bitrate').required = ['abr', 'qvbr'].includes(mode);
+    $('#abr-target-field').hidden = !['abr', 'qvbr'].includes(mode);
     $('#quality-value-field').hidden = !quality;
     for (const name of ['quality_value']) {
       field(name).disabled = !quality;
@@ -114,21 +118,22 @@ if (dialog) {
         planningVideoBitrateHigh = planning[1] * 1e6;
       }
     }
-    qualityValue.type = icq ? 'range' : 'number';
-    qualityValue.step = icq ? '1' : '0.1';
-    qualityValue.min = icq ? '18' : '0';
-    qualityValue.max = icq ? '30' : '51';
-    $('#quality-value-label').textContent = icq ? 'ICQ quality (18–30; lower = higher quality)' : 'CRF quality (lower = higher quality)';
+    qualityValue.type = gpuQuality ? 'range' : 'number';
+    qualityValue.step = gpuQuality ? '1' : '0.1';
+    qualityValue.min = gpuQuality ? '18' : '0';
+    qualityValue.max = gpuQuality ? '30' : '51';
+    $('#quality-value-label').textContent = gpuQuality ? `${mode.toUpperCase()} quality (18–30; lower = higher quality)` : 'CRF quality (lower = higher quality)';
+    $('#target-video-bitrate-label').textContent = mode === 'qvbr' ? 'Nominal video bitrate (QVBR)' : 'Target video bitrate (ABR)';
     updateQualityOutput();
   }
   function updateQualityOutput() {
     const qualityValue = field('quality_value');
     const output = $('#quality-value-output');
-    const icq = field('rate_control').value === 'icq';
+    const gpuQuality = ['icq', 'qvbr'].includes(field('rate_control').value);
     const value = Number(qualityValue.value);
     const min = Number(qualityValue.min);
     const max = Number(qualityValue.max);
-    output.hidden = !icq || !Number.isFinite(value);
+    output.hidden = !gpuQuality || !Number.isFinite(value);
     if (output.hidden) return;
     output.textContent = qualityValue.value;
     output.style.left = `${((value - min) / (max - min)) * 100}%`;
@@ -231,7 +236,7 @@ if (dialog) {
     mbps.forEach(name => payload[name] = payload[name] == null ? null : Math.round(payload[name] * 1e6));
     payload.stereo_audio_bitrate *= 1000;
     if (payload.rate_control === 'abr') {payload.quality_value = null; payload.planning_video_bitrate_low = null; payload.planning_video_bitrate_high = null;}
-    else payload.target_video_bitrate = null;
+    else if (payload.rate_control !== 'qvbr') payload.target_video_bitrate = null;
     payload.target_audio_bitrate = payload.audio_policy === 'efficient' || payload.audio_conversion_policy === 'efficient' ? Math.round(payload.target_audio_bitrate * 1000) : null;
     saving = true;
     $$('input, select, button', form).forEach(control => control.disabled = true);

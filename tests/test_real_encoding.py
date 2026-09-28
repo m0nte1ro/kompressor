@@ -147,7 +147,7 @@ def test_vaapi_runtime_check_requires_encoder_device_and_smoke_test(tmp_path, mo
 
     monkeypatch.setattr(ffmpeg.subprocess, "run", fake_run)
     assert FFmpegEncoder.vaapi_runtime_check("ffmpeg", device, "ffprobe", tmp_path) == (True, None)
-    assert any("format=p010le,hwupload" in command and "ICQ" in command and "main10" in command for command in calls)
+    assert any("format=p010le,hwupload" in command and "QVBR" in command and "main10" in command for command in calls)
     assert not list((tmp_path / "jobs").iterdir())
 
 
@@ -175,7 +175,7 @@ def test_command_maps_streams_and_applies_only_supported_crf_settings(probe_fact
     assert command[-1] == str(partial)
 
 
-def test_qsv_command_uses_render_device_icq_and_10bit_output(probe_facts, tmp_path):
+def test_qsv_command_uses_render_device_qvbr_and_10bit_output(probe_facts, tmp_path):
     preset = qsv_preset()
     job = queue_job(preset=preset, backend="qsv", scope="show")
     partial = tmp_path / "Fixture.kompressor.partial.mkv"
@@ -188,7 +188,8 @@ def test_qsv_command_uses_render_device_icq_and_10bit_output(probe_facts, tmp_pa
     assert command[command.index("-c:v:0") + 1] == "hevc_vaapi"
     assert command[command.index("-global_quality:v:0") + 1] == "23"
     assert "-preset:v:0" not in command
-    assert command[command.index("-rc_mode:v:0") + 1] == "ICQ"
+    assert command[command.index("-rc_mode:v:0") + 1] == "QVBR"
+    assert command[command.index("-b:v:0") + 1] == "4000000"
     assert command[command.index("-profile:v:0") + 1] == "main10"
     assert command[command.index("-filter:v:0") + 1] == "format=p010le,hwupload"
     assert command[command.index("-color_primaries:v:0") + 1] == "bt709"
