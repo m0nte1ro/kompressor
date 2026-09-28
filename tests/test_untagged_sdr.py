@@ -64,7 +64,8 @@ def test_untagged_progressive_8bit_source_is_assumed_sdr(codec, width, height, e
     assert assumed_sdr_colours(probe(codec, color_transfer='unknown').streams[0]) is not None
 
 
-@pytest.mark.parametrize('profile', ['Baseline', 'Constrained Baseline', 'Main', 'High'])
+# None: probes persisted before schema 4 carry no profile and are not re-probed.
+@pytest.mark.parametrize('profile', ['Baseline', 'Constrained Baseline', 'Main', 'High', None])
 def test_every_8bit_h264_profile_is_accepted(profile):
     assert assumed_sdr_colours(probe({**H264, 'profile': profile}).streams[0]) is not None
 
@@ -101,9 +102,10 @@ def test_no_unlock_with_hdr_evidence_or_non_sdr_facts(codec, video, side):
 
 @pytest.mark.parametrize('profile,pixel', [
     ('High 10', 'yuv420p10le'), ('High 10', 'yuv420p'), ('High 4:2:2', 'yuv422p'),
-    ('High 4:4:4 Predictive', 'yuv444p'), (None, 'yuv420p'), ('Extended', 'yuv420p'),
+    ('High 4:4:4 Predictive', 'yuv444p'), ('Extended', 'yuv420p'),
+    (None, 'yuv420p10le'), (None, 'yuv422p'),
 ])
-def test_h264_above_8bit_high_or_unknown_profile_stays_blocked(profile, pixel):
+def test_h264_above_8bit_high_or_non_8bit_unknown_profile_stays_blocked(profile, pixel):
     assert_blocked(probe({**H264, 'profile': profile, 'pix_fmt': pixel}))
 
 
@@ -134,7 +136,8 @@ def test_accepted_source_passes_policy_and_both_execution_capabilities(codec):
     assert GPUEncodeCapability().reasons(item, queue_job(qsv_preset(), backend='qsv')) == []
 
 
-@ACCEPTED
+@pytest.mark.parametrize('codec', [pytest.param(VC1, id='vc1'), pytest.param(H264, id='h264'),
+                                   pytest.param({**H264, 'profile': None}, id='h264-pre-schema-4')])
 def test_filesystem_library_projects_accepted_source_as_sdr_and_eligible(tmp_path, monkeypatch, codec):
     application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe(codec))
     with TestClient(application):

@@ -121,11 +121,15 @@ H264_8BIT_PROFILES = {"baseline", "constrained baseline", "main", "high"}
 
 
 def untagged_h264_sdr_colours(stream: StreamFacts) -> tuple[str, str, str] | None:
-    """H.264 can carry HDR, but PQ/HLG in practice needs High 10 or above. Only the
-    8-bit Baseline/Main/High profiles qualify; High 10/4:2:2/4:4:4 and unknown
-    profiles stay blocked. Accepted residual risk: 8-bit HLG signalled solely by an
+    """H.264 can carry HDR, but PQ/HLG in practice needs High 10 or above, and the
+    shared check already requires 8-bit yuv420p. A known profile must still be
+    8-bit Baseline/Main/High (High 10/4:2:2/4:4:4 stay blocked by name). An unknown
+    profile is accepted because probes persisted before schema 4 have none and are
+    not re-probed. Accepted residual risk: 8-bit HLG signalled solely by an
     alternative-transfer SEI with no VUI colour description is not detected."""
-    if stream.codec != "h264" or (stream.profile or "").lower() not in H264_8BIT_PROFILES:
+    if stream.codec != "h264":
+        return None
+    if stream.profile is not None and stream.profile.lower() not in H264_8BIT_PROFILES:
         return None
     return _untagged_8bit_progressive_sdr(stream)
 

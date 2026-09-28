@@ -85,9 +85,11 @@ content-light, Dolby Vision or HDR10+ side data seen.
 
 - **VC-1** (any profile): the codec has no PQ/HLG or HDR metadata carriage, so
   absence cannot hide HDR.
-- **H.264** Baseline, Constrained Baseline, Main or High only. H.264 can carry
-  HDR, but PQ/HLG in practice needs High 10 or above; High 10/4:2:2/4:4:4 and
-  unknown profiles stay blocked. Accepted residual risk: 8-bit HLG signalled only
+- **H.264** Baseline, Constrained Baseline, Main or High, or an unknown profile.
+  H.264 can carry HDR, but PQ/HLG in practice needs High 10 or above; High
+  10/4:2:2/4:4:4 stay blocked by name, and the 8-bit `yuv420p` requirement applies
+  either way. Unknown profiles are accepted because probes persisted before schema
+  4 have none and unchanged media is not re-probed. Accepted residual risk: 8-bit HLG signalled only
   by an alternative-transfer SEI with no VUI colour description is not detected.
 
 HEVC, AV1, MPEG-2 and every other codec with absent colour signalling remain
