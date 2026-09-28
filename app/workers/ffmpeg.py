@@ -11,7 +11,7 @@ from threading import Lock, Thread
 from time import monotonic
 
 from app.workers import vaapi
-from app.models.probe import MediaProbeResult, StreamFacts, legacy_vc1_sdr_colours
+from app.models.probe import MediaProbeResult, StreamFacts, assumed_sdr_colours
 from app.models.queue import QueueJob
 from app.services.encoding_capability import SUPPORTED_PIXEL_FORMATS
 
@@ -189,7 +189,7 @@ class FFmpegEncoder:
                         "-map_chapters", "0" if job.preserve_subtitles else "-1",
                         "-c", "copy"])
 
-        assumed = legacy_vc1_sdr_colours(primary)
+        assumed = assumed_sdr_colours(primary)
         # ffmpeg 7.1 takes primaries/transfer from the frames and negotiates
         # -colorspace in the filtergraph. Untagged frames therefore lost the tags
         # and got a slow BT.601->BT.709 swscale matrix conversion. Stamping the

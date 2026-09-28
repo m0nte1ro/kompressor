@@ -84,19 +84,16 @@ class StreamFacts(BaseModel):
 ABSENT_COLOUR_VALUES = {None, "unknown", "unspecified"}
 
 
-def legacy_vc1_sdr_colours(stream: StreamFacts) -> tuple[str, str, str] | None:
-    """Assumed (primaries, transfer, matrix) for untagged legacy VC-1, else None.
+def _untagged_8bit_progressive_sdr(stream: StreamFacts) -> tuple[str, str, str] | None:
+    """Shared evidence checks for the per-codec untagged-SDR rules below.
 
-    VC-1 (SMPTE 421M) is an 8-bit 4:2:0 codec with no PQ/HLG transfer, mastering
-    display or dynamic HDR carriage, so absent colour signalling cannot conceal HDR
-    there. The exception is deliberately narrow: any other codec, any present colour
-    value, any HDR/DV/HDR10+ evidence, non-8-bit or non-progressive video keeps the
-    normal confirmed-SDR requirement. Values follow the usual BT.709 (HD) / BT.601
-    (625- or 525-line SD) player assumption and are written explicitly on output.
+    Requires progressive 8-bit yuv420p video, all three colour fields absent and no
+    mastering-display, content-light, Dolby Vision or HDR10+ evidence. Values follow
+    the usual BT.709 (HD) / BT.601 (625- or 525-line SD) player assumption and are
+    written explicitly on output.
     """
     hdr = stream.hdr
-    if (stream.kind != "video" or stream.codec != "vc1" or hdr is None
-            or stream.scan_type != "progressive"
+    if (stream.kind != "video" or hdr is None or stream.scan_type != "progressive"
             or stream.pixel_format != "yuv420p" or hdr.bit_depth != 8):
         return None
     if not {hdr.transfer, hdr.primaries, hdr.matrix} <= ABSENT_COLOUR_VALUES:
@@ -112,6 +109,32 @@ def legacy_vc1_sdr_colours(stream: StreamFacts) -> tuple[str, str, str] | None:
     if stream.height > 480:
         return "bt470bg", "smpte170m", "bt470bg"
     return "smpte170m", "smpte170m", "smpte170m"
+
+
+def legacy_vc1_sdr_colours(stream: StreamFacts) -> tuple[str, str, str] | None:
+    """VC-1 (SMPTE 421M) is 8-bit 4:2:0 with no PQ/HLG or HDR metadata carriage, so
+    absent colour signalling cannot conceal HDR there."""
+    return _untagged_8bit_progressive_sdr(stream) if stream.codec == "vc1" else None
+
+
+H264_8BIT_PROFILES = {"baseline", "constrained baseline", "main", "high"}
+
+
+def untagged_h264_sdr_colours(stream: StreamFacts) -> tuple[str, str, str] | None:
+    """H.264 can carry HDR, but PQ/HLG in practice needs High 10 or above. Only the
+    8-bit Baseline/Main/High profiles qualify; High 10/4:2:2/4:4:4 and unknown
+    profiles stay blocked. Accepted residual risk: 8-bit HLG signalled solely by an
+    alternative-transfer SEI with no VUI colour description is not detected."""
+    if stream.codec != "h264" or (stream.profile or "").lower() not in H264_8BIT_PROFILES:
+        return None
+    return _untagged_8bit_progressive_sdr(stream)
+
+
+def assumed_sdr_colours(stream: StreamFacts) -> tuple[str, str, str] | None:
+    """Assumed (primaries, transfer, matrix) for an untagged source a codec-specific
+    rule accepts as SDR, else None. HEVC, AV1 and every other codec have no rule and
+    keep the normal confirmed-SDR requirement."""
+    return legacy_vc1_sdr_colours(stream) or untagged_h264_sdr_colours(stream)
 
 
 class ChapterFacts(BaseModel):

@@ -73,18 +73,25 @@ keep-output and inspect real content before considering replacement. The seeded
 Top Gear example is 1080i and remains blocked because deinterlacing is not
 implemented; the restored 576p applicability helps progressive 576p sources.
 
-### Legacy VC-1 without colour signalling
+### Untagged legacy VC-1 and 8-bit H.264
 
-Old VC-1 sources frequently carry no colour primaries, transfer or matrix tags.
-They are treated as SDR only when every one of these holds: the primary video codec
-is VC-1, it is progressive, `yuv420p` and 8-bit, all three colour fields are absent
-(`unknown`/`unspecified` count as absent), and no mastering-display, content-light,
-Dolby Vision or HDR10+ side data was seen. VC-1 has no PQ/HLG or HDR metadata
-carriage, so absence cannot hide HDR there. The rule lives in
-`legacy_vc1_sdr_colours()` in `app/models/probe.py` and is used by library
-projection, the policy engine and CPU/GPU execution capability. Any other codec
-(HEVC, AV1, H.264 and so on) with absent colour signalling remains unknown and
-blocked.
+Old VC-1 sources and many H.264 WEBRips/remuxes carry no colour primaries,
+transfer or matrix tags. Each codec has its own rule in `app/models/probe.py`,
+combined by `assumed_sdr_colours()`, which library projection, the policy engine
+and CPU/GPU execution capability use. Both rules share these requirements:
+progressive, `yuv420p` and 8-bit; all three colour fields absent
+(`unknown`/`unspecified` count as absent); and no mastering-display,
+content-light, Dolby Vision or HDR10+ side data seen.
+
+- **VC-1** (any profile): the codec has no PQ/HLG or HDR metadata carriage, so
+  absence cannot hide HDR.
+- **H.264** Baseline, Constrained Baseline, Main or High only. H.264 can carry
+  HDR, but PQ/HLG in practice needs High 10 or above; High 10/4:2:2/4:4:4 and
+  unknown profiles stay blocked. Accepted residual risk: 8-bit HLG signalled only
+  by an alternative-transfer SEI with no VUI colour description is not detected.
+
+HEVC, AV1, MPEG-2 and every other codec with absent colour signalling remain
+unknown and blocked; each would need its own explicit decision.
 
 For these sources the job writes the assumed SDR tags explicitly on output:
 BT.709 for HD (wider than 1024 or taller than 576), BT.470BG primaries/matrix with

@@ -25,8 +25,8 @@ The supported slice remains conservative: HEVC, confirmed SDR, progressive video
 unchanged resolution and keep-output MKV. CPU/libx265 supports CRF/ABR and copied
 audio. Intel GPU supports QVBR/legacy ICQ/ABR and can apply the existing Efficient Audio rules
 (AAC for mono/stereo and E-AC3 for multichannel when a track is not copied). AV1,
-HDR/unknown colour signalling (except untagged progressive 8-bit VC-1, see
-[VA-API migration](VAAPI_MIGRATION.md#legacy-vc-1-without-colour-signalling)),
+HDR/unknown colour signalling (except untagged progressive 8-bit VC-1 and H.264, see
+[VA-API migration](VAAPI_MIGRATION.md#untagged-legacy-vc-1-and-8-bit-h264)),
 interlaced or unknown scan, source replacement and
 presets requesting resolution changes are refused. The
 existing policy engine still decides eligibility; execution capability adds these
