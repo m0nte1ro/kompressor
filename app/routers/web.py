@@ -94,6 +94,7 @@ def settings(request: Request, processor: Processor):
         "media_backend": scan_status.get("backend", "seed"),
         "ffmpeg_binary": "ffmpeg", "ffprobe_binary": "ffprobe",
         "ffmpeg_available": None, "ffprobe_available": None, "libx265_available": None,
+        "hevc_qsv_available": None, "qsv_available": False, "qsv_device": "/dev/dri/renderD128",
         "workspace_root": "not configured", "workspace_writable": None,
         "encoding_enabled": False, "encoder_mode": "seed fake simulation",
         "supported_backends": ["cpu", "qsv"] if scan_status.get("backend") == "seed" else [],

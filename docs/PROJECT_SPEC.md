@@ -59,10 +59,11 @@ The optional `filesystem` backend now discovers video files recursively and uses
 scan → probe → reconciliation to LibraryDiscoveryService; the existing library
 views read a projection of that reconciled inventory. Seed mode remains the
 default. Roots have no production defaults and can be configured through settings.
-Scans are explicit and read-only. The separate [first real CPU encoding milestone](REAL_ENCODING.md)
-can enqueue only when ffmpeg, ffprobe, libx265 and the dedicated workspace are
-available; it leaves source media untouched and writes validated outputs elsewhere.
-No source replacement, hashing or reconciliation redesign is included. See
+Scans are explicit and read-only. The separate [real encoding milestone](REAL_ENCODING.md)
+runs CPU/libx265 and Intel QSV/hevc_qsv as independent worker processes when each
+lane's runtime prerequisites are available; both leave source media untouched and
+write validated outputs to the dedicated workspace. No source replacement or
+reconciliation redesign is included. See
 [READ_ONLY_DISCOVERY.md](READ_ONLY_DISCOVERY.md) for scan configuration, probe
 limitations, naming assumptions and verification details.
 
@@ -95,24 +96,27 @@ Application errors are mapped to HTTP 404/409/422 at that boundary.
 `app/container.py:build_media_processor` centrally assembles dependencies once
 per FastAPI application lifespan. The instance lives in
 `app.state.media_processor`, with explicit processor injection and dependency
-overrides available for tests. Run one application process for the existing
-single scheduler; multiple processes sharing the queue are not supported.
+overrides available for tests. Production filesystem mode deliberately uses one
+WebUI/API process plus one standalone process per real encoder lane. They coordinate
+durable queue/control state through SQLite; worker claims are transactionally
+serialized and recovery is restricted to the lane owned by that process.
 
 Seed mode composes seed media, SQLite presets/tags/jobs, fake scanner/probe
 adapters and `FakeEncoderWorker`; it remains deterministic and never touches media
 files. Filesystem mode composes `FilesystemMediaRepository`, `FilesystemScanner`,
-`FFprobeService` and, when startup prerequisites pass, one background CPU
-`RealEncoderWorker`. `LibraryDiscoveryService` owns scan/probe/reconciliation
+`FFprobeService` and lane-owned `RealEncoderWorker` instances in the standalone
+CPU and QSV processes. `LibraryDiscoveryService` owns scan/probe/reconciliation
 flow, and filesystem scans publish batches while they run.
 
 `FFprobeService` owns probing and domain-model translation. `FFmpegEncoder` owns
 all ffmpeg arguments, stream mapping, progress, subprocess lifecycle and output
 paths. Real work runs outside HTTP requests and queue/database transactions. The
-current worker accepts only CPU/libx265, confirmed SDR progressive sources, copied
-audio, unchanged resolution and keep-output MKV. It validates with ffprobe before
-publishing the result. QSV, HDR, audio conversion, deinterlacing and source
-replacement remain unsupported. See [REAL_ENCODING.md](REAL_ENCODING.md) for the
-current boundaries; the fake tick loop remains only for seed mode.
+CPU lane uses libx265 with CRF/ABR and copied audio. The QSV lane uses hevc_qsv with
+ICQ/ABR and may apply the existing Efficient Audio rules. Both lanes currently
+accept only confirmed SDR progressive sources, unchanged resolution and keep-output
+MKV, then validate the result with ffprobe before promotion. HDR, deinterlacing and
+source replacement remain unsupported. See [REAL_ENCODING.md](REAL_ENCODING.md) for
+the current boundaries; the fake tick loop remains only for seed mode.
 
 For compatibility, job-level `keep_output` remains represented by
 `replace_source: false` in the API and persistence; `true` records replacement
@@ -961,9 +965,9 @@ Just convert to HEVC
 Quality CPU-tagged shows
 selected custom quality jobs
 
-Production encoder will eventually use CPU/x265.
+Production filesystem mode uses the standalone CPU/libx265 worker.
 
-Development uses a fake worker.
+Development/seed mode uses a fake worker.
 
 32. QSV Queue
 
@@ -973,9 +977,9 @@ everyday TV compression
 Tone it down a bit + HEVC
 Tone it down a bit + HEVC + Efficient Audio
 
-Production encoder will use Intel Quick Sync Video.
+Production filesystem mode uses the standalone Intel QSV/hevc_qsv worker.
 
-Development uses a fake worker.
+Development/seed mode uses a fake worker.
 
 33. Worker Concurrency
 

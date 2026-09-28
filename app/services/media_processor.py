@@ -94,7 +94,19 @@ class MediaProcessor:
                              preserve_audio: bool | None = None, preserve_subtitles: bool = True):
         preset = self.catalog.preset(preset_id)
         entry = self.catalog.find(media_id, scope)
-        return self.catalog.evaluate(entry, preset, preserve_audio, preserve_subtitles)
+        result = self.catalog.evaluate(entry, preset, preserve_audio, preserve_subtitles)
+        if self.discovery is not None:
+            execution_reasons = self.queue.execution_reasons(
+                entry, preset, result,
+                requested_preserve_audio=preserve_audio,
+                preserve_subtitles=preserve_subtitles,
+            )
+            if execution_reasons:
+                result = result.model_copy(update={
+                    "eligible": False,
+                    "reasons": list(dict.fromkeys([*result.reasons, *execution_reasons])),
+                })
+        return result
 
     def queue_encode(self, request: EnqueueRequest):
         # QueueService and the configured worker enforce policy and runtime capability.

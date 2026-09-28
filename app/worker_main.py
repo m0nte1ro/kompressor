@@ -15,20 +15,17 @@ from app.workers.real import RealEncoderWorker
 
 
 def run(backend: str = "cpu") -> int:
-    if backend != "cpu":
-        print(f"{backend.upper()} real worker is not implemented yet.", file=sys.stderr)
+    if backend not in {"cpu", "qsv"}:
+        print(f"Unknown real worker backend: {backend}", file=sys.stderr)
         return 2
 
-    processor = build_media_processor(settings, process_role="worker")
+    processor = build_media_processor(settings, process_role="worker", worker_backend=backend)
     worker = processor.queue.worker
     if not isinstance(worker, RealEncoderWorker):
         print("Real worker requires KOMPRESSOR_MEDIA_BACKEND=filesystem.", file=sys.stderr)
         return 2
-    if backend not in worker.supported_backends:
-        print(f"{backend.upper()} worker is unavailable in this runtime.", file=sys.stderr)
-        return 2
-    if not worker.enabled:
-        print(worker.unavailable_reason or "Real encoding prerequisites are unavailable.", file=sys.stderr)
+    if backend not in worker.supported_backends or not worker.enabled:
+        print(worker.unavailable_reason or f"{backend.upper()} worker is unavailable in this runtime.", file=sys.stderr)
         return 2
 
     stopping = Event()

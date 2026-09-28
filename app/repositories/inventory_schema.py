@@ -1,4 +1,4 @@
-"""Schema v2. Rare/adapter-specific facts remain JSON; identity and streams are indexed."""
+"""Schema v3. Rare/adapter-specific facts remain JSON; identity and streams are indexed."""
 SCHEMA = [
     '''CREATE TABLE media_items (media_id TEXT PRIMARY KEY, scope TEXT NOT NULL CHECK(scope IN ('movie','show')), UNIQUE(media_id,scope))''',
     '''CREATE TABLE observations (
@@ -28,6 +28,7 @@ SCHEMA = [
         channels INTEGER, channel_layout TEXT, sample_rate INTEGER,
         dispositions TEXT NOT NULL, hdr TEXT, metadata TEXT NOT NULL,
         bit_depth INTEGER, color_primaries TEXT, color_transfer TEXT, color_matrix TEXT,
+        color_range TEXT CHECK(color_range IS NULL OR color_range IN ('tv','pc')),
         PRIMARY KEY(observation_id, stream_index))''',
     '''CREATE TABLE chapters (
         observation_id TEXT NOT NULL REFERENCES observations(observation_id) ON DELETE CASCADE,

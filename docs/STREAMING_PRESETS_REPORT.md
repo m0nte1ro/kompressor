@@ -20,8 +20,8 @@ workflow.
 
 The streaming presets aim for a premium-streaming-style visual philosophy and
 significant storage reduction. They do not copy Netflix bitrate settings. CRF and
-ICQ values are not equivalent, and the current QSV values have not been validated
-on Intel UHD 730 hardware.
+ICQ values are not equivalent. The QSV defaults are implemented but still require
+real Intel UHD 730 visual/size/speed validation before being treated as settled.
 
 ## Audio policy
 
@@ -86,17 +86,20 @@ leaves queued preset snapshots unchanged.
 ## Output handling
 
 Output handling is a job option, separate from presets. Seed mode simulates the
-selected intent without creating files. Filesystem mode's first real CPU slice
-accepts keep-output only and writes validated MKV artifacts to the dedicated
-workspace; it never replaces the source. See [real CPU encoding](REAL_ENCODING.md)
-for its conservative SDR/progressive/HEVC limits.
+selected intent without creating files. Filesystem mode has independent real
+CPU/libx265 and Intel QSV/hevc_qsv lanes. Both accept keep-output only and write
+validated MKV artifacts to the dedicated workspace; neither replaces the source.
+The QSV Efficient Audio preset may encode AAC/E-AC3 tracks according to its rules.
+See [real encoding](REAL_ENCODING.md) for the conservative SDR/progressive/HEVC
+limits and validation boundary.
 
-Broader real-media validation is still required for perceptual CRF quality,
-QSV ICQ behavior, speed settings, HDR handling, player compatibility, frame and
-grain sensitivity, audio conversion, and output-size expectations.
+Broader real-media validation is still required for QSV ICQ perceptual quality,
+speed settings, player compatibility, frame/grain sensitivity, efficient-audio
+results, and output-size expectations. CPU CRF has already been exercised on real
+media, but it remains a lossy quality mode rather than a size guarantee.
 
 The broader preset model keeps HDR10 intent separate from SDR intent; it does
-not implicitly tone-map. The current real CPU worker accepts confirmed SDR only,
-so HDR10 encode support remains unavailable. A future HDR path must preserve and
+not implicitly tone-map. Both current real lanes accept confirmed SDR only, so
+HDR10 encode support remains unavailable. A future HDR path must preserve and
 validate colour primaries, PQ transfer characteristics, matrix coefficients,
 mastering display metadata, MaxCLL, MaxFALL and related signalling.

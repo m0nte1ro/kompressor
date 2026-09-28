@@ -1,5 +1,5 @@
 [Unit]
-Description=Kompressor CPU encoder worker
+Description=Kompressor Intel QSV encoder worker
 After=network-online.target
 Wants=network-online.target
 
@@ -7,12 +7,11 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/root/kompressor
 EnvironmentFile=/etc/kompressor/kompressor.env
-ExecStart=/root/kompressor/.venv/bin/python -m app.worker_main cpu
+ExecStart=/root/kompressor/.venv/bin/python -m app.worker_main qsv
 Restart=on-failure
 RestartPreventExitStatus=2
 RestartSec=2
-# Send SIGTERM only to the Python owner first; it performs bounded ffmpeg
-# termination itself. If that graceful path hangs, systemd kills the full cgroup.
+# The worker owns the QSV ffmpeg subprocess and performs bounded termination.
 KillMode=mixed
 TimeoutStopSec=15
 

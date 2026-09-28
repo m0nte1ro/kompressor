@@ -1,11 +1,12 @@
-"""Single CPU real worker. Queue state changes use short facade callbacks."""
+"""Standalone real encoder worker with one owned backend lane per process."""
+import logging
 from threading import Event, Lock, Thread
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from app.models.inventory import SourceReference
 from app.models.media import Episode, Movie
 from app.models.queue import QueueJob
-from app.services.encoding_capability import CPUEncodeCapability, MediaItem
+from app.services.encoding_capability import CPUEncodeCapability, QSVEncodeCapability, MediaItem
 from app.services.errors import Conflict
 from app.services.source_guard import SourceGuard
 from app.services.filesystem_source import FilesystemObservationSource
@@ -17,23 +18,36 @@ if TYPE_CHECKING:
     from app.services.ffprobe import TechnicalProbe
 
 
+Backend = Literal["cpu", "qsv"]
+log = logging.getLogger(__name__)
+
+
 class RealEncoderWorker:
-    """Runs one CPU job off-request; owns cancellation and terminal transitions."""
+    """Owns at most one real backend lane and never crosses process ownership."""
+
     filesystem_mode = True
     execution_mode = "real"
-    supported_backends = frozenset({"cpu"})
-    external_backends = frozenset({"cpu"})
+    external_backends = frozenset({"cpu", "qsv"})
 
-    def __init__(self, *, enabled: bool, unavailable_reason: str | None, encoder: FFmpegEncoder,
+    def __init__(self, *, backend: Backend | None, supported_backends: set[str] | frozenset[str],
+                 unavailable_reason: str | None, encoder: FFmpegEncoder,
                  source: FilesystemObservationSource, guard: SourceGuard,
-                 capability: CPUEncodeCapability, probe: "TechnicalProbe"):
-        self.enabled = enabled
+                 capabilities: dict[str, CPUEncodeCapability | QSVEncodeCapability],
+                 probe: "TechnicalProbe"):
+        self.backend = backend
+        self.runtime_backends = frozenset(supported_backends)
+        self.supported_backends = (
+            self.runtime_backends
+            if backend is None
+            else frozenset({backend}) if backend in self.runtime_backends else frozenset()
+        )
+        self.enabled = bool(self.supported_backends)
         self.unavailable_reason = unavailable_reason
         self.encoder = encoder
         self.catalog: CatalogService | None = None
         self.source = source
         self.guard = guard
-        self.capability = capability
+        self.capabilities = capabilities
         self.probe = probe
         self.queue: QueueService | None = None
         self._stop = Event()
@@ -45,12 +59,27 @@ class RealEncoderWorker:
         self._active: set[str] = set()
 
     def diagnostics(self, runtime: dict) -> dict:
-        return {**runtime, "encoding_enabled": self.enabled,
-                "encoder_mode": "CPU · libx265 · SDR · keep-output" if self.enabled else "disabled",
-                "supported_backends": ["cpu"] if self.enabled else []}
+        supported = list(runtime.get("supported_backends", self.supported_backends))
+        modes = []
+        if "cpu" in supported:
+            modes.append("CPU · libx265")
+        if "qsv" in supported:
+            modes.append("Intel QSV · hevc_qsv")
+        return {
+            **runtime,
+            "encoding_enabled": bool(supported),
+            "encoder_mode": " + ".join(modes) + " · SDR · keep-output" if modes else "disabled",
+            "supported_backends": supported,
+        }
+
+    def _capability(self, backend: str):
+        capability = self.capabilities.get(backend)
+        if capability is None:
+            raise Conflict(f"No real execution capability is registered for {backend.upper()}.")
+        return capability
 
     def enqueue_reasons(self, item: MediaItem, job: QueueJob) -> list[str]:
-        reasons = self.capability.reasons(item, job)
+        reasons = self._capability(job.backend).reasons(item, job)
         reference = job.source_reference
         if reference is not None and item.revision_id == reference.revision_id:
             current = self.source.reference_for(item.id, item.revision_id)
@@ -73,10 +102,11 @@ class RealEncoderWorker:
         self.catalog = catalog
 
     def start(self) -> None:
-        if not self.enabled or self._thread is not None:
+        if not self.enabled or self.backend is None or self._thread is not None:
             return
-        self._thread = Thread(target=self._run, name="kompressor-cpu-encoder", daemon=True)
-        self._control_thread = Thread(target=self._control_loop, name="kompressor-cpu-control", daemon=True)
+        backend = self.backend
+        self._thread = Thread(target=self._run, name=f"kompressor-{backend}-encoder", daemon=True)
+        self._control_thread = Thread(target=self._control_loop, name=f"kompressor-{backend}-control", daemon=True)
         self._thread.start()
         self._control_thread.start()
         self._wake.set()
@@ -85,25 +115,47 @@ class RealEncoderWorker:
         self._wake.set()
 
     def _control_loop(self) -> None:
+        backend = self.backend
+        if backend is None:
+            return
         last_quiet: bool | None = None
         while not self._stop.wait(0.5):
             queue = self.queue
             if queue is None:
                 continue
-            quiet = queue.quiet_active("cpu")
-            if quiet and last_quiet is not True:
-                queue.enforce_quiet_start("cpu")
-            last_quiet = quiet
-            with self._lock:
-                active = list(self._active)
-            for job_id in active:
-                if queue.cancel_requested(job_id):
-                    self.stop(job_id)
+            try:
+                quiet = queue.quiet_active(backend)
+                if quiet and last_quiet is not True:
+                    queue.enforce_quiet_start(backend)
+                last_quiet = quiet
+                with self._lock:
+                    active = list(self._active)
+                for job_id in active:
+                    if queue.cancel_requested(job_id):
+                        self.stop(job_id)
+            except Exception:
+                log.exception("%s worker control loop iteration failed", backend.upper())
 
     def _run(self) -> None:
+        backend = self.backend
+        if backend is None:
+            return
         while not self._stop.is_set():
             queue = self.queue
-            job = queue.claim_next("cpu") if queue else None
+            if backend == "qsv":
+                device = self.encoder.qsv_device
+                ready = device is not None and self.encoder.qsv_device_check(device)[0]
+                if not ready:
+                    self._wake.wait(1.0)
+                    self._wake.clear()
+                    continue
+            try:
+                job = queue.claim_next(backend) if queue else None
+            except Exception:
+                log.exception("%s worker could not claim the next job", backend.upper())
+                self._wake.wait(1.0)
+                self._wake.clear()
+                continue
             if job is None:
                 self._wake.wait(0.5)
                 self._wake.clear()
@@ -130,6 +182,8 @@ class RealEncoderWorker:
         queue = self.queue
         if queue is None:
             raise RuntimeError("Real queue worker is not bound.")
+        if self.backend is not None and job.backend != self.backend:
+            raise Conflict(f"{self.backend.upper()} worker cannot execute a {job.backend.upper()} job.")
         with self._lock:
             if job.id in self._cancelled or self._stop.is_set():
                 raise EncodingCancelled("Encoding stopped before execution.")
@@ -141,6 +195,7 @@ class RealEncoderWorker:
         if (reference is None or reference.file_id != job.source_file_id
                 or reference.revision_id != job.source_revision_id):
             raise Conflict("Job has no matching captured source identity.")
+
         catalog = self.catalog
         if catalog is None:
             raise RuntimeError("Real worker catalog is not bound.")
@@ -148,35 +203,39 @@ class RealEncoderWorker:
         result = catalog.evaluate(entry, job.preset, job.requested_preserve_audio, job.preserve_subtitles)
         if not result.eligible:
             raise Conflict("Policy changed before execution: " + "; ".join(result.reasons))
+
         item = entry.item
-        reasons = self.capability.reasons(item, job)
+        capability = self._capability(job.backend)
+        reasons = capability.reasons(item, job)
         if reasons:
             raise Conflict("Real execution refused: " + "; ".join(reasons))
         source_path = self.source.path_for(reference)
         if source_path is None:
             raise Conflict("Current source path is unavailable.")
-        # Last operation before Popen: fresh revision/stat/hardlink validation.
         if item.probe is None:
             raise Conflict("Source technical metadata is unavailable.")
-        output = self.encoder.encode(job, source_path, item.probe,
+
+        output = self.encoder.encode(
+            job, source_path, item.probe,
             lambda percent, elapsed: queue.update_real_progress(job.id, percent, elapsed),
-            before_start=lambda: self.guard.before_processing(reference))
+            before_start=lambda: self.guard.before_processing(reference),
+        )
         if not queue.set_real_validating(job.id, str(output.final_path)):
             self.encoder.cleanup(job.id, remove_final=True)
             raise EncodingCancelled("Job was stopped before output validation.")
+
         output_probe = self.probe.inspect(output.partial_path)
         with self._lock:
             if job.id in self._cancelled or self._stop.is_set():
                 raise EncodingCancelled("Encoding stopped during output validation.")
-        errors = self.capability.validate_output(item, job, output_probe, output.partial_path)
+        errors = capability.validate_output(item, job, output_probe, output.partial_path)
         if errors:
             queue.record_validation_errors(job.id, errors)
             raise Conflict("Output validation failed: " + "; ".join(errors))
-        # Serialize the final cancellation boundary with Stop & Skip.
+
         with self._lock:
             if job.id in self._cancelled or self._stop.is_set():
                 raise EncodingCancelled("Encoding stopped before output promotion.")
-            # Recheck the captured source before publishing the validated keep-output artifact.
             self.guard.before_processing(reference)
             final_path = self.encoder.promote(job.id, output)
             size = final_path.stat().st_size

@@ -42,25 +42,30 @@ class WorkerControlService:
         hour, minute = (int(part) for part in value.split(":"))
         return hour * 60 + minute
 
-    def quiet_active(self, backend: str, at: datetime | None = None) -> bool:
-        settings = self.get()
+    @classmethod
+    def _quiet_active(cls, settings: WorkerSettings, backend: str,
+                      at: datetime | None = None) -> bool:
         lane = getattr(settings, backend)
         if not lane.quiet_hours_enabled:
             return False
         zone = ZoneInfo(settings.timezone)
         local = datetime.now(zone) if at is None else at.astimezone(zone)
         current = local.hour * 60 + local.minute
-        start = self._minutes(lane.quiet_start)
-        end = self._minutes(lane.quiet_end)
+        start = cls._minutes(lane.quiet_start)
+        end = cls._minutes(lane.quiet_end)
         if start == end:
             return True
         if start < end:
             return start <= current < end
         return current >= start or current < end
 
+    def quiet_active(self, backend: str, at: datetime | None = None) -> bool:
+        return self._quiet_active(self.get(), backend, at)
+
     def can_claim(self, backend: str, at: datetime | None = None) -> bool:
         settings = self.get()
-        return not getattr(settings, backend).paused and not self.quiet_active(backend, at)
+        lane = getattr(settings, backend)
+        return not lane.paused and not self._quiet_active(settings, backend, at)
 
     def quiet_action(self, backend: str, job: QueueJob) -> str:
         lane = getattr(self.get(), backend)
@@ -73,7 +78,7 @@ class WorkerControlService:
         lanes = {}
         for backend in ("cpu", "qsv"):
             lane = getattr(settings, backend)
-            quiet = self.quiet_active(backend, at)
+            quiet = self._quiet_active(settings, backend, at)
             lanes[backend] = {
                 **lane.model_dump(),
                 "quiet_active": quiet,
