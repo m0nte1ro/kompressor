@@ -50,6 +50,7 @@ class StreamFacts(BaseModel):
     index: int = Field(ge=0)
     kind: Literal["video", "audio", "subtitle", "attachment", "data"]
     codec: str
+    profile: str | None = None
     language: str | None = None
     title: str | None = None
     dispositions: dict[str, bool] = Field(default_factory=dict)

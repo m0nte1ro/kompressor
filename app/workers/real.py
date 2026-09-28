@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Literal
 from app.models.inventory import SourceReference
 from app.models.media import Episode, Movie
 from app.models.queue import QueueJob
-from app.services.encoding_capability import CPUEncodeCapability, QSVEncodeCapability, MediaItem
+from app.services.encoding_capability import CPUEncodeCapability, GPUEncodeCapability, MediaItem
 from app.services.errors import Conflict
 from app.services.source_guard import SourceGuard
 from app.services.filesystem_source import FilesystemObservationSource
@@ -32,7 +32,7 @@ class RealEncoderWorker:
     def __init__(self, *, backend: Backend | None, supported_backends: set[str] | frozenset[str],
                  unavailable_reason: str | None, encoder: FFmpegEncoder,
                  source: FilesystemObservationSource, guard: SourceGuard,
-                 capabilities: dict[str, CPUEncodeCapability | QSVEncodeCapability],
+                 capabilities: dict[str, CPUEncodeCapability | GPUEncodeCapability],
                  probe: "TechnicalProbe"):
         self.backend = backend
         self.runtime_backends = frozenset(supported_backends)
@@ -64,7 +64,7 @@ class RealEncoderWorker:
         if "cpu" in supported:
             modes.append("CPU · libx265")
         if "qsv" in supported:
-            modes.append("Intel QSV · hevc_qsv")
+            modes.append("Intel GPU (VA-API) · hevc_vaapi")
         return {
             **runtime,
             "encoding_enabled": bool(supported),
@@ -75,7 +75,7 @@ class RealEncoderWorker:
     def _capability(self, backend: str):
         capability = self.capabilities.get(backend)
         if capability is None:
-            raise Conflict(f"No real execution capability is registered for {backend.upper()}.")
+            raise Conflict(f"No real execution capability is registered for {'GPU' if backend == 'qsv' else 'CPU'}.")
         return capability
 
     def enqueue_reasons(self, item: MediaItem, job: QueueJob) -> list[str]:
@@ -145,7 +145,7 @@ class RealEncoderWorker:
             queue = self.queue
             if backend == "qsv":
                 device = self.encoder.qsv_device
-                ready = device is not None and self.encoder.qsv_device_check(device)[0]
+                ready = device is not None and self.encoder.gpu_device_check(device)[0]
                 if not ready:
                     self._wake.wait(1.0)
                     self._wake.clear()
@@ -184,7 +184,7 @@ class RealEncoderWorker:
         if queue is None:
             raise RuntimeError("Real queue worker is not bound.")
         if self.backend is not None and job.backend != self.backend:
-            raise Conflict(f"{self.backend.upper()} worker cannot execute a {job.backend.upper()} job.")
+            raise Conflict(f"{'GPU' if self.backend == 'qsv' else 'CPU'} worker cannot execute a {'GPU' if job.backend == 'qsv' else 'CPU'} job.")
         with self._lock:
             if job.id in self._cancelled or self._stop.is_set():
                 raise EncodingCancelled("Encoding stopped before execution.")

@@ -72,7 +72,7 @@ class QueueService:
 
     def snapshot(self) -> dict:
         # get_all() already uses a SQLite read snapshot. Do not reserve the global
-        # writer lock for browser polling now that CPU and QSV are separate processes.
+        # writer lock for browser polling now that CPU and GPU are separate processes.
         with self.lock:
             jobs = self.repository.get_all()
             lanes = []
@@ -124,7 +124,7 @@ class QueueService:
                           preserve_subtitles: bool, replace_source: bool = False) -> list[str]:
         reasons = []
         if preset.backend not in self.supported_backends:
-            reasons.append(f"{preset.backend.upper()} real encoding is not available in this runtime.")
+            reasons.append(f"{'GPU' if preset.backend == 'qsv' else 'CPU'} real encoding is not available in this runtime.")
         if preset.destination_codec != "hevc":
             reasons.append("AV1 is not available in this workflow.")
         if result.reasons or reasons:
@@ -158,7 +158,7 @@ class QueueService:
                                                request.preserve_subtitles)
                 reasons = list(result.reasons)
                 if preset.backend not in self.supported_backends:
-                    reasons.append(f"{preset.backend.upper()} real encoding is not available in this runtime.")
+                    reasons.append(f"{'GPU' if preset.backend == 'qsv' else 'CPU'} real encoding is not available in this runtime.")
                 if any(j.media_id == media_id and j.scope == request.scope and j.status in PENDING
                        for j in self.repository.get_all()):
                     reasons.append("Already queued or active.")
@@ -596,7 +596,7 @@ class QueueService:
                     if job.execution_mode != self.execution_mode:
                         reasons.append(f"This {job.execution_mode} job cannot run in {self.execution_mode} mode.")
                     # Runtime lane availability is not a terminal policy.
-                    # Existing jobs remain queued while a CPU/QSV worker is
+                    # Existing jobs remain queued while a CPU/GPU worker is
                     # temporarily unavailable and resume when that lane returns.
                     if job.status in ACTIVE and result.preserve_audio != job.preserve_audio:
                         reasons.append("Audio policy changed during execution. Submit a new job.")

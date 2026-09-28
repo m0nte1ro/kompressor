@@ -60,8 +60,8 @@ seed tag keys remain unchanged. Missing records/revisions stay in the reconciled
 inventory even when hidden from the active library views.
 
 Filesystem source mounts remain read-only. When ffmpeg/ffprobe/workspace
-prerequisites pass, CPU jobs additionally require libx265 and QSV jobs require
-the configured render device plus hevc_qsv. Each real lane runs in its own
+prerequisites pass, CPU jobs additionally require libx265 and GPU jobs require
+the configured render device plus hevc_vaapi. Each real lane runs in its own
 standalone worker process; unavailable lanes are reported explicitly and never
 fall back to the seed fake worker. The original seed workflow, including its fake
 workers, still works.

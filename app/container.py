@@ -28,7 +28,7 @@ from app.workers.encoder import FakeEncoder
 from app.services.discovery import FakeMediaScanner, FakeProbeService
 from app.services.media_processor import MediaProcessor
 from app.services.filesystem_source import FilesystemObservationSource
-from app.services.encoding_capability import CPUEncodeCapability, QSVEncodeCapability
+from app.services.encoding_capability import CPUEncodeCapability, GPUEncodeCapability
 from app.services.source_guard import SourceGuard
 from app.workers.ffmpeg import FFmpegEncoder
 from app.workers.real import RealEncoderWorker
@@ -75,7 +75,7 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
             encoder=FFmpegEncoder(config.ffmpeg_binary, config.workspace_root, qsv_device=config.qsv_device),
             source=source,
             guard=SourceGuard(inventory_repository, source),
-            capabilities={"cpu": CPUEncodeCapability(), "qsv": QSVEncodeCapability()},
+            capabilities={"cpu": CPUEncodeCapability(), "qsv": GPUEncodeCapability()},
             probe=ffprobe,
         )
         media_repository = FilesystemMediaRepository(
@@ -103,7 +103,7 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
     else:
         diagnostics = {"ffmpeg_binary": config.ffmpeg_binary, "ffprobe_binary": config.ffprobe_binary,
                        "ffmpeg_available": None, "ffprobe_available": None, "libx265_available": None,
-                       "hevc_qsv_available": None, "qsv_device": str(config.qsv_device),
+                       "hevc_vaapi_available": None, "qsv_device": str(config.qsv_device),
                        "qsv_available": False, "cpu_available": False,
                        "workspace_root": str(config.workspace_root), "encoding_enabled": False,
                        "encoder_mode": "seed fake simulation" if discovery is None else "disabled",

@@ -128,7 +128,7 @@ async function refreshQueue() {
       : control?.paused ? 'paused'
       : control?.quiet_active ? 'quiet hours'
       : lane.active?.status ?? 'idle';
-    $(`#${lane.backend}-state`).textContent = `${lane.backend.toUpperCase()} · ${state}`;
+    $(`#${lane.backend}-state`).textContent = `${lane.backend === 'qsv' ? 'GPU' : 'CPU'} · ${state}`;
   });
   renderQueue(queue);
   renderHistory(queue);
@@ -231,13 +231,13 @@ document.addEventListener('click', event => {
     message = 'Active jobs are stopping and all workers are paused.';
   } else if (action === 'stop-active') {
     path = `/api/queue/workers/${encodeURIComponent(backend)}/stop-active`;
-    message = `${backend.toUpperCase()} active job stop requested.`;
+    message = `${backend === 'qsv' ? 'GPU' : 'CPU'} active job stop requested.`;
   } else if (action === 'toggle-pause') {
     const paused = laneControl?.paused ?? button.dataset.paused === 'true';
     path = `/api/queue/workers/${encodeURIComponent(backend)}/${paused ? 'resume' : 'pause'}`;
     message = paused
-      ? `${backend.toUpperCase()} worker resumed.`
-      : `${backend.toUpperCase()} worker will pause before claiming another job.`;
+      ? `${backend === 'qsv' ? 'GPU' : 'CPU'} worker resumed.`
+      : `${backend === 'qsv' ? 'GPU' : 'CPU'} worker will pause before claiming another job.`;
   } else {
     return;
   }

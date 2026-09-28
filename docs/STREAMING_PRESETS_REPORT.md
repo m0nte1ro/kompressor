@@ -15,12 +15,12 @@ workflow.
 | Just convert to HEVC                        | Movie | CPU/x265 HEVC, experimental CRF                        | Preserve every track       | KEEP              |
 | Tone it down a bit + HEVC                   | Movie | CPU/x265 HEVC, experimental CRF                        | Preserve every track       | KEEP              |
 | Just convert to HEVC                        | Show  | CPU/x265 HEVC, experimental CRF                        | Preserve every track       | KEEP              |
-| Tone it down a bit + HEVC                   | Show  | Intel QSV HEVC, experimental ICQ                       | Preserve every track       | KEEP              |
+| Tone it down a bit + HEVC                   | Show  | Intel GPU HEVC, experimental ICQ                       | Preserve every track       | KEEP              |
 | Tone it down a bit + HEVC + Efficient Audio | Show  | Same video policy as the Show streaming-quality intent | Efficient rules by default | KEEP              |
 
 The streaming presets aim for a premium-streaming-style visual philosophy and
 significant storage reduction. They do not copy Netflix bitrate settings. CRF and
-ICQ values are not equivalent. The QSV defaults are implemented but still require
+ICQ values are not equivalent. The GPU defaults are implemented but still require
 real Intel UHD 730 visual/size/speed validation before being treated as settled.
 
 ## Audio policy
@@ -87,13 +87,13 @@ leaves queued preset snapshots unchanged.
 
 Output handling is a job option, separate from presets. Seed mode simulates the
 selected intent without creating files. Filesystem mode has independent real
-CPU/libx265 and Intel QSV/hevc_qsv lanes. Both accept keep-output only and write
+CPU/libx265 and Intel GPU/hevc_vaapi lanes. Both accept keep-output only and write
 validated MKV artifacts to the dedicated workspace; neither replaces the source.
-The QSV Efficient Audio preset may encode AAC/E-AC3 tracks according to its rules.
+The GPU Efficient Audio preset may encode AAC/E-AC3 tracks according to its rules.
 See [real encoding](REAL_ENCODING.md) for the conservative SDR/progressive/HEVC
 limits and validation boundary.
 
-Broader real-media validation is still required for QSV ICQ perceptual quality,
+Broader real-media validation is still required for GPU ICQ perceptual quality,
 speed settings, player compatibility, frame/grain sensitivity, efficient-audio
 results, and output-size expectations. CPU CRF has already been exercised on real
 media, but it remains a lossy quality mode rather than a size guarantee.

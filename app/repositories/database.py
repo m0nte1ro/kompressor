@@ -14,7 +14,7 @@ class Database:
         path.parent.mkdir(parents=True, exist_ok=True)
         with self.transaction() as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1, 2, 3):
+            if version not in (0, 1, 2, 3, 4):
                 raise RuntimeError(f"Unsupported database schema version: {version}")
             for table in ("presets", "tags", "jobs", "metadata"):
                 connection.execute(f"CREATE TABLE IF NOT EXISTS {table} (id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
@@ -35,16 +35,18 @@ class Database:
                         connection.execute("DELETE FROM metadata WHERE id=?", (SQLiteInventoryRepository.key,))
                     if connection.execute("PRAGMA foreign_key_check").fetchone():
                         raise ValueError("Invalid inventory foreign-key references.")
-                    connection.execute("PRAGMA user_version = 3")
+                    connection.execute("PRAGMA user_version = 4")
                 except Exception as error:
                     raise RuntimeError(f"Inventory schema migration failed; database unchanged: {error}") from error
-            elif version == 2:
+            elif version in (2, 3):
                 try:
-                    connection.execute(
-                        "ALTER TABLE streams ADD COLUMN color_range TEXT "
-                        "CHECK(color_range IS NULL OR color_range IN ('tv','pc'))"
-                    )
-                    connection.execute("PRAGMA user_version = 3")
+                    if version == 2:
+                        connection.execute(
+                            "ALTER TABLE streams ADD COLUMN color_range TEXT "
+                            "CHECK(color_range IS NULL OR color_range IN ('tv','pc'))"
+                        )
+                    connection.execute("ALTER TABLE streams ADD COLUMN profile TEXT")
+                    connection.execute("PRAGMA user_version = 4")
                 except Exception as error:
                     raise RuntimeError(f"Inventory schema migration failed; database unchanged: {error}") from error
         with sqlite3.connect(self.path) as connection:

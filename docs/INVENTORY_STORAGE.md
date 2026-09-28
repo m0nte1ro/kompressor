@@ -1,6 +1,7 @@
 # Indexed inventory and background discovery
 
-Schema version 3 extends the relational inventory with explicit stream colour range.
+Schema version 4 adds nullable stream codec profiles for conservative GPU decode selection.
+Existing profiles remain unknown and use software decode. Schema version 3 extends the relational inventory with explicit stream colour range.
 Schema version 2 replaced `metadata.reconciliation_inventory_v1` with relational
 storage. File/media/revision/artifact identity and reconciliation decisions are
 unchanged. The inventory adapter remains read-only and does not encode, hash,
@@ -51,8 +52,9 @@ normal page queries do not use it or load historical revisions. Diagnostic
 ## Migration and transactions
 
 Opening schema 0/1 creates the current schema inside the existing database
-transaction. Opening schema 2 adds the nullable stream `color_range` column and
-advances to schema 3 in one transaction.
+transaction. Opening schema 2 adds nullable stream `color_range` and `profile`
+columns and advances to schema 4 in one transaction.
+Opening schema 3 adds only the nullable `profile` column.
 The old document is validated, imported and foreign-key checked before its
 metadata row is removed and `user_version` advances. Malformed data or inconsistent
 references raises an explicit migration failure and rolls back both DDL and data.
@@ -102,7 +104,7 @@ leave some already-discovered rows with unknown facts; rerunning completes them.
 The transient background report resets on restart; applied reconciliation runs
 and issues persist. Shutdown stops between files/directories and waits for the
 current bounded ffprobe call. Run **one Uvicorn WebUI/API process** because the
-scan coordinator is process-local. Real CPU and QSV encoder workers are separate
+scan coordinator is process-local. Real CPU and GPU encoder workers are separate
 processes and coordinate queue state through SQLite.
 
 ## Scale validation and limits

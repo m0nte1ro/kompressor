@@ -97,7 +97,7 @@ def test_schema_one_migration_preserves_inventory_and_other_state(tmp_path):
         database = Database(path)
         assert SQLiteInventoryRepository(database).load() == state
         with database.read() as connection:
-            assert connection.execute('PRAGMA user_version').fetchone()[0] == 3
+            assert connection.execute('PRAGMA user_version').fetchone()[0] == 4
             assert connection.execute('PRAGMA foreign_key_check').fetchall() == []
             assert connection.execute("SELECT 1 FROM metadata WHERE id='reconciliation_inventory_v1'").fetchone() is None
             for table in ('presets', 'tags', 'jobs', 'metadata'):
@@ -114,11 +114,12 @@ def test_schema_two_migrates_colour_range_column_atomically(tmp_path):
                 "",
             )
             connection.execute(legacy)
+        connection.execute('ALTER TABLE streams DROP COLUMN profile')
         connection.execute('PRAGMA user_version=2')
 
     database = Database(path)
     with database.read() as connection:
-        assert connection.execute('PRAGMA user_version').fetchone()[0] == 3
+        assert connection.execute('PRAGMA user_version').fetchone()[0] == 4
         columns = {row['name'] for row in connection.execute('PRAGMA table_info(streams)')}
         assert 'color_range' in columns
 

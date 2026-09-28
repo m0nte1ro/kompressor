@@ -30,7 +30,7 @@ def run(backend: str = "cpu") -> int:
         print("Real worker requires KOMPRESSOR_MEDIA_BACKEND=filesystem.", file=sys.stderr)
         return 2
     if backend not in worker.supported_backends or not worker.enabled:
-        print(worker.unavailable_reason or f"{backend.upper()} worker is unavailable in this runtime.", file=sys.stderr)
+        print(worker.unavailable_reason or f"{'GPU' if backend == 'qsv' else 'CPU'} worker is unavailable in this runtime.", file=sys.stderr)
         return 2
 
     stopping = Event()

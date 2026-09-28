@@ -18,7 +18,7 @@ Kompressor should provide:
 - Technical information about every media file.
 - Safe policy-based compression.
 - User-defined compression presets.
-- Separate CPU and Intel QSV processing lanes.
+- Separate CPU and Intel GPU processing lanes.
 - Bulk selection and bulk queue operations.
 - Strong protection against accidentally modifying valuable media.
 - Accurate enough storage-saving estimates.
@@ -60,7 +60,7 @@ scan → probe → reconciliation to LibraryDiscoveryService; the existing libra
 views read a projection of that reconciled inventory. Seed mode remains the
 default. Roots have no production defaults and can be configured through settings.
 Scans are explicit and read-only. The separate [real encoding milestone](REAL_ENCODING.md)
-runs CPU/libx265 and Intel QSV/hevc_qsv as independent worker processes when each
+runs CPU/libx265 and Intel GPU/hevc_vaapi as independent worker processes when each
 lane's runtime prerequisites are available; both leave source media untouched and
 write validated outputs to the dedicated workspace. No source replacement or
 reconciliation redesign is included. See
@@ -105,13 +105,13 @@ Seed mode composes seed media, SQLite presets/tags/jobs, fake scanner/probe
 adapters and `FakeEncoderWorker`; it remains deterministic and never touches media
 files. Filesystem mode composes `FilesystemMediaRepository`, `FilesystemScanner`,
 `FFprobeService` and lane-owned `RealEncoderWorker` instances in the standalone
-CPU and QSV processes. `LibraryDiscoveryService` owns scan/probe/reconciliation
+CPU and GPU processes. `LibraryDiscoveryService` owns scan/probe/reconciliation
 flow, and filesystem scans publish batches while they run.
 
 `FFprobeService` owns probing and domain-model translation. `FFmpegEncoder` owns
 all ffmpeg arguments, stream mapping, progress, subprocess lifecycle and output
 paths. Real work runs outside HTTP requests and queue/database transactions. The
-CPU lane uses libx265 with CRF/ABR and copied audio. The QSV lane uses hevc_qsv with
+CPU lane uses libx265 with CRF/ABR and copied audio. The GPU lane uses hevc_vaapi with
 ICQ/ABR and may apply the existing Efficient Audio rules. Both lanes currently
 accept only confirmed SDR progressive sources, unchanged resolution and keep-output
 MKV, then validate the result with ffprobe before promotion. HDR, deinterlacing and
@@ -133,7 +133,7 @@ The development machine may have:
 
 - no ffmpeg
 - no ffprobe
-- no Intel QSV
+- no Intel GPU
 - no `/media`
 - no actual movies/shows
 - no Sonarr
@@ -484,11 +484,11 @@ Scope: Show; CPU/x265; HEVC; CRF quality mode; preserve source resolution;
 preserve audio; conservative, experimental high-fidelity starting point.
 
 Tone it down a bit + HEVC
-Scope: Show; Intel QSV/iGPU; HEVC; ICQ quality mode; preserve source resolution;
+Scope: Show; Intel GPU/iGPU; HEVC; ICQ quality mode; preserve source resolution;
 preserve every audio track and language by default.
 
 Tone it down a bit + HEVC + Efficient Audio
-Scope: Show; Intel QSV/iGPU; exactly the same video policy as Show Streaming
+Scope: Show; Intel GPU/iGPU; exactly the same video policy as Show Streaming
 Quality; preserve source resolution; deterministic efficient audio by default.
 The rules retain languages, tracks and channel layouts, copy already-efficient
 tracks where sensible, use AAC for mono/stereo and E-AC3 for multichannel audio,
@@ -685,7 +685,7 @@ Video may still be compressed if otherwise eligible.
 
 Quality CPU
 
-Compression should use a CPU/x265 quality-oriented preset instead of the normal QSV show preset.
+Compression should use a CPU/x265 quality-oriented preset instead of the normal GPU show preset.
 
 Typical use:
 
@@ -952,7 +952,7 @@ There is one logical scheduler with two independent execution lanes.
 
 Scheduler
 ├── CPU Queue
-└── QSV Queue
+└── GPU Queue
 
 The lanes may process jobs concurrently.
 
@@ -969,15 +969,15 @@ Production filesystem mode uses the standalone CPU/libx265 worker.
 
 Development/seed mode uses a fake worker.
 
-32. QSV Queue
+32. GPU Queue
 
-QSV jobs normally include:
+GPU jobs normally include:
 
 everyday TV compression
 Tone it down a bit + HEVC
 Tone it down a bit + HEVC + Efficient Audio
 
-Production filesystem mode uses the standalone Intel QSV/hevc_qsv worker.
+Production filesystem mode uses the standalone Intel GPU/hevc_vaapi worker.
 
 Development/seed mode uses a fake worker.
 
@@ -986,9 +986,9 @@ Development/seed mode uses a fake worker.
 Initial production target:
 
 CPU workers = 1
-QSV workers = 1
+GPU workers = 1
 
-A CPU encode and QSV encode may run simultaneously.
+A CPU encode and GPU encode may run simultaneously.
 
 The host CPU is usually lightly loaded.
 
@@ -999,7 +999,7 @@ Long-term production considerations:
 CPU budget around 70-75%
 lower scheduler priority / nice level
 avoid monopolizing all host resources
-do not start a new QSV compression job if the media server is actively using hardware transcoding
+do not start a new GPU compression job if the media server is actively using hardware transcoding
 
 The media server has priority over Kompressor.
 
@@ -1175,7 +1175,7 @@ UP NEXT
 2. ...
 
 
-QSV Queue
+GPU Queue
 
 ACTIVE
 Modern Family S03E04
@@ -1220,7 +1220,7 @@ Production-only workspace path:
 Workspace path
 Workers
 CPU workers
-QSV workers
+GPU workers
 CPU resource budget
 Safety
 Block hardlinks
@@ -1315,7 +1315,7 @@ Planning saving range: 4.3–5.1 GB
 Actual output and saving: recorded only after a real encode
 
 AVC → HEVC
-QSV
+GPU
 Show streaming-quality intent
 
 Duration: 21 min
@@ -1330,7 +1330,7 @@ Useful global statistics:
 Total storage saved
 Files compressed
 CPU encodes
-QSV encodes
+GPU encodes
 Average reduction %
 Failed jobs
 Encoding time
@@ -1507,8 +1507,8 @@ Subtitle/chapter/attachment preservation is default.
 Tags are Kompressor-native.
 TV tags inherit Series → Season → Episode.
 CPU is preferred for quality-oriented Movie/Show jobs.
-QSV is preferred for everyday TV compression.
-CPU and QSV workers may operate concurrently.
+GPU is preferred for everyday TV compression.
+CPU and GPU workers may operate concurrently.
 Queue priority defaults primarily to planning storage savings until real measurements exist.
 Active jobs cannot be casually removed.
 No real file replacement occurs before validation.
@@ -1521,7 +1521,7 @@ Do not introduce unnecessary external services or frontend frameworks.
 Near-term milestones:
 
 1. Seed-backed WebUI
-2. Dual CPU/QSV fake queue
+2. Dual CPU/GPU fake queue
 3. Preset management UI
 4. Kompressor tags and inheritance UI
 5. Fake worker progress/state transitions
@@ -1529,7 +1529,7 @@ Near-term milestones:
 7. SQLite persistence
 8. Production filesystem scanner
 9. ffprobe integration
-10. Intel QSV production adapter
+10. Intel GPU production adapter
 11. x265 CPU production adapter
 12. validation pipeline
 13. safe transactional replacement
@@ -1577,7 +1577,7 @@ Do not install or depend on:
 
 - ffmpeg
 - ffprobe
-- Intel QSV
+- Intel GPU
 - Node
 - npm
 - React
@@ -1776,13 +1776,13 @@ Implement a development-only fake dual-lane queue.
 One logical scheduler conceptually has:
 
 CPU Queue
-QSV Queue
+GPU Queue
 
 Render these as visibly separate lanes.
 
 Jobs are assigned according to the selected preset backend.
 
-CPU and QSV lanes represent independent workers that may run concurrently.
+CPU and GPU lanes represent independent workers that may run concurrently.
 
 This original UI scope describes seed mode only: it uses no subprocesses, ffmpeg
 or real encoding. Seed mode still uses the fake infrastructure below. The current
@@ -1822,7 +1822,7 @@ final size
 bytes/percentage saved
 source codec
 destination codec
-backend CPU/QSV
+backend CPU/GPU
 preset
 elapsed time
 completion time
@@ -1834,7 +1834,7 @@ total saved
 files processed
 average reduction
 CPU jobs
-QSV jobs
+GPU jobs
 failed jobs
 
 Fake data is fine.

@@ -167,8 +167,8 @@ class CPUEncodeCapability(_HEVCEncodeCapability):
         return reasons
 
 
-class QSVEncodeCapability(_HEVCEncodeCapability):
-    """Intel QSV HEVC slice for confirmed-SDR progressive sources."""
+class GPUEncodeCapability(_HEVCEncodeCapability):
+    """Intel GPU (VA-API) HEVC slice for confirmed-SDR progressive sources."""
 
     backend = "qsv"
     allow_audio_conversion = True
@@ -176,27 +176,56 @@ class QSVEncodeCapability(_HEVCEncodeCapability):
     def _backend_reasons(self, job: QueueJob) -> list[str]:
         reasons = []
         if job.backend != "qsv":
-            reasons.append("Real QSV encoding supports the QSV backend only.")
+            reasons.append("Real GPU encoding supports the GPU backend only.")
             return reasons
         if job.preset.rate_control == "icq":
             if job.preset.quality_value is None:
-                reasons.append("QSV ICQ preset has no quality value.")
+                reasons.append("GPU ICQ preset has no quality value.")
         elif job.preset.rate_control == "abr":
             if job.preset.target_video_bitrate is None:
-                reasons.append("QSV ABR preset has no target bitrate.")
+                reasons.append("GPU ABR preset has no target bitrate.")
         else:
-            reasons.append(f"Rate control {job.preset.rate_control} is unsupported by the QSV encoder.")
+            reasons.append(f"Rate control {job.preset.rate_control} is unsupported by the GPU encoder.")
         return reasons
 
     def validate_output(self, item: MediaItem, job: QueueJob, output_probe, output_path: Path) -> list[str]:
         errors = super().validate_output(item, job, output_probe, output_path)
+        video = self.primary_video(output_probe)
+        if video is not None:
+            pixel, profile = (("yuv420p10le", "Main 10") if job.preset.output_bit_depth == 10
+                              else ("yuv420p", "Main"))
+            if video.pixel_format != pixel or video.profile != profile:
+                errors.append(f"GPU output must have pixel format {pixel} and profile {profile}.")
+            encoder = next((value for key, value in video.metadata.items() if key.lower() == "encoder"), None)
+            if encoder is not None and (not isinstance(encoder, str) or "hevc_vaapi" not in encoder.lower()):
+                errors.append("GPU output encoder tag does not identify hevc_vaapi.")
+        source_video = self.primary_video(item.probe)
+        if item.probe is not None and source_video is not None:
+            source_streams = [stream for stream in item.probe.streams
+                              if job.preserve_subtitles or stream.kind in {"video", "audio"}]
+            ordered = [source_video, *(s for s in source_streams if s.index != source_video.index)]
+            actual = sorted(output_probe.streams, key=lambda stream: stream.index)
+            if [s.kind for s in ordered] != [s.kind for s in actual]:
+                errors.append("GPU output stream order does not match the mapping plan.")
+            else:
+                for source, output in zip(ordered, actual):
+                    if source.index == source_video.index or source.kind == "audio":
+                        continue
+                    codec = "subrip" if source.codec == "mov_text" else source.codec
+                    if output.codec != codec:
+                        errors.append(f"GPU output {source.kind} codec/order differs from the mapped source.")
+                if job.preserve_subtitles:
+                    for source, output in zip(ordered, actual):
+                        if source.language and source.language != output.language:
+                            errors.append("GPU output stream language/order differs from the mapped source.")
+                        if source.title and source.title != output.title:
+                            errors.append("GPU output stream title/order differs from the mapped source.")
         expected = audio_plan(item, job.preset, job.preserve_audio)
-        output_audio = [stream for stream in output_probe.streams if stream.kind == "audio"]
+        output_audio = sorted((stream for stream in output_probe.streams if stream.kind == "audio"),
+                              key=lambda stream: stream.index)
         if len(expected) != len(output_audio):
             return errors
         for index, (plan, stream) in enumerate(zip(expected, output_audio)):
-            if plan["action"] != "encode":
-                continue
             wanted = str(plan["codec"]).lower()
             actual = stream.codec.lower()
             aliases = {"eac3": {"eac3", "e-ac-3"}, "aac": {"aac"}}

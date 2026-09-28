@@ -17,7 +17,7 @@ from app.models.preferences import WorkerLaneSettings, WorkerSettings
 from app.models.probe import HDRSignalling, MediaProbeResult
 from app.models.queue import EnqueueRequest, QueueJob
 from app.repositories.preset_seed import SeedPresetRepository
-from app.services.encoding_capability import CPUEncodeCapability, QSVEncodeCapability
+from app.services.encoding_capability import CPUEncodeCapability, GPUEncodeCapability
 from app.services.errors import Conflict
 from app.services.ffprobe import FFprobeService
 from app.workers.ffmpeg import FFmpegEncoder, FFmpegError
@@ -80,10 +80,10 @@ def test_runtime_capability_checks_ffmpeg_ffprobe_workspace_and_x265(tmp_path, m
     monkeypatch.setattr(encoding_runtime, "executable", lambda binary: f"/fake/{binary}")
     monkeypatch.setattr(encoding_runtime.FFprobeService, "runtime_check", lambda binary: (True, None))
     monkeypatch.setattr(encoding_runtime.FFmpegEncoder, "runtime_check", lambda binary: (True, None))
-    monkeypatch.setattr(encoding_runtime.FFmpegEncoder, "qsv_runtime_check", lambda binary, device: (True, None))
+    monkeypatch.setattr(encoding_runtime.FFmpegEncoder, "vaapi_runtime_check", lambda binary, device, ffprobe, workspace: (True, None))
     status = encoding_runtime.capability_status("ffmpeg", "ffprobe", workspace, {"movie": movie_root})
     assert status["available"] and status["ffprobe_available"] and status["libx265_available"]
-    assert status["hevc_qsv_available"] and status["supported_backends"] == ["cpu", "qsv"]
+    assert status["hevc_vaapi_available"] and status["supported_backends"] == ["cpu", "qsv"]
     assert status["workspace_writable"]
 
 
@@ -98,16 +98,16 @@ def test_cpu_worker_runtime_probe_does_not_touch_qsv_device(tmp_path, monkeypatc
     monkeypatch.setattr(encoding_runtime.FFmpegEncoder, "runtime_check", lambda binary: (True, None))
 
     def unexpected_qsv(*args):
-        raise AssertionError("CPU worker must not probe QSV hardware")
+        raise AssertionError("CPU worker must not probe GPU hardware")
 
-    monkeypatch.setattr(encoding_runtime.FFmpegEncoder, "qsv_runtime_check", unexpected_qsv)
+    monkeypatch.setattr(encoding_runtime.FFmpegEncoder, "vaapi_runtime_check", unexpected_qsv)
     status = encoding_runtime.capability_status(
         "ffmpeg", "ffprobe", workspace, {"movie": movie_root},
         Path("/dev/dri/renderD128"), frozenset({"cpu"}),
     )
     assert status["supported_backends"] == ["cpu"]
     assert status["cpu_available"] is True
-    assert status["hevc_qsv_available"] is None
+    assert status["hevc_vaapi_available"] is None
 
 
 def test_tool_runtime_checks_accept_diagnostics_on_stderr(monkeypatch):
@@ -125,12 +125,11 @@ def test_tool_runtime_checks_accept_diagnostics_on_stderr(monkeypatch):
     assert FFprobeService.runtime_check("ffprobe") == (True, None)
 
 
-def test_qsv_runtime_check_requires_encoder_device_and_smoke_test(tmp_path, monkeypatch):
-    import subprocess
+def test_vaapi_runtime_check_requires_encoder_device_and_smoke_test(tmp_path, monkeypatch):
     from app.workers import ffmpeg
-
     device = tmp_path / "renderD128"
     device.touch()
+    (tmp_path / "jobs").mkdir()
     monkeypatch.setattr(ffmpeg.stat, "S_ISCHR", lambda mode: True)
     monkeypatch.setattr(ffmpeg.os, "access", lambda path, mode: True)
     calls = []
@@ -138,16 +137,18 @@ def test_qsv_runtime_check_requires_encoder_device_and_smoke_test(tmp_path, monk
     def fake_run(command, **kwargs):
         calls.append(command)
         if "-encoders" in command:
-            return subprocess.CompletedProcess(command, 0, stdout=" V....D hevc_qsv", stderr="")
+            return subprocess.CompletedProcess(command, 0, stdout=" V....D hevc_vaapi", stderr="")
+        if command[0] == "ffprobe":
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"streams": [{
+                "codec_name": "hevc", "profile": "Main 10", "pix_fmt": "yuv420p10le", "nb_read_frames": "10"
+            }]}), stderr="")
+        Path(command[-1]).write_bytes(b"smoke")
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(ffmpeg.subprocess, "run", fake_run)
-    assert FFmpegEncoder.qsv_runtime_check("ffmpeg", device) == (True, None)
-    assert any(
-        "-qsv_device" in command and "p010le" in command
-        and "main10" in command and "slow" in command
-        for command in calls
-    )
+    assert FFmpegEncoder.vaapi_runtime_check("ffmpeg", device, "ffprobe", tmp_path) == (True, None)
+    assert any("format=p010le,hwupload" in command and "ICQ" in command and "main10" in command for command in calls)
+    assert not list((tmp_path / "jobs").iterdir())
 
 
 def test_command_maps_streams_and_applies_only_supported_crf_settings(probe_facts, tmp_path):
@@ -183,12 +184,13 @@ def test_qsv_command_uses_render_device_icq_and_10bit_output(probe_facts, tmp_pa
         "/usr/bin/ffmpeg", job, Path("/read-only/Episode.mkv"), partial, probe_facts,
         qsv_device=device,
     )
-    assert command[command.index("-qsv_device") + 1] == str(device)
-    assert command[command.index("-c:v:0") + 1] == "hevc_qsv"
+    assert command[command.index("-init_hw_device") + 1] == f"vaapi=va:{device}"
+    assert command[command.index("-c:v:0") + 1] == "hevc_vaapi"
     assert command[command.index("-global_quality:v:0") + 1] == "23"
-    assert command[command.index("-preset:v:0") + 1] == preset.encoder_preset
+    assert "-preset:v:0" not in command
+    assert command[command.index("-rc_mode:v:0") + 1] == "ICQ"
     assert command[command.index("-profile:v:0") + 1] == "main10"
-    assert command[command.index("-pix_fmt:v:0") + 1] == "p010le"
+    assert command[command.index("-filter:v:0") + 1] == "format=p010le,hwupload"
     assert command[command.index("-color_primaries:v:0") + 1] == "bt709"
     assert command[command.index("-color_trc:v:0") + 1] == "bt709"
     assert command[command.index("-colorspace:v:0") + 1] == "bt709"
@@ -284,7 +286,7 @@ def test_output_validation_rejects_changed_sdr_colour_signalling(probe_facts, tm
 
 def test_qsv_efficient_audio_output_validation_accepts_planned_codecs(
         probe_facts, tmp_path):
-    guard = QSVEncodeCapability()
+    guard = GPUEncodeCapability()
     source_audio = [
         AudioTrack(codec=stream.codec, channels=stream.channels, bitrate=stream.bitrate,
                    language=stream.language, title=stream.title, stream_index=stream.index,
@@ -301,7 +303,7 @@ def test_qsv_efficient_audio_output_validation_accepts_planned_codecs(
     for stream in probe_facts.streams:
         if stream.kind == "video":
             output_streams.append(stream.model_copy(update={
-                "codec": "hevc", "pixel_format": "p010le",
+                "codec": "hevc", "pixel_format": "yuv420p10le", "profile": "Main 10",
                 "hdr": stream.hdr.model_copy(update={"bit_depth": 10}),
             }))
         elif stream.kind == "audio":
@@ -319,7 +321,7 @@ def test_qsv_efficient_audio_output_validation_accepts_planned_codecs(
 
 
 def test_qsv_capability_accepts_icq_and_efficient_audio(probe_facts):
-    guard = QSVEncodeCapability()
+    guard = GPUEncodeCapability()
     audio = [
         AudioTrack(codec=stream.codec, channels=stream.channels, bitrate=stream.bitrate,
                    language=stream.language, title=stream.title, stream_index=stream.index,
@@ -331,7 +333,7 @@ def test_qsv_capability_accepts_icq_and_efficient_audio(probe_facts):
                     preserve_audio=False, requested_preserve_audio=False)
     assert not guard.reasons(item, job)
     wrong_backend = job.model_copy(update={"backend": "cpu"})
-    assert any("QSV backend only" in reason for reason in guard.reasons(item, wrong_backend))
+    assert any("GPU backend only" in reason for reason in guard.reasons(item, wrong_backend))
 
 
 def test_output_validation_reports_codec_resolution_duration_and_stream_loss(probe_facts, tmp_path):
@@ -694,7 +696,7 @@ def test_qsv_worker_claims_validates_and_completes_show_job(tmp_path, monkeypatc
         "ffmpeg_available": True,
         "ffprobe_available": True,
         "libx265_available": True,
-        "hevc_qsv_available": True,
+        "hevc_vaapi_available": True,
         "qsv_device": "/dev/dri/renderD128",
         "ffmpeg_binary": "/fake/ffmpeg",
         "ffprobe_binary": "/fake/ffprobe",
@@ -707,7 +709,7 @@ def test_qsv_worker_claims_validates_and_completes_show_job(tmp_path, monkeypatc
     output_probe = probe_facts.model_copy(update={"streams": [
         stream.model_copy(update={
             "codec": "hevc",
-            "pixel_format": "p010le",
+            "pixel_format": "yuv420p10le", "profile": "Main 10",
             "hdr": stream.hdr.model_copy(update={"bit_depth": 10}),
         }) if stream.kind == "video" else stream
         for stream in probe_facts.streams
@@ -746,9 +748,9 @@ def test_qsv_worker_claims_validates_and_completes_show_job(tmp_path, monkeypatc
     assert saved["output_size"] == 100_000_000
     assert spawned
     command = spawned[0].command
-    assert command[command.index("-c:v:0") + 1] == "hevc_qsv"
+    assert command[command.index("-c:v:0") + 1] == "hevc_vaapi"
     assert command[command.index("-global_quality:v:0") + 1] == "23"
-    assert command[command.index("-qsv_device") + 1] == "/dev/dri/renderD128"
+    assert command[command.index("-init_hw_device") + 1] == "vaapi=va:/dev/dri/renderD128"
 
 
 def test_background_worker_claims_and_completes_without_http_encode(tmp_path, monkeypatch, probe_facts):
@@ -795,7 +797,7 @@ def test_worker_recovery_requeues_active_job_during_full_runtime_outage(
         "ffmpeg_available": False,
         "ffprobe_available": False,
         "libx265_available": False,
-        "hevc_qsv_available": False,
+        "hevc_vaapi_available": False,
         "qsv_device": "/dev/dri/renderD128",
         "ffmpeg_binary": "/fake/ffmpeg",
         "ffprobe_binary": "/fake/ffprobe",

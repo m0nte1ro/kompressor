@@ -1,4 +1,4 @@
-"""Read-only startup checks for real CPU and Intel QSV encoder capabilities."""
+"""Startup checks for real CPU and Intel GPU (VA-API) encoder capabilities."""
 import os
 import shutil
 import stat
@@ -98,12 +98,12 @@ def capability_status(ffmpeg_binary: str, ffprobe_binary: str, workspace_root: P
     if "qsv" in requested:
         qsv_reasons = [*common_reasons]
         qsv_error = None
-        if ffmpeg is not None:
-            qsv_available, qsv_error = FFmpegEncoder.qsv_runtime_check(ffmpeg, qsv_path)
+        if ffmpeg is not None and ffprobe is not None and not common_reasons:
+            qsv_available, qsv_error = FFmpegEncoder.vaapi_runtime_check(ffmpeg, qsv_path, ffprobe, root)
         else:
             qsv_available = False
         if not qsv_available:
-            qsv_reasons.append(qsv_error or "Intel QSV HEVC is unavailable.")
+            qsv_reasons.append(qsv_error or "Intel GPU (VA-API) HEVC is unavailable.")
         qsv_ready = not qsv_reasons
 
     supported = [
@@ -124,7 +124,7 @@ def capability_status(ffmpeg_binary: str, ffprobe_binary: str, workspace_root: P
         "ffmpeg_available": ffmpeg is not None,
         "ffprobe_available": ffprobe_ready,
         "libx265_available": x265_available,
-        "hevc_qsv_available": qsv_available,
+        "hevc_vaapi_available": qsv_available,
         "qsv_device": str(qsv_path),
         "ffmpeg_binary": ffmpeg or ffmpeg_binary,
         "ffprobe_binary": ffprobe or ffprobe_binary,

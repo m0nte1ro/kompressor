@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block content %}
-<p class="notice">Preset quality values and QSV settings are experimental starting points, not exact or Netflix-equivalent guarantees. Changes are saved locally and affect new job plans and eligibility. Queued jobs retain their original preset configuration. Real encoding, when enabled, supports CPU/libx265 and Intel QSV/hevc_qsv lanes for confirmed SDR progressive sources and keep-output MKV files.</p>
+<p class="notice">Preset quality values and GPU settings are experimental starting points, not exact or Netflix-equivalent guarantees. Changes are saved locally and affect new job plans and eligibility. Queued jobs retain their original preset configuration. Real encoding, when enabled, supports CPU/libx265 and Intel GPU (VA-API)/hevc_vaapi lanes for confirmed SDR progressive sources and keep-output MKV files.</p>
 {% for scope, heading in [('movie', 'Movie presets'), ('show', 'Show presets')] %}
 <details class="preset-section" aria-label="{{ heading }}" open>
   <summary><h2>{{ heading }}</h2><span class="badge">{{ presets | selectattr('scope', 'equalto', scope) | list | length }} presets</span></summary>
@@ -55,7 +55,7 @@
     <label class="field">Timezone
       <input name="timezone" value="{{ worker_controls.timezone }}" maxlength="100" placeholder="Europe/Lisbon">
     </label>
-    {% for backend, heading in [('cpu', 'CPU'), ('qsv', 'Intel QSV')] %}
+    {% for backend, heading in [('cpu', 'CPU'), ('qsv', 'Intel GPU (VA-API)')] %}
     {% set lane = worker_controls.lanes[backend] %}
     <fieldset class="worker-schedule-lane">
       <legend>{{ heading }}</legend>
@@ -76,15 +76,15 @@
     <dt>ffmpeg</dt><dd>{{ runtime_settings.ffmpeg_binary }} · {{ 'available' if runtime_settings.ffmpeg_available is sameas true else 'not found' if runtime_settings.ffmpeg_available is sameas false else 'not checked' }}</dd>
     <dt>ffprobe</dt><dd>{{ runtime_settings.ffprobe_binary }} · {{ 'available' if runtime_settings.ffprobe_available is sameas true else 'not found' if runtime_settings.ffprobe_available is sameas false else 'not checked' }}</dd>
     <dt>libx265</dt><dd>{{ 'available' if runtime_settings.libx265_available is sameas true else 'unavailable' if runtime_settings.libx265_available is sameas false else 'not checked' }}</dd>
-    <dt>Intel QSV HEVC</dt><dd>{{ 'available' if runtime_settings.hevc_qsv_available is sameas true else 'unavailable' if runtime_settings.hevc_qsv_available is sameas false else 'not checked' }} · <code>{{ runtime_settings.qsv_device }}</code></dd>
+    <dt>Intel GPU (VA-API) HEVC</dt><dd>{{ 'available' if runtime_settings.hevc_vaapi_available is sameas true else 'unavailable' if runtime_settings.hevc_vaapi_available is sameas false else 'not checked' }} · <code>{{ runtime_settings.qsv_device }}</code></dd>
     <dt>Workspace</dt><dd><code>{{ runtime_settings.workspace_root }}</code> · {{ 'writable' if runtime_settings.workspace_writable is sameas true else 'not writable' if runtime_settings.workspace_writable is sameas false and runtime_settings.media_backend == 'filesystem' else 'not checked' }}</dd>
     <dt>Encoding</dt><dd>{{ 'enabled' if runtime_settings.encoding_enabled else 'disabled' }} · {{ runtime_settings.encoder_mode }}</dd>
     <dt>Supported backends</dt><dd>{{ runtime_settings.supported_backends | join(', ') if runtime_settings.supported_backends else 'none' }}</dd>
   </dl>
   {% if runtime_settings.cpu_unavailable_reason and 'cpu' not in runtime_settings.supported_backends %}<p class="reason">CPU: {{ runtime_settings.cpu_unavailable_reason }}</p>{% endif %}
-  {% if runtime_settings.qsv_unavailable_reason and 'qsv' not in runtime_settings.supported_backends %}<p class="reason">QSV: {{ runtime_settings.qsv_unavailable_reason }}</p>{% endif %}
+  {% if runtime_settings.qsv_unavailable_reason and 'qsv' not in runtime_settings.supported_backends %}<p class="reason">GPU: {{ runtime_settings.qsv_unavailable_reason }}</p>{% endif %}
   {% if runtime_settings.unavailable_reason %}<p class="reason">{{ runtime_settings.unavailable_reason }}</p>{% endif %}
-  <p class="muted">Runtime binary, QSV device and workspace settings come from the environment and require restart. Real output is written only below the configured workspace.</p>
+  <p class="muted">Runtime binary, GPU device and workspace settings come from the environment and require restart. Real output is written only below the configured workspace.</p>
 </section>
 {% endblock %}
 

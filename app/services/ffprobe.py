@@ -73,6 +73,7 @@ def parse_stream(raw: dict, frames: list[dict]) -> StreamFacts:
     index = int(raw['index'])
     sampled = [f for f in frames if f.get('stream_index') == index]
     facts = StreamFacts(index=index, kind=kind, codec=raw.get('codec_name') or 'unknown',
+        profile=raw.get('profile'),
         language=tags.get('language'), title=tags.get('title'), metadata=tags,
         dispositions={k: bool(v) for k, v in (raw.get('disposition') or {}).items()},
         channels=integer(raw.get('channels')), channel_layout=raw.get('channel_layout'),

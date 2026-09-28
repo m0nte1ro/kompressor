@@ -10,6 +10,7 @@ import subprocess
 from threading import Lock, Thread
 from time import monotonic
 
+from app.workers import vaapi
 from app.models.probe import MediaProbeResult, StreamFacts
 from app.models.queue import QueueJob
 from app.services.encoding_capability import SUPPORTED_PIXEL_FORMATS
@@ -55,45 +56,29 @@ class FFmpegEncoder:
         return True, None
 
     @staticmethod
-    def qsv_device_check(device: Path) -> tuple[bool, str | None]:
+    def gpu_device_check(device: Path) -> tuple[bool, str | None]:
         try:
             mode = device.stat().st_mode
         except OSError as error:
-            return False, f"QSV render device is unavailable: {device} ({error})"
+            return False, f"GPU render device is unavailable: {device} ({error})"
         if not stat.S_ISCHR(mode):
-            return False, f"QSV render device is not a character device: {device}"
+            return False, f"GPU render device is not a character device: {device}"
         if not os.access(device, os.R_OK | os.W_OK):
-            return False, f"QSV render device is not readable/writable: {device}"
+            return False, f"GPU render device is not readable/writable: {device}"
         return True, None
 
     @classmethod
-    def qsv_runtime_check(cls, binary: str, device: Path) -> tuple[bool, str | None]:
-        ready, device_error = cls.qsv_device_check(device)
+    def vaapi_runtime_check(cls, binary: str, device: Path, ffprobe: str,
+                            workspace: Path) -> tuple[bool, str | None]:
+        ready, device_error = cls.gpu_device_check(device)
         if not ready:
             return False, device_error
         encoders, error = cls._encoders(binary)
         if error:
             return False, error
-        if "hevc_qsv" not in (encoders or ""):
-            return False, "ffmpeg does not report the hevc_qsv encoder."
-        command = [
-            binary, "-hide_banner", "-v", "error", "-qsv_device", str(device),
-            "-f", "lavfi", "-i", "color=c=black:s=64x64:r=1",
-            "-frames:v", "1", "-an", "-c:v", "hevc_qsv",
-            "-global_quality", "23", "-preset", "slow", "-profile:v", "main10",
-            "-pix_fmt", "p010le", "-f", "null", "-"
-        ]
-        try:
-            result = subprocess.run(
-                command, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                timeout=15, check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as error:
-            return False, f"Could not initialize Intel QSV on {device}: {error}"
-        if result.returncode != 0:
-            detail = (result.stderr or result.stdout).strip()[-500:]
-            return False, f"Intel QSV HEVC smoke test failed on {device}: {detail or 'ffmpeg failed'}"
-        return True, None
+        if "hevc_vaapi" not in (encoders or ""):
+            return False, "ffmpeg does not report the hevc_vaapi encoder."
+        return vaapi.smoke_check(binary, device, ffprobe, workspace)
 
     def __init__(self, binary: str, workspace_root: Path, stop_grace_seconds: float = 5.0,
                  qsv_device: Path | None = None):
@@ -172,8 +157,13 @@ class FFmpegEncoder:
                    "-progress", "pipe:1", "-nostats", "-protocol_whitelist", "file,pipe"]
         if job.backend == "qsv":
             if qsv_device is None:
-                raise FFmpegError("QSV job has no configured render device.")
-            command.extend(["-qsv_device", str(qsv_device)])
+                raise FFmpegError("GPU job has no configured render device.")
+            command.extend(vaapi.device_args(qsv_device))
+            if vaapi.hardware_decode(primary):
+                # Input options target the primary's actual index, not cover art.
+                command.extend([f"-hwaccel:{primary.index}", "vaapi",
+                                f"-hwaccel_device:{primary.index}", "va",
+                                f"-hwaccel_output_format:{primary.index}", "vaapi"])
         command.extend(["-i", str(source_path)])
 
         for stream in ordered:
@@ -193,28 +183,22 @@ class FFmpegEncoder:
             command.extend(["-preset:v:0", job.preset.encoder_preset,
                             "-pix_fmt:v:0", "yuv420p10le" if job.preset.output_bit_depth == 10 else "yuv420p"])
         elif job.backend == "qsv":
-            command.extend(["-c:v:0", "hevc_qsv"])
-            if job.preset.rate_control == "icq" and job.preset.quality_value is not None:
-                command.extend(["-global_quality:v:0", str(int(job.preset.quality_value))])
-            elif job.preset.rate_control == "abr" and job.preset.target_video_bitrate is not None:
-                command.extend(["-b:v:0", str(job.preset.target_video_bitrate)])
-            else:
-                raise FFmpegError(f"Unsupported QSV video rate control: {job.preset.rate_control}.")
-            command.extend([
-                "-preset:v:0", job.preset.encoder_preset,
-                "-profile:v:0", "main10" if job.preset.output_bit_depth == 10 else "main",
-                "-pix_fmt:v:0", "p010le" if job.preset.output_bit_depth == 10 else "nv12",
-            ])
+            try:
+                command.extend(vaapi.video_args(
+                    job.preset.output_bit_depth, job.preset.rate_control,
+                    job.preset.quality_value, job.preset.target_video_bitrate,
+                    hardware=vaapi.hardware_decode(primary)))
+            except ValueError as error:
+                raise FFmpegError(str(error)) from error
         else:
             raise FFmpegError(f"Unsupported encoder backend: {job.backend}.")
 
-        if (primary.hdr is not None and primary.hdr.primaries
-                and primary.hdr.transfer and primary.hdr.matrix):
-            command.extend([
-                "-color_primaries:v:0", primary.hdr.primaries,
-                "-color_trc:v:0", primary.hdr.transfer,
-                "-colorspace:v:0", primary.hdr.matrix,
-            ])
+        if primary.hdr is not None:
+            for flag, value in (("-color_primaries:v:0", primary.hdr.primaries),
+                                ("-color_trc:v:0", primary.hdr.transfer),
+                                ("-colorspace:v:0", primary.hdr.matrix)):
+                if value:
+                    command.extend([flag, value])
         if primary.color_range in {"tv", "pc"}:
             command.extend(["-color_range:v:0", primary.color_range])
 

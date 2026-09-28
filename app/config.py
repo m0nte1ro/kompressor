@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     ffprobe_timeout: float = Field(default=30, gt=0, le=600)
     ffmpeg_binary: str = Field(default="ffmpeg", min_length=1)
     workspace_root: Path = Path("/mnt/kompressor")
+    # Legacy environment key KOMPRESSOR_QSV_DEVICE now selects the VA-API render node.
     qsv_device: Path = Path("/dev/dri/renderD128")
     timezone: str = "UTC"
 
@@ -43,7 +44,7 @@ class Settings(BaseSettings):
     @classmethod
     def absolute_paths(cls, value: Path) -> Path:
         if not value.is_absolute():
-            raise ValueError("Workspace root and QSV device must be absolute paths.")
+            raise ValueError("Workspace root and GPU device must be absolute paths.")
         return value
 
     @field_validator("timezone")

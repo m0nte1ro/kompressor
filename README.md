@@ -35,11 +35,11 @@ unconfigured. Use **Settings → Scan library** to discover and probe actual fil
 scans run in the background and results update automatically without reloading the
 page. Seed mode still needs no media tools and keeps its deterministic fake queue.
 
-Filesystem mode can run independent CPU/libx265 and Intel QSV/hevc_qsv lanes when
+Filesystem mode can run independent CPU/libx265 and Intel GPU/hevc_vaapi lanes when
 their runtime prerequisites are available. Each encoder is a separate process from
 FastAPI, so restarting or stopping the WebUI does not terminate its ffmpeg subprocess.
 Both real lanes accept only confirmed SDR progressive sources, keep resolution and
-write a separate validated MKV under the workspace. CPU keeps audio copied; QSV can
+write a separate validated MKV under the workspace. CPU keeps audio copied; GPU can
 also apply the existing Efficient Audio preset rules. Source files remain untouched.
 HDR and source replacement are not enabled.
 
@@ -72,7 +72,7 @@ export KOMPRESSOR_TIMEZONE=Europe/Lisbon
 # Terminal/service 2: CPU encoder owner
 .venv/bin/python -m app.worker_main cpu
 
-# Terminal/service 3: QSV encoder owner (after /dev/dri is available)
+# Terminal/service 3: GPU encoder owner (after /dev/dri is available)
 .venv/bin/python -m app.worker_main qsv
 ```
 
@@ -106,9 +106,9 @@ See the [full Settings audit](docs/SETTINGS_AUDIT.md) and
 - Queue submissions re-evaluate every item. Blocked, missing or already pending
   items are excluded individually. Encoder settings are copied from the preset,
   never accepted as client overrides.
-- In seed mode, CPU and QSV are independent fake lanes. Each starts its next job
+- In seed mode, CPU and GPU are independent fake lanes. Each starts its next job
   on the next one-second scheduler tick. Encoding takes 180 simulated seconds,
-  followed by five seconds of validation. Filesystem mode uses independent real CPU and QSV lanes when their runtime
+  followed by five seconds of validation. Filesystem mode uses independent real CPU and GPU lanes when their runtime
   prerequisites are available. Completed/failed/skipped/blocked jobs appear in
   History.
 - Default order is estimated bytes saved, descending. Manual priority overrides
@@ -160,10 +160,10 @@ or hardlink protections.
 
 ## Quality modes and test output
 
-Presets support CPU CRF, QSV ICQ and explicit ABR, along with encoder effort,
+Presets support CPU CRF, GPU ICQ and explicit ABR, along with encoder effort,
 output bit depth, source applicability and SDR/HDR10 input support. Real CPU
-execution consumes CRF/ABR and libx265 settings; real QSV execution consumes ICQ/ABR,
-QSV preset and output bit depth. HDR preset behavior remains planning-only. Filesystem encoding accepts confirmed
+execution consumes CRF/ABR and libx265 settings; real GPU execution consumes ICQ/ABR,
+VA-API profile, output bit depth and explicit rate-control mode. HDR preset behavior remains planning-only. Filesystem encoding accepts confirmed
 SDR only, and tone mapping is unavailable.
 Quality modes carry planning bitrate ranges separately from encoder settings.
 They do not return fake exact output sizes or savings; ranges are labeled as
@@ -194,7 +194,7 @@ identity across supported renames. Seed IDs are not automatically migrated.
 
 HTTP and Jinja routes resolve one `MediaProcessor` per application lifespan.
 `app/container.py` assembles its catalog, preset management, queue and seed
-scanner/probe dependencies. In filesystem mode the WebUI, CPU encoder and QSV encoder are separate processes
+scanner/probe dependencies. In filesystem mode the WebUI, CPU encoder and GPU encoder are separate processes
 coordinating through SQLite; only each lane's encoder process performs recovery for
 that lane and owns its ffmpeg subprocesses. Tests may inject a processor or override the FastAPI
 dependency. Application exceptions are mapped to HTTP responses centrally.
@@ -216,10 +216,10 @@ filesystem worker uses a separate `FFmpegEncoder` for process details, while
 Real execution must run outside HTTP requests and scheduler transactions. There are
 no scattered development-mode branches or application authentication. Hardware and
 ffmpeg capability checks stay isolated in the optional filesystem/runtime adapters;
-seed mode has no ffmpeg or QSV dependency.
+seed mode has no ffmpeg or GPU dependency.
 
 SQLite uses the Python standard library with parameterized statements and
-transactions shared by repositories. Schema version 3 is recorded with
+transactions shared by repositories. Schema version 4 is recorded with
 `PRAGMA user_version`; unknown future versions fail explicitly. `create_app`
 accepts an isolated database path and media repository for tests. The fake queue
 repository remains available for in-memory simulations, but is not the app's

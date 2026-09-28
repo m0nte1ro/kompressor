@@ -6,7 +6,7 @@ from app.models.inventory import FileObservation
 
 OBSERVATION_FIELDS = ('root_id', 'relative_path', 'media_id', 'scope', 'filesystem_id', 'inode',
                       'generation', 'size', 'mtime_ns', 'ctime_ns', 'hardlinks')
-STREAM_FIELDS = ('kind', 'codec', 'language', 'title', 'bitrate', 'width', 'height', 'resolution_class',
+STREAM_FIELDS = ('kind', 'codec', 'profile', 'language', 'title', 'bitrate', 'width', 'height', 'resolution_class',
                  'scan_type', 'field_order', 'frame_rate', 'pixel_format', 'color_range',
                  'channels', 'channel_layout', 'sample_rate')
 

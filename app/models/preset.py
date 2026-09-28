@@ -20,6 +20,7 @@ PresetOrigin = Literal[
     "custom",
 ]
 
+# Persisted "qsv" identifies the GPU lane; its encoder is now VA-API.
 EncoderBackend = Literal[
     "cpu",
     "qsv",
@@ -203,7 +204,7 @@ class PresetSettings(BaseModel):
         else:
             expected = "cpu" if self.rate_control == "crf" else "qsv"
             if self.backend != expected:
-                raise ValueError(f"{self.rate_control.upper()} requires backend {expected}.")
+                raise ValueError(f"{self.rate_control.upper()} requires backend {'GPU' if expected == 'qsv' else 'CPU'}.")
             if self.quality_value is None or self.target_video_bitrate is not None:
                 raise ValueError("Quality mode requires a quality value and no target bitrate.")
             if self.rate_control == "icq" and (self.quality_value < 1 or self.quality_value % 1):

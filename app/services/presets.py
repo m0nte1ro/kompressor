@@ -14,7 +14,7 @@ def ensure_supported(payload: PresetSettings):
     if payload.enabled and payload.destination_codec == "av1":
         raise InvalidOperation("AV1 presets cannot be enabled yet.")
     if payload.rate_control == "icq" and payload.quality_value is not None and not 18 <= payload.quality_value <= 30:
-        raise InvalidOperation("QSV ICQ quality must be between 18 and 30 for practical presets.")
+        raise InvalidOperation("GPU ICQ quality must be between 18 and 30 for practical presets.")
 
 
 class PresetService:

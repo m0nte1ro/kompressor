@@ -52,7 +52,7 @@ class PolicyEngine:
         if preset.rate_control != "abr":
             warnings.append("Planning range only: quality-based output may fall outside it. Actual savings must be checked after encoding.")
         if preset.backend == "qsv":
-            warnings.append("QSV quality and rate-control support require validation on your Intel hardware.")
+            warnings.append("GPU quality and rate-control support require validation on your Intel hardware.")
 
         if "Quality CPU" in effective_tags and preset.backend != "cpu":
             reasons.append("Quality CPU policy requires a CPU preset.")
