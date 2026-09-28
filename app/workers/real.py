@@ -81,8 +81,9 @@ class RealEncoderWorker:
     def enqueue_reasons(self, item: MediaItem, job: QueueJob) -> list[str]:
         reasons = self._capability(job.backend).reasons(item, job)
         reference = job.source_reference
-        if reference is not None and item.revision_id == reference.revision_id:
-            current = self.source.reference_for(item.id, item.revision_id)
+        revision_id = item.revision_id
+        if reference is not None and revision_id is not None and revision_id == reference.revision_id:
+            current = self.source.reference_for(item.id, revision_id)
             if current != reference:
                 reasons.append("Source path or physical identity changed after the job was queued.")
         elif reference is not None:

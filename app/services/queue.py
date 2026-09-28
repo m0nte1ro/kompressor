@@ -1,6 +1,7 @@
 """Dual-lane scheduler. Policy decisions remain in the existing PolicyEngine."""
 from datetime import datetime, timezone
 from threading import RLock
+from typing import Literal
 from uuid import uuid4
 
 from app.services.errors import Conflict, InvalidOperation, NotFound
@@ -32,7 +33,9 @@ class QueueService:
         self.catalog = catalog
         self.worker = worker
         self.controls = controls
-        self.execution_mode = getattr(worker, "execution_mode", "fake")
+        self.execution_mode: Literal["fake", "real"] = (
+            "real" if getattr(worker, "filesystem_mode", False) else "fake"
+        )
         self.external_backends = frozenset(getattr(worker, "external_backends", ()))
         self.supported_backends = frozenset(getattr(worker, "supported_backends", ("cpu", "qsv")))
         self.lock = RLock()
@@ -509,6 +512,7 @@ class QueueService:
             })
             self.controls.save(settings)
             snapshot = self._worker_snapshot()
+            assert snapshot is not None
         wake = getattr(self.worker, "wake", None)
         if wake:
             wake()
@@ -522,6 +526,7 @@ class QueueService:
         with self.lock:
             self.controls.set_paused(backend, paused)
             snapshot = self._worker_snapshot()
+            assert snapshot is not None
         wake = getattr(self.worker, "wake", None)
         if wake:
             wake()
@@ -536,6 +541,7 @@ class QueueService:
                 for backend in ("cpu", "qsv"):
                     self.stop_active_backend(backend, reason="user_stop")
             snapshot = self._worker_snapshot()
+            assert snapshot is not None
         return snapshot
 
     def resume_all_workers(self) -> dict:
@@ -544,6 +550,7 @@ class QueueService:
         with self.lock:
             self.controls.resume_all()
             snapshot = self._worker_snapshot()
+            assert snapshot is not None
         wake = getattr(self.worker, "wake", None)
         if wake:
             wake()

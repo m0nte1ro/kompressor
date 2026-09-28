@@ -98,6 +98,7 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
     queue = QueueService(SQLiteQueueRepository(database), catalog, worker, controls=controls)
     if isinstance(worker, RealEncoderWorker):
         worker.bind(queue, catalog)
+        assert runtime is not None
         diagnostics = worker.diagnostics(runtime)
     else:
         diagnostics = {"ffmpeg_binary": config.ffmpeg_binary, "ffprobe_binary": config.ffprobe_binary,

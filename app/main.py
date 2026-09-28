@@ -19,6 +19,7 @@ from app.routers.preferences import router as preferences_router
 from app.routers.queue import router as queue_router
 from app.routers.web import router as web_router
 from app.services.queue import QueueService
+from app.workers.real import RealEncoderWorker
 
 
 async def run_fake_workers(service: QueueService) -> None:
@@ -42,7 +43,7 @@ def create_app(database_path: Path | None = None, *, media: MediaRepository | No
             process_role="worker" if start_real_worker else "web")
         application.state.media_processor = composed
         queue = composed.queue
-        real_worker = queue.worker if hasattr(queue.worker, "shutdown") and hasattr(queue.worker, "filesystem_mode") else None
+        real_worker = queue.worker if isinstance(queue.worker, RealEncoderWorker) else None
         # Real encoding is a separate process in production. The opt-in embedded
         # mode exists only for focused tests and local development.
         if start_real_worker and real_worker is not None:

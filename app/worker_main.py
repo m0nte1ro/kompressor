@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import signal
 import sys
+from typing import Literal
 from threading import Event
 
 from app.config import settings
@@ -15,11 +16,15 @@ from app.workers.real import RealEncoderWorker
 
 
 def run(backend: str = "cpu") -> int:
-    if backend not in {"cpu", "qsv"}:
+    if backend == "cpu":
+        selected_backend: Literal["cpu", "qsv"] = "cpu"
+    elif backend == "qsv":
+        selected_backend = "qsv"
+    else:
         print(f"Unknown real worker backend: {backend}", file=sys.stderr)
         return 2
 
-    processor = build_media_processor(settings, process_role="worker", worker_backend=backend)
+    processor = build_media_processor(settings, process_role="worker", worker_backend=selected_backend)
     worker = processor.queue.worker
     if not isinstance(worker, RealEncoderWorker):
         print("Real worker requires KOMPRESSOR_MEDIA_BACKEND=filesystem.", file=sys.stderr)

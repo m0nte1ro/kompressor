@@ -1,5 +1,7 @@
 import io
 import json
+import subprocess
+from typing import cast
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,7 @@ from app.services.encoding_capability import CPUEncodeCapability, QSVEncodeCapab
 from app.services.errors import Conflict
 from app.services.ffprobe import FFprobeService
 from app.workers.ffmpeg import FFmpegEncoder, FFmpegError
+from app.workers.real import RealEncoderWorker
 
 
 @pytest.fixture
@@ -54,7 +57,7 @@ def queue_job(preset=None, **changes) -> QueueJob:
         replace_source=False, created_at="2026-01-01T00:00:00+00:00",
     )
     values.update(changes)
-    return QueueJob(**values)
+    return QueueJob.model_validate(values)
 
 
 def movie_item(probe, **changes) -> Movie:
@@ -65,7 +68,7 @@ def movie_item(probe, **changes) -> Movie:
         duration_seconds=120.5, hdr=None, interlaced=False, size=400_000_000,
         audio=[], hardlinks=1)
     values.update(changes)
-    return Movie(**values)
+    return Movie.model_validate(values)
 
 
 def test_runtime_capability_checks_ffmpeg_ffprobe_workspace_and_x265(tmp_path, monkeypatch):
@@ -725,6 +728,7 @@ def test_qsv_worker_claims_validates_and_completes_show_job(tmp_path, monkeypatc
 
     processor = build_media_processor(config, process_role="worker", worker_backend="qsv")
     assert processor.queue.supported_backends == frozenset({"qsv"})
+    assert isinstance(processor.queue.worker, RealEncoderWorker)
     assert processor.queue.worker.supported_backends == frozenset({"qsv"})
     processor.scan_library()
     library = processor.get_library()
@@ -760,6 +764,7 @@ def test_background_worker_claims_and_completes_without_http_encode(tmp_path, mo
         added = processor.queue_encode(EnqueueRequest(media_ids=[movie.id], scope="movie",
             preset_id="movie-streaming-quality"))["added"][0]
         import time
+        saved = None
         for _ in range(200):
             saved = next((job for job in processor.get_queue()["history"] if job["id"] == added["id"]), None)
             if saved is not None:
@@ -853,8 +858,7 @@ def test_stop_terminates_only_owned_process_and_removes_partial(tmp_path):
         def wait(self, timeout=None):
             self.wait_calls.append(timeout)
             if not self.killed:
-                import subprocess
-                raise subprocess.TimeoutExpired("ffmpeg", timeout)
+                raise subprocess.TimeoutExpired("ffmpeg", timeout if timeout is not None else 0)
             return self.returncode
 
     workspace = tmp_path / "workspace"
@@ -866,8 +870,8 @@ def test_stop_terminates_only_owned_process_and_removes_partial(tmp_path):
     final.write_bytes(b"already-promoted")
     encoder = FFmpegEncoder("ffmpeg", workspace, stop_grace_seconds=0.01)
     owned, unrelated = StubbornProcess(), StubbornProcess()
-    encoder._processes["job-stop"] = owned
-    encoder._processes["other-job"] = unrelated
+    encoder._processes["job-stop"] = cast(subprocess.Popen[str], owned)
+    encoder._processes["other-job"] = cast(subprocess.Popen[str], unrelated)
     encoder._paths["job-stop"] = (partial, final)
     encoder.stop("job-stop")
     assert owned.terminated and owned.killed

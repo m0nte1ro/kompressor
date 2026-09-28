@@ -28,12 +28,14 @@ class FilesystemObservationSource:
         try:
             if not path.is_dir():
                 return None
+            final_mode: int | None = None
             for part in rel.parts:
                 path = path / part
                 info = path.stat(follow_symlinks=False)
-                if stat.S_ISLNK(info.st_mode):
+                final_mode = info.st_mode
+                if stat.S_ISLNK(final_mode):
                     return None
-            if not stat.S_ISREG(info.st_mode):
+            if final_mode is None or not stat.S_ISREG(final_mode):
                 return None
             return path
         except OSError:
