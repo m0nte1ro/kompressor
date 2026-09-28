@@ -91,10 +91,14 @@ BT.709 for HD (wider than 1024 or taller than 576), BT.470BG primaries/matrix wi
 SMPTE 170M transfer for 576-line SD, and SMPTE 170M for 480-line SD. The values are
 stamped on the frames with `setparams` (after `format=...`, before `hwupload`, or
 after `scale_vaapi`; for CPU, `format=...,setparams=...`) and also passed as
-`-color_*` output options. The first real VC-1 job showed why: with only the
-output options, the HEVC output came out untagged and failed validation, because
-newer ffmpeg configures the encoder from the frames' colour properties. Only
-metadata is written; no colour conversion is applied. Output validation is unchanged and
+`-color_*` output options. The first real VC-1 job showed why. With only the output
+options on ffmpeg 7.1, primaries and transfer came out untagged (the encoder takes
+them from the frames) and validation failed. Worse, `-colorspace bt709` is
+negotiated inside the filtergraph, so ffmpeg auto-inserted a swscale matrix
+conversion from the untagged (treated as BT.601) frames via 16-bit RGB. That
+shifted colours and cost about 3x wall time and 10x CPU on a 1080p sample. With
+`setparams` the frames already match, swscale changes only the bit depth and no
+colour conversion is applied. Output validation is unchanged and
 still requires the HEVC output to validate as confirmed SDR.
 
 Source guards, hardlink restrictions, confirmed-SDR/progressive-only eligibility,

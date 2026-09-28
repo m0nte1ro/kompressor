@@ -173,9 +173,10 @@ class FFmpegEncoder:
                         "-c", "copy"])
 
         assumed = legacy_vc1_sdr_colours(primary)
-        # Newer ffmpeg configures the encoder from frame colour properties, which
-        # override -color_* output options. Untagged sources therefore get their
-        # assumed SDR values stamped on the frames themselves.
+        # ffmpeg 7.1 takes primaries/transfer from the frames and negotiates
+        # -colorspace in the filtergraph. Untagged frames therefore lost the tags
+        # and got a slow BT.601->BT.709 swscale matrix conversion. Stamping the
+        # assumed SDR values on the frames avoids both.
         tag_frames = None
         if assumed is not None:
             tag_frames = "setparams=color_primaries={}:color_trc={}:colorspace={}".format(*assumed)
