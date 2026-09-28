@@ -81,6 +81,39 @@ class StreamFacts(BaseModel):
         return self
 
 
+ABSENT_COLOUR_VALUES = {None, "unknown", "unspecified"}
+
+
+def legacy_vc1_sdr_colours(stream: StreamFacts) -> tuple[str, str, str] | None:
+    """Assumed (primaries, transfer, matrix) for untagged legacy VC-1, else None.
+
+    VC-1 (SMPTE 421M) is an 8-bit 4:2:0 codec with no PQ/HLG transfer, mastering
+    display or dynamic HDR carriage, so absent colour signalling cannot conceal HDR
+    there. The exception is deliberately narrow: any other codec, any present colour
+    value, any HDR/DV/HDR10+ evidence, non-8-bit or non-progressive video keeps the
+    normal confirmed-SDR requirement. Values follow the usual BT.709 (HD) / BT.601
+    (625- or 525-line SD) player assumption and are written explicitly on output.
+    """
+    hdr = stream.hdr
+    if (stream.kind != "video" or stream.codec != "vc1" or hdr is None
+            or stream.scan_type != "progressive"
+            or stream.pixel_format != "yuv420p" or hdr.bit_depth != 8):
+        return None
+    if not {hdr.transfer, hdr.primaries, hdr.matrix} <= ABSENT_COLOUR_VALUES:
+        return None
+    if (hdr.mastering_display is not None or hdr.content_light is not None
+            or hdr.dolby_vision_config is not None
+            or hdr.dolby_vision_rpu is True or hdr.hdr10plus_metadata is True):
+        return None
+    if stream.width is None or stream.height is None:
+        return None
+    if stream.width > 1024 or stream.height > 576:
+        return "bt709", "bt709", "bt709"
+    if stream.height > 480:
+        return "bt470bg", "smpte170m", "bt470bg"
+    return "smpte170m", "smpte170m", "smpte170m"
+
+
 class ChapterFacts(BaseModel):
     start_seconds: float = Field(ge=0)
     end_seconds: float = Field(ge=0)

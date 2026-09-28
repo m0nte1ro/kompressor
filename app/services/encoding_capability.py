@@ -3,7 +3,7 @@ from pathlib import Path
 
 from app.models.media import Episode, Movie, spatial_resolution
 from app.models.queue import QueueJob
-from app.models.probe import StreamFacts
+from app.models.probe import StreamFacts, legacy_vc1_sdr_colours
 from app.services.estimation import audio_plan
 
 MediaItem = Movie | Episode
@@ -67,7 +67,7 @@ class _HEVCEncodeCapability:
             return list(dict.fromkeys(reasons))
         if primary.scan_type != "progressive" or item.interlaced is not False:
             reasons.append(f"Real encoding requires progressive video; source scan type is {primary.scan_type}.")
-        if not confirmed_sdr(primary):
+        if not confirmed_sdr(primary) and legacy_vc1_sdr_colours(primary) is None:
             reasons.append("Real encoding currently supports confirmed SDR sources only.")
         if item.hardlinks != 1:
             reasons.append("Real encoding requires exactly one known source hardlink.")

@@ -21,7 +21,8 @@ def hardware_decode(stream: StreamFacts) -> bool:
     if stream.codec == 'mpeg2video':
         return pixel == 'yuv420p' and profile in {'simple', 'main'}
     if stream.codec == 'vc1':
-        return pixel == 'yuv420p' and profile in {'simple', 'main', 'advanced'}
+        # UHD 730 rejected Advanced: "No support for codec vc1 profile 3".
+        return pixel == 'yuv420p' and profile in {'simple', 'main'}
     if stream.codec == 'vp9':
         return (profile == 'profile 0' and pixel == 'yuv420p'
                 or profile == 'profile 2' and pixel == 'yuv420p10le')

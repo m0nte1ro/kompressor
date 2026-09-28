@@ -11,7 +11,7 @@ from threading import Lock, Thread
 from time import monotonic
 
 from app.workers import vaapi
-from app.models.probe import MediaProbeResult, StreamFacts
+from app.models.probe import MediaProbeResult, StreamFacts, legacy_vc1_sdr_colours
 from app.models.queue import QueueJob
 from app.services.encoding_capability import SUPPORTED_PIXEL_FORMATS
 
@@ -195,10 +195,12 @@ class FFmpegEncoder:
         else:
             raise FFmpegError(f"Unsupported encoder backend: {job.backend}.")
 
-        if primary.hdr is not None:
-            for flag, value in (("-color_primaries:v:0", primary.hdr.primaries),
-                                ("-color_trc:v:0", primary.hdr.transfer),
-                                ("-colorspace:v:0", primary.hdr.matrix)):
+        colours = legacy_vc1_sdr_colours(primary)
+        if colours is None and primary.hdr is not None:
+            colours = primary.hdr.primaries, primary.hdr.transfer, primary.hdr.matrix
+        if colours is not None:
+            # Untagged legacy VC-1 gets its SDR assumption written, so output validation can confirm SDR.
+            for flag, value in zip(("-color_primaries:v:0", "-color_trc:v:0", "-colorspace:v:0"), colours):
                 if value:
                     command.extend([flag, value])
         if primary.color_range in {"tv", "pc"}:

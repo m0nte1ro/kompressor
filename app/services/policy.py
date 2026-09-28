@@ -6,6 +6,7 @@ from app.models.media import (
 )
 from app.models.media import spatial_resolution
 from app.models.policy import EligibilityResult
+from app.models.probe import legacy_vc1_sdr_colours
 from app.models.preset import CompressionPreset
 from app.models.tags import QualityFloor
 from app.services.estimation import estimate
@@ -34,7 +35,8 @@ class PolicyEngine:
             reasons.append("HDR signalling is unsupported or uncertain; transcoding is blocked.")
         if item.probe:
             for stream in item.probe.streams:
-                if stream.kind == "video" and stream.hdr and stream.hdr.classify().base != "sdr" and stream.hdr.classify().uncertain:
+                if (stream.kind == "video" and stream.hdr and stream.hdr.classify().base != "sdr"
+                        and stream.hdr.classify().uncertain and legacy_vc1_sdr_colours(stream) is None):
                     reasons.append("Dynamic HDR metadata is uncertain; transcoding is blocked.")
                     break
         if item.duration_seconds is None:

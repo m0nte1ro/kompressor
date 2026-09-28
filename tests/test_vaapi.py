@@ -40,7 +40,8 @@ def facts():
     ('vp9', 'Profile 2', 'yuv420p10le', True),
     ('vp9', 'Profile 2', 'yuv420p12le', False),
     ('mpeg2video', 'Main', 'yuv420p', True),
-    ('vc1', 'Advanced', 'yuv420p', True),
+    ('vc1', 'Advanced', 'yuv420p', False),
+    ('vc1', 'Main', 'yuv420p', True),
     ('mpeg4', 'Advanced Simple Profile', 'yuv420p', False),
 ])
 def test_decode_selection(codec, profile, pixel, expected):

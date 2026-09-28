@@ -20,9 +20,14 @@ decode in software and use `format=...,hwupload`. These options follow the
 [FFmpeg VA-API encoder documentation](https://ffmpeg.org/ffmpeg-codecs.html#VAAPI-encoders).
 
 Codec/profile/pixel-format facts select the path in `app/workers/vaapi.py`.
-Known supported H.264 8-bit, HEVC Main/Main10, MPEG-2, VC-1 and VP9 profiles may
-use hardware decode. Unknown profiles, H.264 Hi10P and other codecs use software
-decode. This is a conservative selection, not a retry after a hardware failure.
+Known supported H.264 8-bit, HEVC Main/Main10, MPEG-2, VC-1 Simple/Main and VP9
+profiles may use hardware decode. Unknown profiles, H.264 Hi10P, VC-1 Advanced and
+other codecs use software decode. This is a conservative selection, not a retry
+after a hardware failure. VC-1 Advanced is excluded because the Intel UHD 730
+render node returned `No support for codec vc1 profile 3` on real hardware; those
+jobs decode in software, upload with `format=p010le,hwupload` (or `nv12` for 8-bit
+presets) and still encode with hevc_vaapi. VC-1 Simple/Main hardware decode has
+not been validated on this node.
 Input acceleration targets only the primary stream's input index; filtering and
 encoding target only output video 0, leaving mapped cover art copied.
 
@@ -67,6 +72,25 @@ perceptual quality, actual size or throughput on a full episode; start with
 keep-output and inspect real content before considering replacement. The seeded
 Top Gear example is 1080i and remains blocked because deinterlacing is not
 implemented; the restored 576p applicability helps progressive 576p sources.
+
+### Legacy VC-1 without colour signalling
+
+Old VC-1 sources frequently carry no colour primaries, transfer or matrix tags.
+They are treated as SDR only when every one of these holds: the primary video codec
+is VC-1, it is progressive, `yuv420p` and 8-bit, all three colour fields are absent
+(`unknown`/`unspecified` count as absent), and no mastering-display, content-light,
+Dolby Vision or HDR10+ side data was seen. VC-1 has no PQ/HLG or HDR metadata
+carriage, so absence cannot hide HDR there. The rule lives in
+`legacy_vc1_sdr_colours()` in `app/models/probe.py` and is used by library
+projection, the policy engine and CPU/GPU execution capability. Any other codec
+(HEVC, AV1, H.264 and so on) with absent colour signalling remains unknown and
+blocked.
+
+For these sources the job writes the assumed SDR tags explicitly on output:
+BT.709 for HD (wider than 1024 or taller than 576), BT.470BG primaries/matrix with
+SMPTE 170M transfer for 576-line SD, and SMPTE 170M for 480-line SD. Only metadata
+is written; no colour conversion is applied. Output validation is unchanged and
+still requires the HEVC output to validate as confirmed SDR.
 
 Source guards, hardlink restrictions, confirmed-SDR/progressive-only eligibility,
 source-resolution preservation and keep-output remain in force. GPU validation

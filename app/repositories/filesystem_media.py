@@ -7,7 +7,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from app.models.inventory import LibraryFile
 from app.models.media import AudioTrack, Episode, HDRType, MediaLibrary, Movie, Season, Show
-from app.models.probe import StreamFacts
+from app.models.probe import StreamFacts, legacy_vc1_sdr_colours
 from app.models.tags import TagTarget
 from app.repositories.inventory import InventoryRepository
 from app.services.errors import NotFound
@@ -55,6 +55,8 @@ def media_fields(record: LibraryFile, root: Path, encoding_enabled: bool = False
             hdr = 'hdr10'
         elif classification.base == 'hlg':
             hdr = 'hlg'
+        elif legacy_vc1_sdr_colours(video) is not None:
+            hdr = None
     scan = video.scan_type if video else 'unknown'
     res = video.resolution_class if video else None
     resolution = f'{res}{"i" if scan in {"interlaced", "mixed"} else "p" if scan == "progressive" else ""}' if res else 'Unknown'
