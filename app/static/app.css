@@ -184,3 +184,9 @@ legend { color: var(--muted); padding: 0 5px; }
 .worker-schedule-settings h2 { margin-bottom: 6px; }
 .worker-schedule-lane { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; align-items: end; }
 .worker-schedule-lane > label:first-of-type, .worker-schedule-lane > p { grid-column: 1 / -1; }
+
+.resolution-choices { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.resolution-choices .check { margin: 5px 0; }
+.resolution-rates { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 10px 0; }
+.resolution-rates label { display: grid; gap: 4px; font-size: .85rem; }
+.resolution-rates input { width: 100%; }

@@ -56,7 +56,8 @@ def test_gpu_command_pipeline(facts, tmp_path, hardware, depth, mode):
     preset = qsv_preset().model_copy(update={
         'output_bit_depth': depth, 'rate_control': mode, 'hdr_support': 'sdr_only',
         'quality_value': 23 if mode in {'icq', 'qvbr'} else None,
-        'target_video_bitrate': 4_000_000 if mode in {'qvbr', 'abr'} else None})
+        'target_video_bitrate': 4_000_000 if mode == 'abr' else None,
+        'qvbr_bitrates_by_resolution': qsv_preset().qvbr_bitrates_by_resolution if mode == 'qvbr' else {}})
     command = FFmpegEncoder.build_command('ffmpeg', queue_job(preset, backend='qsv'),
         Path('/source.mkv'), tmp_path / 'out.mkv', facts, Path('/dev/dri/renderD128'))
     assert command[command.index('-init_hw_device') + 1] == 'vaapi=va:/dev/dri/renderD128'
@@ -260,8 +261,10 @@ def test_qvbr_preset_requires_both_quality_and_nominal_bitrate():
     from app.models.preset import CompressionPreset
 
     preset = qsv_preset()
-    assert preset.rate_control == 'qvbr' and preset.target_video_bitrate == 4_000_000
-    for changes in ({'quality_value': None}, {'target_video_bitrate': None},
+    assert preset.rate_control == 'qvbr' and preset.qvbr_bitrates_by_resolution['1080p'] == 4_000_000
+    for changes in ({'quality_value': None}, {'target_video_bitrate': 4_000_000},
+                    {'qvbr_bitrates_by_resolution': {}},
+                    {'qvbr_bitrates_by_resolution': {'1080p': 4_000_000}},
                     {'backend': 'cpu'}, {'quality_value': 23.5}):
         with pytest.raises(ValidationError):
             CompressionPreset.model_validate({**preset.model_dump(), **changes})
@@ -274,6 +277,7 @@ def test_qvbr_migration_only_updates_untouched_built_ins(tmp_path):
     path = tmp_path / 'state.sqlite3'
     seeds = [qsv_preset(), qsv_preset(efficient_audio=True)]
     old = [p.model_copy(update={'rate_control': 'icq', 'target_video_bitrate': None,
+                                'qvbr_bitrates_by_resolution': {}, 'minimum_source_bitrate': 4_000_000,
                                 'source_resolutions': list(SUPPORTED_SOURCE_RESOLUTIONS)}) for p in seeds]
     edited = old[1].model_copy(update={'name': 'My edited GPU preset'})
     database = Database(path)
@@ -286,9 +290,47 @@ def test_qvbr_migration_only_updates_untouched_built_ins(tmp_path):
     with TestClient(create_app(path, start_workers=False)) as client:
         presets = {p['id']: p for p in client.get('/api/presets').json()}
         assert presets[old[0].id]['rate_control'] == 'qvbr'
-        assert presets[old[0].id]['target_video_bitrate'] == 4_000_000
-        assert presets[old[0].id]['source_resolutions'] == ['1080p']
+        assert presets[old[0].id]['qvbr_bitrates_by_resolution']['576p'] == 1_500_000
+        assert presets[old[0].id]['source_resolutions'] == list(SUPPORTED_SOURCE_RESOLUTIONS)
         assert presets[edited.id]['rate_control'] == 'icq'
         assert presets[edited.id]['name'] == 'My edited GPU preset'
     with TestClient(create_app(path, start_workers=False)) as client:
         assert client.get('/api/presets').status_code == 200
+
+
+@pytest.mark.parametrize('resolution,nominal', [
+    (480, 1_000_000), (576, 1_500_000), (720, 2_500_000),
+    (1080, 4_000_000), (2160, 16_000_000),
+])
+def test_qvbr_command_uses_source_resolution_nominal(facts, tmp_path, resolution, nominal):
+    facts.streams[0].resolution_class = resolution
+    command = FFmpegEncoder.build_command('ffmpeg', queue_job(qsv_preset(), backend='qsv'),
+        Path('/source.mkv'), tmp_path / 'out.mkv', facts, Path('/dev/dri/renderD128'))
+    assert command[command.index('-b:v:0') + 1] == str(nominal)
+    assert command[command.index('-global_quality:v:0') + 1] == '23'
+
+
+def test_v1_qvbr_builtin_migrates_but_edited_preset_remains(tmp_path):
+    from app.main import create_app
+
+    path = tmp_path / 'state.sqlite3'
+    seeds = [qsv_preset(), qsv_preset(efficient_audio=True)]
+    old = [p.model_copy(update={'target_video_bitrate': 4_000_000,
+                                'qvbr_bitrates_by_resolution': {},
+                                'source_resolutions': ['1080p'],
+                                'minimum_source_bitrate': 4_000_000}) for p in seeds]
+    edited = old[1].model_copy(update={'name': 'My tuned GPU preset'})
+    with Database(path).transaction() as connection:
+        for preset in (old[0], edited):
+            connection.execute('INSERT INTO presets VALUES (?, ?)',
+                               (preset.id, preset.model_dump_json()))
+        connection.executemany('INSERT INTO metadata VALUES (?, ?)', [
+            ('presets_initialized', 'true'), ('preset_catalog_v8', 'true'),
+            ('preset_gpu_qvbr_v1', 'true')])
+    with TestClient(create_app(path, start_workers=False)) as client:
+        presets = {p['id']: p for p in client.get('/api/presets').json()}
+        assert presets[old[0].id]['qvbr_bitrates_by_resolution']['576p'] == 1_500_000
+        assert presets[old[0].id]['source_resolutions'] == ['480p', '576p', '720p', '1080p', '2160p']
+        assert presets[edited.id]['name'] == 'My tuned GPU preset'
+        assert presets[edited.id]['target_video_bitrate'] == 4_000_000
+        assert presets[edited.id]['source_resolutions'] == ['1080p']

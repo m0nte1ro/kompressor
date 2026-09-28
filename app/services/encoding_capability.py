@@ -1,7 +1,7 @@
 """Runtime execution capability checks layered after the PolicyEngine."""
 from pathlib import Path
 
-from app.models.media import Episode, Movie
+from app.models.media import Episode, Movie, spatial_resolution
 from app.models.queue import QueueJob
 from app.models.probe import StreamFacts
 from app.services.estimation import audio_plan
@@ -43,6 +43,9 @@ class _HEVCEncodeCapability:
         if not item.processing_supported:
             reasons.append("Real encoding prerequisites are unavailable.")
         reasons.extend(self._backend_reasons(job))
+        if (job.preset.rate_control == "qvbr" and job.preset.qvbr_bitrates_by_resolution
+                and job.preset.video_bitrate_for(spatial_resolution(item)) is None):
+            reasons.append("QVBR preset has no nominal bitrate for this source resolution.")
         if job.preset.destination_codec != "hevc":
             reasons.append("Real encoding currently supports HEVC output only.")
         if job.preset.target_resolution != "keep":
@@ -70,6 +73,9 @@ class _HEVCEncodeCapability:
             reasons.append("Real encoding requires exactly one known source hardlink.")
         if primary.pixel_format not in SUPPORTED_PIXEL_FORMATS:
             reasons.append(f"Unsupported or unknown source pixel format: {primary.pixel_format or 'unknown'}.")
+        if (job.preset.rate_control == "qvbr" and job.preset.qvbr_bitrates_by_resolution
+                and primary.resolution_class is None):
+            reasons.append("Source probe has no resolution class for QVBR bitrate selection.")
         if item.duration_seconds is None or item.width is None or item.height is None:
             reasons.append("Source duration and dimensions are required for output validation.")
         if not self.allow_audio_conversion and any(
@@ -181,8 +187,9 @@ class GPUEncodeCapability(_HEVCEncodeCapability):
         if job.preset.rate_control in {"icq", "qvbr"}:
             if job.preset.quality_value is None:
                 reasons.append("GPU preset has no quality value.")
-            if job.preset.rate_control == "qvbr" and job.preset.target_video_bitrate is None:
-                reasons.append("GPU QVBR preset has no nominal target bitrate.")
+            if job.preset.rate_control == "qvbr" and not (
+                    job.preset.target_video_bitrate or job.preset.qvbr_bitrates_by_resolution):
+                reasons.append("GPU QVBR preset has no nominal bitrate.")
         elif job.preset.rate_control == "abr":
             if job.preset.target_video_bitrate is None:
                 reasons.append("GPU ABR preset has no target bitrate.")

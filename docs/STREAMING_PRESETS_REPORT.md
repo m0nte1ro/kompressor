@@ -1,3 +1,8 @@
+> Current GPU update: the two built-in Show streaming presets use VA-API QVBR
+> with source-resolution nominal rates of 1/1.5/2.5/4/16 Mbps for
+> 480p/576p/720p/1080p/2160p. Existing ICQ references below describe the
+> earlier preset design; output quality and savings still require real-media tests.
+
 # Default preset catalogue
 
 Kompressor ships with five intentionally simple enabled built-in presets. They
@@ -15,7 +20,7 @@ workflow.
 | Just convert to HEVC                        | Movie | CPU/x265 HEVC, experimental CRF                        | Preserve every track       | KEEP              |
 | Tone it down a bit + HEVC                   | Movie | CPU/x265 HEVC, experimental CRF                        | Preserve every track       | KEEP              |
 | Just convert to HEVC                        | Show  | CPU/x265 HEVC, experimental CRF                        | Preserve every track       | KEEP              |
-| Tone it down a bit + HEVC                   | Show  | Intel GPU HEVC, experimental ICQ                       | Preserve every track       | KEEP              |
+| Tone it down a bit + HEVC                   | Show  | Intel GPU HEVC, experimental QVBR                       | Preserve every track       | KEEP              |
 | Tone it down a bit + HEVC + Efficient Audio | Show  | Same video policy as the Show streaming-quality intent | Efficient rules by default | KEEP              |
 
 The streaming presets aim for a premium-streaming-style visual philosophy and

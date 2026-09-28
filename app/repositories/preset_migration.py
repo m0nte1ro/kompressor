@@ -131,9 +131,35 @@ def upgrade_gpu_qvbr_presets(database, presets):
             stored = json.loads(row[0])
             previous = current.model_copy(update={
                 "rate_control": "icq", "target_video_bitrate": None,
+                "qvbr_bitrates_by_resolution": {},
                 "source_resolutions": CURRENT_SOURCE_RESOLUTIONS,
+                "minimum_source_bitrate": 4_000_000,
             })
             if CompressionPreset.model_validate(stored).model_dump() == previous.model_dump():
+                connection.execute("UPDATE presets SET payload = ? WHERE id = ?",
+                                   (current.model_dump_json(), current.id))
+        connection.execute("INSERT INTO metadata VALUES (?, 'true')", (marker,))
+
+
+def upgrade_gpu_resolution_rates(database, presets):
+    """Move untouched 1080p-only QVBR built-ins to per-resolution nominal rates."""
+    marker = "preset_gpu_resolution_rates_v1"
+    with database.transaction() as connection:
+        if connection.execute("SELECT 1 FROM metadata WHERE id = ?", (marker,)).fetchone():
+            return
+        for current in presets:
+            if current.id not in {"show-streaming-quality", "show-streaming-efficient-audio"}:
+                continue
+            row = connection.execute("SELECT payload FROM presets WHERE id = ?", (current.id,)).fetchone()
+            if row is None:
+                continue
+            previous = current.model_copy(update={
+                "target_video_bitrate": 4_000_000,
+                "qvbr_bitrates_by_resolution": {},
+                "source_resolutions": ["1080p"],
+                "minimum_source_bitrate": 4_000_000,
+            })
+            if CompressionPreset.model_validate(json.loads(row[0])).model_dump() == previous.model_dump():
                 connection.execute("UPDATE presets SET payload = ? WHERE id = ?",
                                    (current.model_dump_json(), current.id))
         connection.execute("INSERT INTO metadata VALUES (?, 'true')", (marker,))

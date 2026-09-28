@@ -2,7 +2,7 @@
   <form id="preset-form">
     <header class="dialog-head"><h2 id="preset-editor-title">Preset</h2><button type="button" data-preset-close aria-label="Close preset editor">×</button></header>
     <div class="dialog-body">
-      <p class="notice">Experimental starting points for streaming-style quality. Test output before replacement; CRF, ICQ and QVBR values are not equivalent. QVBR also needs a nominal bitrate. New GPU presets start at 1080p applicability.</p>
+      <p class="notice">Experimental starting points for streaming-style quality. Test output before replacement; CRF, ICQ and QVBR values are not equivalent. QVBR nominal bitrates are starting points by source resolution; test real outputs before replacement.</p>
       <div class="field-grid">
         <label class="field">Name<input name="name" required maxlength="120"></label>
         <label class="field">Scope<select name="scope"><option value="movie">Movie</option><option value="show">Show</option></select></label>
@@ -17,6 +17,13 @@
         <label class="field" id="qsv-validation-field" hidden>Validation<select disabled><option>Experimental</option></select></label>
         <label class="field">Output bit depth<select name="output_bit_depth"><option value="10">10 bit</option><option value="8">8 bit</option></select></label>
         <label class="field" id="abr-target-field"><span id="target-video-bitrate-label">Target video bitrate</span><input name="target_video_bitrate" type="number" min="0.001" max="200" step="0.001"></label>
+        <label class="field" id="qvbr-rate-mode-field" hidden>QVBR bitrate configuration<select name="qvbr_rate_mode"><option value="map">Per source resolution</option><option value="single">One nominal bitrate · legacy/custom</option></select></label>
+        <fieldset class="field" id="qvbr-rates-field" hidden><legend>QVBR nominal bitrate by source resolution</legend><div class="resolution-rates">
+          {% for resolution in ['480p', '576p', '720p', '1080p', '2160p'] %}<label>{{ resolution }}<input name="qvbr_rate_{{ resolution }}" type="number" min="0.001" max="200" step="0.001"> Mbps</label>{% endfor %}
+        </div><small>Only selected source resolutions are required. Values are nominal, not guaranteed output bitrates.</small></fieldset>
+        <fieldset class="field" id="source-resolutions-field"><legend>Applicable source resolutions</legend><div class="resolution-choices">
+          {% for resolution in ['480p', '576p', '720p', '1080p', '2160p'] %}<label class="check"><input name="source_resolution" type="checkbox" value="{{ resolution }}"> {{ resolution }}</label>{% endfor %}
+        </div></fieldset>
         <label class="field">Target resolution<select name="target_resolution"><option value="keep">KEEP · preserve source</option><option value="max_2160p">2160p maximum</option><option value="max_1080p">1080p maximum</option><option value="max_720p">720p maximum</option><option value="max_576p">576p maximum</option><option value="max_480p">480p maximum</option></select></label>
         <label class="field">Default audio policy<select name="audio_policy"><option value="preserve">Preserve every track</option><option value="efficient">Use efficient conversion</option></select></label>
         <label class="field">Conversion profile<select name="audio_conversion_policy"><option value="preserve">Preserve every track</option><option value="efficient">AAC stereo / E-AC3 multichannel</option></select></label>

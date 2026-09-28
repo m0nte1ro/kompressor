@@ -184,12 +184,14 @@ class FFmpegEncoder:
                             "-pix_fmt:v:0", "yuv420p10le" if job.preset.output_bit_depth == 10 else "yuv420p"])
         elif job.backend == "qsv":
             try:
+                source_resolution = f"{primary.resolution_class}p" if primary.resolution_class else "unknown"
+                nominal_bitrate = job.preset.video_bitrate_for(source_resolution)
                 command.extend(vaapi.video_args(
                     job.preset.output_bit_depth, job.preset.rate_control,
-                    job.preset.quality_value, job.preset.target_video_bitrate,
+                    job.preset.quality_value, nominal_bitrate,
                     hardware=vaapi.hardware_decode(primary)))
             except ValueError as error:
-                raise FFmpegError(str(error)) from error
+                raise FFmpegError(f"{error} Source resolution: {source_resolution}.") from error
         else:
             raise FFmpegError(f"Unsupported encoder backend: {job.backend}.")
 

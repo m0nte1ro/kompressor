@@ -50,8 +50,12 @@ export function compressionModal(scope, refreshQueue) {
   }
 
   function properties(preset) {
+    const mappedRates = preset.qvbr_bitrates_by_resolution ?? {};
+    const nominal = Object.keys(mappedRates).length
+      ? Object.entries(mappedRates).map(([resolution, rate]) => `${resolution} ${bitrate(rate)}`).join(' · ')
+      : bitrate(preset.target_video_bitrate);
     const rateControl = preset.rate_control === 'qvbr'
-      ? `QVBR ${preset.quality_value} · nominal ${bitrate(preset.target_video_bitrate)}`
+      ? `QVBR ${preset.quality_value} · nominal ${nominal}`
       : `${preset.rate_control.toUpperCase()} ${preset.quality_value ?? bitrate(preset.target_video_bitrate)}`;
     const fields = [
       ['Backend', label(preset.backend)], ['Destination codec', label(preset.destination_codec)],

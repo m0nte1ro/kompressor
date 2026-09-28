@@ -63,7 +63,7 @@ checks in `services/presets.py`. API-only nested controls are included.
 | Preset `destination_codec` | P / editor | Persisted edit > seed | Yes | Validation, eligibility, snapshot; real worker accepts HEVC and rejects AV1 | New jobs | PARTIALLY WIRED |
 | `rate_control` | P / editor | Persisted edit > seed | Yes | CPU consumes CRF/ABR; GPU consumes QVBR/legacy ICQ/ABR | Eligibility/new jobs | WIRED for current HEVC lanes |
 | `target_video_bitrate` | P / editor | ABR requires positive value; quality modes require null | Yes | E estimate/floor; CPU/GPU ABR pass bitrate to the selected HEVC encoder | Eligibility/new jobs | WIRED for ABR |
-| `quality_value` | P / editor | Persisted edit; ICQ integer practical range 18–30 in the UI | Yes | CPU CRF is passed to libx265; GPU ICQ is passed as `global_quality` | New job plan | WIRED |
+| `quality_value` | P / editor | Persisted edit; ICQ integer practical range 18–30 in the UI | Yes | CPU CRF is passed to libx265; GPU QVBR/ICQ quality is passed as `global_quality` | New job plan | WIRED |
 | `encoder_preset` | P / editor (hidden as x265 effort for GPU) | Persisted edit > seed | Yes | Passed only to libx265; retained but ignored for GPU presets (VA-API has no x265 effort preset) | New job plan | WIRED |
 | `output_bit_depth` | P / editor | 8/10; HDR10 requires 10 | Yes | Selects CPU/GPU output pixel format/profile; ffprobe validation requires the requested output bit depth | New job plan/output validation | WIRED |
 | `source_resolutions` | P / API, retained by UI edits | Explicit values > all supported defaults | Yes | Policy source applicability; enabled empty list rejected | Eligibility/new jobs | WIRED |
@@ -96,7 +96,7 @@ checks in `services/presets.py`. API-only nested controls are included.
 | Queue priority / Move next | Queue models and UI | Explicit priority/order > normal, then estimated/planning bytes saved | Yes | Queue ordering across independent seed lanes and real CPU/GPU lanes | Immediately for queued jobs | WIRED |
 | Remove queued / Stop & Skip | Queue UI/API | Explicit action; active deletion prohibited | Yes | Seed fake lifecycle or owned ffmpeg process lifecycle | Immediately | WIRED |
 | Tags Preserve A/V, Preserve Video, Preserve Audio, Quality CPU | `models/tags.py`, tag dialog | Explicit assignment > seed direct tags; inherited union remains | Yes, semantic identity | TagService, Policy, queued-job revalidation | Immediately | WIRED |
-| Quality Floor minimum bitrate / minimum height | `models/tags.py`, tag dialog | Maximum inherited/direct floor; values required with tag | Yes | Policy output height and ABR bitrate checks; CRF/ICQ blocked under bitrate floor | Immediately | WIRED |
+| Quality Floor minimum bitrate / minimum height | `models/tags.py`, tag dialog | Maximum inherited/direct floor; values required with tag | Yes | Policy output height and ABR bitrate checks; CRF/ICQ/QVBR blocked under bitrate floor | Immediately | WIRED |
 | Tag bulk add/remove/replace | `TagUpdate` / API and dialog | Explicit operation; bulk replacement prohibited | Resulting assignments | Atomic TagService update | Immediately | WIRED |
 | Worker manual pause | `WorkerLaneSettings.paused`, Queue UI/API | Persistent per-lane control | SQLite metadata | Blocks new claims; active job normally finishes | Immediate | WIRED |
 | Quiet-hours enabled/start/end/cutoff | `WorkerLaneSettings`, Settings form | Persistent per-lane schedule | SQLite metadata | Standalone worker claim gate and quiet-start action | Immediate; evaluated in saved timezone | WIRED |

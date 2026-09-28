@@ -17,7 +17,8 @@
       <dt>HDR output policy</dt><dd>{{ preset.hdr_policy | label }}</dd>
       <dt>Rate control</dt><dd>{{ preset.rate_control | upper }}{% if preset.quality_value is not none %} {{ preset.quality_value }}{% endif %}{% if preset.backend != 'qsv' %} · {{ preset.encoder_preset }}{% endif %}</dd>
       {% if preset.backend == 'qsv' %}<dt>Output bit depth</dt><dd>{{ preset.output_bit_depth }} bit</dd><dt>Validation</dt><dd>Experimental</dd>{% else %}<dt>Output bit depth</dt><dd>{{ preset.output_bit_depth }} bit</dd>{% endif %}
-      {% if preset.rate_control in ['abr', 'qvbr'] %}<dt>{{ 'Nominal video bitrate' if preset.rate_control == 'qvbr' else 'Target bitrate' }}</dt><dd>{{ preset.target_video_bitrate | bitrate }}</dd>{% endif %}
+      {% if preset.rate_control == 'qvbr' and preset.qvbr_bitrates_by_resolution %}<dt>Nominal bitrate by source resolution</dt><dd>{% for resolution, rate in preset.qvbr_bitrates_by_resolution.items() %}{{ resolution }}: {{ rate | bitrate }}{% if not loop.last %} · {% endif %}{% endfor %}</dd>{% elif preset.rate_control in ['abr', 'qvbr'] %}<dt>{{ 'Nominal video bitrate' if preset.rate_control == 'qvbr' else 'Target bitrate' }}</dt><dd>{{ preset.target_video_bitrate | bitrate }}</dd>{% endif %}
+      <dt>Source resolutions</dt><dd>{{ preset.source_resolutions | join(', ') }}</dd>
       <dt>Target resolution</dt><dd>{{ preset.target_resolution | label }}</dd>
       <dt>Audio</dt><dd>{{ 'Preserve every audio track by default' if preset.audio_policy == 'preserve' else 'Efficient conversion by default' }}</dd>
       {% if preset.audio_policy == 'efficient' %}<dt>Conversion profile</dt><dd>AAC stereo / E-AC3 multichannel · AAC {{ preset.stereo_audio_bitrate // 1000 }} kbps / E-AC3 {{ preset.target_audio_bitrate // 1000 }} kbps</dd>{% endif %}

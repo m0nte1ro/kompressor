@@ -1,4 +1,5 @@
 """Planning estimates, not measured encode sizes or perceptual quality scores."""
+from app.models.media import spatial_resolution
 from app.models.preset import CompressionPreset
 
 
@@ -43,8 +44,15 @@ def estimate(item, preset: CompressionPreset, preserve_audio: bool) -> dict:
     source_video = item.video_bitrate * duration / 8
     residual = max(0, item.size - source_video - known_audio)
     audio_bytes = sum(t["bitrate"] or 0 for t in plan) * duration / 8
-    low = preset.target_video_bitrate if preset.rate_control == "abr" else preset.planning_video_bitrate_low
-    high = preset.target_video_bitrate if preset.rate_control == "abr" else preset.planning_video_bitrate_high
+    if preset.rate_control == "qvbr" and preset.qvbr_bitrates_by_resolution:
+        nominal = preset.video_bitrate_for(spatial_resolution(item))
+        if nominal is None:
+            low, high = preset.planning_video_bitrate_low, preset.planning_video_bitrate_high
+        else:
+            low, high = nominal // 2, nominal * 3 // 2
+    else:
+        low = preset.target_video_bitrate if preset.rate_control == "abr" else preset.planning_video_bitrate_low
+        high = preset.target_video_bitrate if preset.rate_control == "abr" else preset.planning_video_bitrate_high
     assert low is not None and high is not None  # Validated ABR target or quality planning bounds.
     output_low = int((low * duration / 8 + audio_bytes + residual) * 1.01)
     output_high = int((high * duration / 8 + audio_bytes + residual) * 1.01)

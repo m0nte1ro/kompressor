@@ -109,6 +109,8 @@ class PresetSettings(BaseModel):
     destination_codec: DestinationCodec
 
     target_video_bitrate: int | None = Field(default=None, gt=0, le=200_000_000)
+    qvbr_bitrates_by_resolution: dict[Literal["480p", "576p", "720p", "1080p", "2160p"],
+                                      int] = Field(default_factory=dict)
     rate_control: Literal["abr", "crf", "icq", "qvbr"] = "abr"
     quality_value: float | None = Field(default=None, ge=0, le=51)
     encoder_preset: Literal["fast", "medium", "slow", "slower"] = "slow"
@@ -198,6 +200,8 @@ class PresetSettings(BaseModel):
     def efficient_audio_requires_bitrate(self):
         if (self.audio_policy == "efficient" or self.audio_conversion_policy == "efficient") and self.target_audio_bitrate is None:
             raise ValueError("Efficient audio requires a target audio bitrate.")
+        if self.rate_control != "qvbr" and self.qvbr_bitrates_by_resolution:
+            raise ValueError("Per-resolution nominal bitrates require QVBR.")
         if self.rate_control == "abr":
             if self.target_video_bitrate is None or self.quality_value is not None:
                 raise ValueError("ABR requires a target bitrate and no quality value.")
@@ -208,8 +212,15 @@ class PresetSettings(BaseModel):
             if self.quality_value is None:
                 raise ValueError("Quality mode requires a quality value.")
             if self.rate_control == "qvbr":
-                if self.target_video_bitrate is None:
-                    raise ValueError("QVBR requires a nominal target bitrate.")
+                has_map = bool(self.qvbr_bitrates_by_resolution)
+                if has_map == (self.target_video_bitrate is not None):
+                    raise ValueError("QVBR requires either one nominal bitrate or per-resolution rates.")
+                if has_map:
+                    if set(self.qvbr_bitrates_by_resolution) != set(self.source_resolutions):
+                        raise ValueError("QVBR needs one nominal bitrate for each applicable source resolution.")
+                    if any(rate <= 0 or rate > 200_000_000
+                           for rate in self.qvbr_bitrates_by_resolution.values()):
+                        raise ValueError("QVBR nominal bitrates must be positive and at most 200 Mbps.")
             elif self.target_video_bitrate is not None:
                 raise ValueError("CRF/ICQ cannot have a target bitrate.")
             if self.rate_control in {"icq", "qvbr"} and (self.quality_value < 1 or self.quality_value % 1):
@@ -234,6 +245,11 @@ class PresetSettings(BaseModel):
             if self.preserve_hdr_metadata or any(self.hdr_metadata.model_dump().values()):
                 raise ValueError("Tone mapping to SDR cannot preserve HDR metadata.")
         return self
+
+    def video_bitrate_for(self, source_resolution: str) -> int | None:
+        if self.rate_control == "qvbr" and self.qvbr_bitrates_by_resolution:
+            return self.qvbr_bitrates_by_resolution.get(source_resolution)
+        return self.target_video_bitrate
 
 
 class CompressionPreset(PresetSettings):

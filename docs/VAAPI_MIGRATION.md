@@ -43,13 +43,30 @@ The operator tested this render node manually: ICQ failed with “Driver does no
 support ICQ RC mode (supported modes: CQP, CBR, VBR, QVBR).” The same Main10
 upload path passed VBR and QVBR; QVBR reported quality 23 and encoded ten frames.
 The application now checks QVBR directly, with no fallback. This gates the GPU
-lane. Untouched built-in GPU presets migrate to QVBR at nominal 4 Mbps and apply
-only to 1080p. Edited presets and queued job snapshots are preserved. Legacy ICQ
-presets may still be edited, but this particular driver will reject them; they
-must be deliberately changed to QVBR or VBR before use. QVBR's quality number
+lane. The two built-in GPU Show presets again cover 480p, 576p, 720p, 1080p
+and 2160p, with nominal video rates stored in each preset:
+
+| Source | QVBR nominal bitrate |
+| --- | ---: |
+| 480p | 1 Mbps |
+| 576p | 1.5 Mbps |
+| 720p | 2.5 Mbps |
+| 1080p | 4 Mbps |
+| 2160p | 16 Mbps |
+
+These are unvalidated starting points, not output-size promises. The 4 Mbps
+startup smoke is a capability test, not a universal job target. The built-in
+minimum source bitrate is now zero so it does not exclude older 576p shows;
+minimum savings remain a planning warning until the real output is measured.
+Untouched built-ins migrate from either ICQ or the earlier 1080p-only QVBR
+configuration. Edited presets and queued job snapshots are preserved. Legacy
+ICQ presets may still be edited, but this particular driver will reject them;
+they must be deliberately changed to QVBR or VBR before use. QVBR's quality number
 is not interchangeable with ICQ or CPU CRF. A ten-frame smoke does not establish
 perceptual quality, actual size or throughput on a full episode; start with
-keep-output and inspect real content before considering replacement.
+keep-output and inspect real content before considering replacement. The seeded
+Top Gear example is 1080i and remains blocked because deinterlacing is not
+implemented; the restored 576p applicability helps progressive 576p sources.
 
 Source guards, hardlink restrictions, confirmed-SDR/progressive-only eligibility,
 source-resolution preservation and keep-output remain in force. GPU validation
