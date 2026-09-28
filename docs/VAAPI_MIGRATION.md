@@ -38,7 +38,9 @@ yuv420p10le and a positive decoded frame count. Common prerequisite failures ski
 the encode. Missing hardware disables only the GPU lane and leaves queued GPU
 jobs queued. CPU remains independently available.
 
-ICQ rejection fails the check explicitly; there is no switch to CQP/VBR. The
+ICQ rejection fails the check explicitly; there is no switch to CQP/VBR.
+The startup diagnostic retains FFmpeg's first error line as well as the final
+shutdown lines, since `-22 (Invalid argument)` alone does not identify the cause. The
 Main10/ICQ smoke gates the whole GPU lane, including custom 8-bit/ABR presets.
 If this driver cannot pass ICQ, a different product mapping requires an explicit
 decision. No hardware or CT validation was performed during this implementation.
@@ -99,6 +101,36 @@ PY
 Expect `GPU ready: True reason: None`. Failure reports the device/encoder issue or
 `GPU VA-API Main10 ICQ smoke test failed: ...`. Keep an ICQ rejection for review;
 do not silently change presets. The temporary smoke output is automatically removed.
+
+If the service reports only `-22 (Invalid argument)`, run the same video path
+with verbose FFmpeg logging. Its first error line often names the rejected option.
+These commands encode into the null muxer and do not write to media roots:
+
+```sh
+ffmpeg -hide_banner -nostdin -loglevel verbose \
+  -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va \
+  -f lavfi -i 'testsrc2=size=320x240:rate=30' -frames:v 10 -an \
+  -filter:v:0 'format=p010le,hwupload' -c:v:0 hevc_vaapi \
+  -profile:v:0 main10 -rc_mode:v:0 ICQ -global_quality:v:0 23 \
+  -f null - 2>&1
+```
+
+If the first command fails without naming the cause, use the same Main10/upload
+path with VBR to separate a rate-control rejection from a 10-bit or upload issue:
+
+```sh
+ffmpeg -hide_banner -nostdin -loglevel verbose \
+  -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va \
+  -f lavfi -i 'testsrc2=size=320x240:rate=30' -frames:v 10 -an \
+  -filter:v:0 'format=p010le,hwupload' -c:v:0 hevc_vaapi \
+  -profile:v:0 main10 -rc_mode:v:0 VBR -b:v:0 4000000 \
+  -f null - 2>&1
+```
+
+If VBR passes and ICQ fails, the driver rejects ICQ on this path. If both fail,
+inspect the first errors for Main10 and surface-upload constraints. The worker
+remains disabled until its required ICQ smoke test succeeds; there is no automatic
+rate-control substitution.
 
 ### 3. Sixty seconds with hardware decode
 

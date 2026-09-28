@@ -236,3 +236,20 @@ def test_device_failure_prevents_smoke_and_keeps_cpu_available(tmp_path, monkeyp
     assert status['supported_backends'] == ['cpu']
     assert status['qsv_available'] is False and status['hevc_vaapi_available'] is False
     assert 'GPU' in status['qsv_unavailable_reason']
+
+
+def test_smoke_report_preserves_first_driver_error_when_ffmpeg_shutdown_is_noisy(
+        tmp_path, monkeypatch):
+    (tmp_path / 'jobs').mkdir()
+    def run(command, **kwargs):
+        detail = ('[hevc_vaapi] Requested rate control mode ICQ is not supported\n'
+                  + '[ffmpeg] cleanup noise\n' * 150
+                  + 'Nothing was written into output file\n')
+        return subprocess.CompletedProcess(command, 1, '', detail)
+    monkeypatch.setattr(vaapi.subprocess, 'run', run)
+    ready, reason = vaapi.smoke_check('ffmpeg', Path('/dev/dri/renderD128'),
+                                      'ffprobe', tmp_path)
+    assert ready is False and reason is not None
+    assert 'Requested rate control mode ICQ is not supported' in reason
+    assert 'Nothing was written into output file' in reason
+    assert not list((tmp_path / 'jobs').iterdir())

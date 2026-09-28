@@ -47,6 +47,14 @@ def video_args(depth: int, rate_control: str, quality: float | None,
     raise ValueError(f'Unsupported GPU video rate control: {rate_control}.')
 
 
+def _failure_detail(stderr: str, stdout: str) -> str:
+    """Keep the first FFmpeg error, which often precedes generic shutdown noise."""
+    detail = (stderr or stdout).strip()
+    if len(detail) > 2400:
+        return f'{detail[:1600]}\n...\n{detail[-800:]}'
+    return detail or 'ffmpeg failed without diagnostics'
+
+
 def smoke_check(binary: str, device: Path, ffprobe: str, workspace: Path) -> tuple[bool, str | None]:
     """Bounded Main10/ICQ encode and decoded-frame verification; no rate fallback."""
     prefix = 'GPU VA-API Main10 ICQ smoke test failed'
@@ -60,14 +68,14 @@ def smoke_check(binary: str, device: Path, ffprobe: str, workspace: Path) -> tup
             result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
                                     text=True, timeout=15, check=False)
             if result.returncode:
-                return False, f'{prefix}: {(result.stderr or result.stdout).strip()[-500:]}'
+                return False, f'{prefix}: {_failure_detail(result.stderr, result.stdout)}'
             result = subprocess.run(
                 [ffprobe, '-v', 'error', '-protocol_whitelist', 'file,pipe', '-select_streams', 'v:0',
                  '-count_frames', '-show_entries', 'stream=codec_name,profile,pix_fmt,nb_read_frames',
                  '-of', 'json', str(output)], stdin=subprocess.DEVNULL, capture_output=True,
                 text=True, timeout=15, check=False)
             if result.returncode:
-                return False, f'{prefix}: ffprobe: {(result.stderr or result.stdout).strip()[-500:]}'
+                return False, f'{prefix}: ffprobe: {_failure_detail(result.stderr, result.stdout)}'
             streams = json.loads(result.stdout).get('streams', [])
             if len(streams) != 1:
                 return False, f'{prefix}: expected one HEVC video stream.'
