@@ -16,7 +16,7 @@ function measuredChange(job) {
 // Linear extrapolation from progress so far; hidden until 1% so early noise is not shown.
 function remaining(job) {
   if (job.status !== 'encoding' || !(job.progress >= 1 && job.progress < 100) || !(job.elapsed_seconds > 0)) return null;
-  return `estimated: ${duration(job.elapsed_seconds * (100 - job.progress) / job.progress)} left`;
+  return `Estimated: ${duration(job.elapsed_seconds * (100 - job.progress) / job.progress)} left`;
 }
 
 function jobDetails(job) {
