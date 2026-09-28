@@ -149,7 +149,10 @@ def test_vc1_advanced_gpu_command_uses_software_decode_upload_and_hevc_vaapi(tmp
     assert command[command.index('-filter_hw_device') + 1] == 'va'
     assert not [flag for flag in command if flag.startswith(('-hwaccel', '-hwaccel_device',
                                                              '-hwaccel_output_format'))]
-    assert command[command.index('-filter:v:0') + 1] == 'format=p010le,hwupload'
+    # The SDR assumption is stamped on the frames: newer ffmpeg lets frame colour
+    # properties override -color_* options, which left real output untagged.
+    assert command[command.index('-filter:v:0') + 1] == (
+        'format=p010le,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,hwupload')
     assert not any('scale_vaapi' in argument for argument in command)
     assert command[command.index('-c:v:0') + 1] == 'hevc_vaapi'
     assert command[command.index('-profile:v:0') + 1] == 'main10'
@@ -161,12 +164,46 @@ def test_vc1_advanced_gpu_command_uses_software_decode_upload_and_hevc_vaapi(tmp
     assert command.index('-init_hw_device') < command.index('-i') < command.index('-filter:v:0')
 
 
-@UNTAGGED_OTHER_CODECS
-def test_untagged_non_vc1_command_writes_no_invented_colour_tags(tmp_path, codec, profile):
-    facts = probe(codec_name=codec, profile=profile)
+@pytest.mark.parametrize('width,height,filters', [
+    (1920, 1080, 'format=yuv420p10le,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709'),
+    (720, 576, 'format=yuv420p10le,setparams=color_primaries=bt470bg:color_trc=smpte170m:colorspace=bt470bg'),
+])
+def test_legacy_vc1_cpu_command_stamps_assumed_sdr_on_frames(tmp_path, width, height, filters):
+    command = FFmpegEncoder.build_command('ffmpeg', queue_job(), Path('/source.mkv'),
+        tmp_path / 'out.mkv', probe(width=width, height=height))
+    assert command[command.index('-c:v:0') + 1] == 'libx265'
+    assert command[command.index('-filter:v:0') + 1] == filters
+    assert command[command.index('-pix_fmt:v:0') + 1] == 'yuv420p10le'
+
+
+def test_vc1_hardware_decode_path_stamps_after_scale_vaapi(tmp_path):
     command = FFmpegEncoder.build_command('ffmpeg', queue_job(qsv_preset(), backend='qsv'),
-        Path('/source.mkv'), tmp_path / 'out.mkv', facts, Path('/dev/dri/renderD128'))
+        Path('/source.mkv'), tmp_path / 'out.mkv', probe(profile='Main'), Path('/dev/dri/renderD128'))
+    assert '-hwaccel:0' in command
+    assert command[command.index('-filter:v:0') + 1] == (
+        'scale_vaapi=format=p010,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709')
+
+
+@UNTAGGED_OTHER_CODECS
+@pytest.mark.parametrize('backend', ['cpu', 'qsv'])
+def test_untagged_non_vc1_command_writes_no_invented_colour_tags(tmp_path, codec, profile, backend):
+    facts = probe(codec_name=codec, profile=profile)
+    job = queue_job(qsv_preset(), backend='qsv') if backend == 'qsv' else queue_job()
+    command = FFmpegEncoder.build_command('ffmpeg', job, Path('/source.mkv'), tmp_path / 'out.mkv',
+                                          facts, Path('/dev/dri/renderD128'))
     assert not {'-color_primaries:v:0', '-color_trc:v:0', '-colorspace:v:0'} & set(command)
+    assert not any('setparams' in argument for argument in command)
+
+
+@pytest.mark.parametrize('backend', ['cpu', 'qsv'])
+def test_tagged_source_command_is_unchanged_by_frame_stamping(tmp_path, backend):
+    facts = parse_ffprobe(json.loads((PROJECT_ROOT / 'fixtures/ffprobe/progressive.json').read_text()))
+    job = queue_job(qsv_preset(), backend='qsv') if backend == 'qsv' else queue_job()
+    command = FFmpegEncoder.build_command('ffmpeg', job, Path('/source.mkv'), tmp_path / 'out.mkv',
+                                          facts, Path('/dev/dri/renderD128'))
+    assert not any('setparams' in argument for argument in command)
+    assert ('-filter:v:0' in command) is (backend == 'qsv')
+    assert command[command.index('-color_primaries:v:0') + 1] == 'bt709'
 
 
 def test_legacy_vc1_output_validates_only_with_written_sdr_tags(tmp_path):

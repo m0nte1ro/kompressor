@@ -172,8 +172,19 @@ class FFmpegEncoder:
                         "-map_chapters", "0" if job.preserve_subtitles else "-1",
                         "-c", "copy"])
 
+        assumed = legacy_vc1_sdr_colours(primary)
+        # Newer ffmpeg configures the encoder from frame colour properties, which
+        # override -color_* output options. Untagged sources therefore get their
+        # assumed SDR values stamped on the frames themselves.
+        tag_frames = None
+        if assumed is not None:
+            tag_frames = "setparams=color_primaries={}:color_trc={}:colorspace={}".format(*assumed)
+
         if job.backend == "cpu":
             command.extend(["-c:v:0", "libx265"])
+            if tag_frames is not None:
+                pixel = "yuv420p10le" if job.preset.output_bit_depth == 10 else "yuv420p"
+                command.extend(["-filter:v:0", f"format={pixel},{tag_frames}"])
             if job.preset.rate_control == "crf" and job.preset.quality_value is not None:
                 command.extend(["-crf:v:0", str(job.preset.quality_value)])
             elif job.preset.rate_control == "abr" and job.preset.target_video_bitrate is not None:
@@ -189,17 +200,16 @@ class FFmpegEncoder:
                 command.extend(vaapi.video_args(
                     job.preset.output_bit_depth, job.preset.rate_control,
                     job.preset.quality_value, nominal_bitrate,
-                    hardware=vaapi.hardware_decode(primary)))
+                    hardware=vaapi.hardware_decode(primary), tag_frames=tag_frames))
             except ValueError as error:
                 raise FFmpegError(f"{error} Source resolution: {source_resolution}.") from error
         else:
             raise FFmpegError(f"Unsupported encoder backend: {job.backend}.")
 
-        colours = legacy_vc1_sdr_colours(primary)
+        colours = assumed
         if colours is None and primary.hdr is not None:
             colours = primary.hdr.primaries, primary.hdr.transfer, primary.hdr.matrix
         if colours is not None:
-            # Untagged legacy VC-1 gets its SDR assumption written, so output validation can confirm SDR.
             for flag, value in zip(("-color_primaries:v:0", "-color_trc:v:0", "-colorspace:v:0"), colours):
                 if value:
                     command.extend([flag, value])

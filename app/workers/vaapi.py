@@ -34,11 +34,14 @@ def device_args(device: Path) -> list[str]:
 
 
 def video_args(depth: int, rate_control: str, quality: float | None,
-               bitrate: int | None, *, hardware: bool = False) -> list[str]:
+               bitrate: int | None, *, hardware: bool = False,
+               tag_frames: str | None = None) -> list[str]:
+    tag = f',{tag_frames}' if tag_frames else ''
     if hardware:
-        filters = 'scale_vaapi=format=p010' if depth == 10 else 'scale_vaapi=format=nv12'
+        filters = ('scale_vaapi=format=p010' if depth == 10 else 'scale_vaapi=format=nv12') + tag
     else:
-        filters = 'format=p010le,hwupload' if depth == 10 else 'format=nv12,hwupload'
+        # Tag after the pixel-format conversion; hwupload copies frame properties.
+        filters = ('format=p010le' if depth == 10 else 'format=nv12') + tag + ',hwupload'
     args = ['-filter:v:0', filters, '-c:v:0', 'hevc_vaapi',
             '-profile:v:0', 'main10' if depth == 10 else 'main']
     if rate_control == 'icq' and quality is not None:

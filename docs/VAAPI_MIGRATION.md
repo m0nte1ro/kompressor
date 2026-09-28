@@ -88,8 +88,13 @@ blocked.
 
 For these sources the job writes the assumed SDR tags explicitly on output:
 BT.709 for HD (wider than 1024 or taller than 576), BT.470BG primaries/matrix with
-SMPTE 170M transfer for 576-line SD, and SMPTE 170M for 480-line SD. Only metadata
-is written; no colour conversion is applied. Output validation is unchanged and
+SMPTE 170M transfer for 576-line SD, and SMPTE 170M for 480-line SD. The values are
+stamped on the frames with `setparams` (after `format=...`, before `hwupload`, or
+after `scale_vaapi`; for CPU, `format=...,setparams=...`) and also passed as
+`-color_*` output options. The first real VC-1 job showed why: with only the
+output options, the HEVC output came out untagged and failed validation, because
+newer ffmpeg configures the encoder from the frames' colour properties. Only
+metadata is written; no colour conversion is applied. Output validation is unchanged and
 still requires the HEVC output to validate as confirmed SDR.
 
 Source guards, hardlink restrictions, confirmed-SDR/progressive-only eligibility,
