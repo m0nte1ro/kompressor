@@ -216,6 +216,52 @@ def test_qsv_efficient_audio_converts_only_tracks_that_need_it(probe_facts, tmp_
     assert "-c:a:1" not in command
 
 
+MKVMERGE_STATS = {"BPS-eng": "18360077", "DURATION-eng": "00:42:05.482000000",
+                  "NUMBER_OF_FRAMES-eng": "60551", "NUMBER_OF_BYTES-eng": "5796005604",
+                  "_STATISTICS_WRITING_APP-eng": "mkvmerge v21.0.0", "_STATISTICS_WRITING_DATE_UTC-eng":
+                  "2018-03-17 23:42:33", "_STATISTICS_TAGS-eng": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"}
+
+
+def metadata_args(command, specifier):
+    flag = f"-metadata:s:{specifier}"
+    return {command[i + 1] for i, value in enumerate(command) if value == flag}
+
+
+def with_statistics(probe):
+    return probe.model_copy(update={"streams": [
+        stream.model_copy(update={"metadata": {**stream.metadata, **MKVMERGE_STATS, "BPS": "1",
+                                               "title": "Keep me"}})
+        if stream.kind in {"video", "audio"} else stream for stream in probe.streams]})
+
+
+@pytest.mark.parametrize("backend", ["cpu", "qsv"])
+def test_reencoded_video_drops_stale_mkvmerge_statistics(probe_facts, tmp_path, backend):
+    job = queue_job(qsv_preset(), backend="qsv") if backend == "qsv" else queue_job()
+    command = FFmpegEncoder.build_command("/usr/bin/ffmpeg", job, Path("/read-only/Film.mkv"),
+        tmp_path / "out.mkv", with_statistics(probe_facts), qsv_device=Path("/dev/dri/renderD128"))
+    assert metadata_args(command, "v:0") == {f"{key}=" for key in MKVMERGE_STATS} | {"BPS="}
+    # Copied audio keeps its statistics; they still describe the copied bitstream.
+    assert not metadata_args(command, "a:0") and not metadata_args(command, "a:1")
+    assert not any("title" in argument for argument in command if argument.endswith("="))
+    assert command.index("-metadata:s:v:0") > command.index("-map_metadata")
+
+
+def test_converted_audio_drops_statistics_but_copied_audio_keeps_them(probe_facts, tmp_path):
+    job = queue_job(preset=qsv_preset(efficient_audio=True), backend="qsv", scope="show",
+                    preserve_audio=False, requested_preserve_audio=False)
+    command = FFmpegEncoder.build_command("/usr/bin/ffmpeg", job, Path("/read-only/Episode.mkv"),
+        tmp_path / "out.mkv", with_statistics(probe_facts), qsv_device=Path("/dev/dri/renderD128"))
+    assert command[command.index("-c:a:0") + 1] == "eac3"
+    assert "BPS-eng=" in metadata_args(command, "a:0")
+    assert "-c:a:1" not in command and not metadata_args(command, "a:1")
+
+
+def test_sources_without_statistics_get_no_metadata_edits(probe_facts, tmp_path):
+    command = FFmpegEncoder.build_command("/usr/bin/ffmpeg", queue_job(), Path("/read-only/Film.mkv"),
+                                          tmp_path / "out.mkv", probe_facts)
+    assert not any(argument.startswith("-metadata") for argument in command)
+
+
 def test_command_converts_mov_text_subtitle_for_matroska(probe_facts, tmp_path):
     streams = [
         stream.model_copy(update={"codec": "mov_text"}) if stream.kind == "subtitle" and stream.index == 3 else stream

@@ -42,7 +42,10 @@ starting FFmpeg. After FFmpeg succeeds, ffprobe validates codec, dimensions, pro
 requested bit depth, SDR signalling, known source colour range, duration and
 preserved stream/chapter counts. Only then is the partial promoted to
 `<source-stem>.kompressor.mkv`. The source is never renamed, truncated,
-replaced or deleted. Measured saving is recorded separately from the estimate.
+replaced or deleted. Re-encoded video (and audio converted by Efficient Audio) drops
+copied mkvmerge track statistics (`BPS`, `NUMBER_OF_BYTES`, `NUMBER_OF_FRAMES`,
+`DURATION`, `_STATISTICS_*`, with or without a language suffix), which would
+otherwise report the source bitrate and size. Copied streams keep theirs. Measured saving is recorded separately from the estimate.
 
 Stop & Skip is persisted as a cancellation request in SQLite. The standalone owner
 of the affected CPU or GPU lane observes that request, terminates only the subprocess

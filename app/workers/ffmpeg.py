@@ -16,6 +16,23 @@ from app.models.queue import QueueJob
 from app.services.encoding_capability import SUPPORTED_PIXEL_FORMATS
 
 
+# mkvmerge track statistics describe the source bitstream; they are stale once a
+# stream is re-encoded. Keys may carry a language suffix, e.g. BPS-eng.
+MKV_STATISTICS_TAGS = {"BPS", "DURATION", "NUMBER_OF_FRAMES", "NUMBER_OF_BYTES",
+                       "_STATISTICS_WRITING_APP", "_STATISTICS_WRITING_DATE_UTC", "_STATISTICS_TAGS"}
+
+
+def stale_statistics_args(stream: StreamFacts, specifier: str) -> list[str]:
+    """Empty -metadata values delete the copied key from the re-encoded output stream."""
+    args = []
+    for key in stream.metadata:
+        base, separator, suffix = key.rpartition("-")
+        name = base if separator and re.fullmatch(r"[A-Za-z]{2,3}", suffix) else key
+        if name.upper() in MKV_STATISTICS_TAGS:
+            args.extend([f"-metadata:s:{specifier}", f"{key}="])
+    return args
+
+
 class FFmpegError(RuntimeError):
     def __init__(self, message: str, exit_code: int | None = None):
         super().__init__(message)
@@ -216,6 +233,7 @@ class FFmpegEncoder:
                     command.extend([flag, value])
         if primary.color_range in {"tv", "pc"}:
             command.extend(["-color_range:v:0", primary.color_range])
+        command.extend(stale_statistics_args(primary, "v:0"))
 
         subtitle_output_index = 0
         audio_output_index = 0
@@ -231,6 +249,7 @@ class FFmpegEncoder:
                     command.extend([f"-c:a:{audio_output_index}", codec,
                                     f"-b:a:{audio_output_index}", str(bitrate),
                                     f"-ac:a:{audio_output_index}", str(channels)])
+                    command.extend(stale_statistics_args(stream, f"a:{audio_output_index}"))
                 audio_output_index += 1
 
         command.extend(["-f", "matroska", str(partial_path)])
