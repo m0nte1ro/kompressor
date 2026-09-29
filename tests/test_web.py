@@ -137,3 +137,18 @@ def test_rescan_button_is_available_on_filesystem_library_pages(client, monkeypa
         html = client.get(url).text
         assert 'data-scan-library' in html
         assert "Rescan library" in html
+
+
+def test_show_seasons_have_select_all_controls(client, catalog):
+    season = catalog.media.library.shows[0].seasons[0]
+    second_season = season.model_copy(deep=True)
+    second_season.season = 4
+    second_season.episodes = [second_season.episodes[0]]
+    second_season.episodes[0].season = 4
+    second_season.episodes[0].id = "s04e04-select"
+    catalog.media.library.shows[0].seasons.append(second_season)
+
+    html = client.get("/shows/show-modern-family").text
+    assert 'class="season-select" data-season="3"' in html
+    assert 'class="season-select" data-season="4"' in html
+    assert 'aria-label="Select all episodes in season 3"' in html
