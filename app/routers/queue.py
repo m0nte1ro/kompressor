@@ -94,6 +94,16 @@ def compare(processor: Processor, job_id: str, payload: CompareRequest | None = 
     return processor.compare_output(job_id, (payload or CompareRequest()).count)
 
 
+class BenchmarkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    seconds: float = Field(ge=5, le=600)
+
+
+@router.post("/{job_id}/benchmark", status_code=202)
+def benchmark(processor: Processor, job_id: str, payload: BenchmarkRequest) -> dict:
+    return processor.benchmark_output(job_id, payload.seconds)
+
+
 @router.get("/analysis/status")
 def analysis_status(processor: Processor) -> dict:
     return processor.get_analysis_status()

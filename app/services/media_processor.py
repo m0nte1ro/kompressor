@@ -140,8 +140,13 @@ class MediaProcessor:
     def compare_output(self, job_id: str, count: int = 6) -> dict:
         return self._analysis().start_compare(job_id, count)
 
+    def benchmark_output(self, job_id: str, seconds: float) -> dict:
+        return self._analysis().start_benchmark(job_id, seconds)
+
     def get_analysis_status(self) -> dict:
-        return self.analysis.status() if self.analysis else {"state": "unavailable"}
+        if self.analysis is None:
+            return {"state": "unavailable", "vmaf_available": False}
+        return {**self.analysis.status(), "vmaf_available": self.analysis.vmaf_available()}
 
     def stop_job(self, job_id: str):
         self.queue.skip(job_id)

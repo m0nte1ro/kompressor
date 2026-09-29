@@ -9,3 +9,16 @@
   <tbody id="history-rows"><tr><td colspan="10" class="empty">Loading history…</td></tr></tbody>
 </table></div>
 {% endblock %}
+{% block dialogs %}
+<dialog id="benchmark-dialog" aria-labelledby="benchmark-title">
+  <form id="benchmark-form">
+    <header class="dialog-head"><div><h2 id="benchmark-title">VMAF benchmark</h2><p class="muted" id="benchmark-name"></p></div><button type="button" data-benchmark-close aria-label="Close benchmark dialog">×</button></header>
+    <div class="dialog-body">
+      <label class="field">Duration (seconds)<input id="benchmark-seconds" type="number" min="5" max="600" step="1" value="60" required></label>
+      <p class="muted">Scores a segment of this length from the middle of the file: the kept output against the source, frame by frame, with libvmaf (the 4K model for sources above 1080p). It runs at low CPU priority and takes roughly the segment's length or more for 1080p. The per-frame log is saved under the compare folder.</p>
+      <p id="benchmark-error" class="error" role="alert" hidden></p>
+    </div>
+    <footer class="dialog-foot"><button type="button" data-benchmark-close>Cancel</button><button type="submit" class="primary">Run benchmark</button></footer>
+  </form>
+</dialog>
+{% endblock %}

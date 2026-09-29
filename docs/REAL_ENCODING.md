@@ -189,6 +189,23 @@ Untagged sources that the encoder assumed SDR get the same colour tags stamped b
 RGB conversion, so both halves use the same matrix. Look at textures, faces, dark
 areas and gradients at 100%; still frames cannot show motion artefacts.
 
+Frames are matched by position from each file's first video frame, not by
+container time. A source whose container starts at -0.021 s (AAC priming) and its
+HEVC output starting at 0 put "the same" `-ss` one frame apart. Each file's first
+frame pts is read (`-copyts` + `showinfo`), and both are seeked with
+`-seek_timestamp 1` to first frame + T − half a frame.
+
+**Benchmark** asks for a duration (5–600 s) and scores that many seconds from the
+middle of the file with libvmaf. The kept output is the distorted input and the
+source is the reference, both widened to 10-bit 4:2:0 and frame-aligned as above.
+Sources above 1080p use the `vmaf_4k_v0.6.1` model. History shows the mean, the
+5th-percentile frame ("5% low") and the minimum. The per-frame JSON log is kept at
+`<workspace>/compare/<name>-<job>/vmaf-<UTC time>/vmaf.json`. It needs an ffmpeg
+built with libvmaf (Debian's is), and uses half the CPU cores at nice 19. On the
+test layout above, container-time seeking scored a near-lossless encode 41 instead
+of 99. A surprisingly low score next to good-looking screenshots therefore points to
+misalignment (for example a variable-frame-rate source) rather than quality.
+
 The same screenshots from a shell (same command builder; progress printed per frame):
 
 ```sh

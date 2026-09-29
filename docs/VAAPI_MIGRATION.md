@@ -124,13 +124,14 @@ leaves it in the workspace.
 
 ## Local verification
 
-Recorded after the source-replacement and audio-safety change:
+Recorded after the History replace, compare and VMAF benchmark tools:
 
-- Full suite: `460 passed, 3 skipped, 2 warnings`. The skips are the optional real
-  ffprobe test and the two real-ffmpeg audio tests, which need `ffmpeg` with libx265
-  on `PATH` (or `KOMPRESSOR_TEST_FFMPEG=/path/to/ffmpeg`). With a static ffmpeg 7.0.2
-  supplied that way: `462 passed, 1 skipped`.
-- Pyright 1.1 (standard mode) on `app/` and the new tests: 0 errors, 0 warnings.
+- Full suite: `482 passed, 5 skipped`. The skips are the optional real ffprobe test
+  and four real-ffmpeg tests (bit-exact audio, side-by-side PNG, frame-aligned VMAF),
+  which need `ffmpeg` with libx265 and libvmaf on `PATH` (or
+  `KOMPRESSOR_TEST_FFMPEG=/path/to/ffmpeg`). With a static ffmpeg 7.0.2 supplied that
+  way: `486 passed, 1 skipped`.
+- Pyright 1.1 (standard mode) on `app/`: 0 errors, 0 warnings.
 - All frontend JavaScript modules passed Node's syntax check.
 - `git diff --check` passed.
 - Hardware subprocesses in the migration tests are mocked. The two warnings are

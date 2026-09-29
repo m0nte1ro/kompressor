@@ -113,6 +113,10 @@ function analysisResults(job) {
   if (job.comparison) {
     lines.push(`Screenshots (${job.comparison.files.length}): <code>${esc(job.comparison.folder)}</code>`);
   }
+  if (job.vmaf) {
+    const v = job.vmaf;
+    lines.push(`VMAF ${esc(v.mean)} mean · 5% low ${esc(v.p5)} · min ${esc(v.min)} · ${esc(duration(v.duration_seconds))} from ${esc(duration(v.start_seconds))}`);
+  }
   return lines.map(line => `<small>${line}</small>`).join('');
 }
 
@@ -122,17 +126,20 @@ function historyActions(job, pending) {
   return `<div class="job-controls">${replacing
     ? '<span class="badge blue">Replacement queued</span>'
     : '<button class="danger" data-history-action="replace">Replace source</button>'}
-    <button data-history-action="compare" title="Random side-by-side screenshots: source left, output right">Compare</button></div>
+    <button data-history-action="compare" title="Random side-by-side screenshots: source left, output right">Compare</button>
+    <button data-history-action="benchmark" title="VMAF score for a segment of chosen length">Benchmark</button></div>
     ${analysisResults(job)}`;
 }
 
 export function renderAnalysis(status) {
   const box = $('#analysis-status');
   if (!box) return;
-  const labels = {comparison: 'Comparison screenshots'};
+  const labels = {comparison: 'Comparison screenshots', vmaf: 'VMAF benchmark'};
   const what = `${labels[status.kind] ?? 'Analysis'} · ${status.name ?? ''}`;
   const text = status.state === 'running' ? `${what} · ${Math.round(status.progress ?? 0)}%…`
     : status.state === 'completed' && status.kind === 'comparison' ? `${what} · saved to ${status.result.folder}`
+    : status.state === 'completed' && status.kind === 'vmaf'
+      ? `${what} · ${status.result.mean} mean · 5% low ${status.result.p5} · min ${status.result.min} (${status.result.frames} frames)`
     : status.state === 'failed' || status.state === 'cancelled' ? `${what} · ${status.state}: ${status.error}`
     : '';
   box.textContent = text;

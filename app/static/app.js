@@ -1,10 +1,10 @@
-import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js?v=12';
-import './presets.js?v=12';
-import './settings.js?v=12';
-import './discovery.js?v=12';
-import {setupTags} from './tags.js?v=12';
-import {compressionModal} from './compression.js?v=12';
-import {renderAnalysis, renderHistory, renderQueue} from './queue.js?v=12';
+import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js?v=13';
+import './presets.js?v=13';
+import './settings.js?v=13';
+import './discovery.js?v=13';
+import {setupTags} from './tags.js?v=13';
+import {compressionModal} from './compression.js?v=13';
+import {renderAnalysis, renderHistory, renderQueue} from './queue.js?v=13';
 
 let queue = {lanes: [], history: [], pending_count: 0};
 
@@ -223,6 +223,12 @@ $('#history-rows')?.addEventListener('click', event => {
       await api(`/api/queue/${encodeURIComponent(row.dataset.job)}/replace-source`, {method: 'POST'});
       notify('Replacement queued on its worker lane.');
     });
+  } else if (button.dataset.historyAction === 'benchmark') {
+    const dialog = $('#benchmark-dialog');
+    dialog.dataset.job = row.dataset.job;
+    $('#benchmark-name').textContent = row.dataset.name;
+    $('#benchmark-error').hidden = true;
+    dialog.showModal();
   } else if (button.dataset.historyAction === 'compare') {
     mutate(async () => {
       renderAnalysis(await api(`/api/queue/${encodeURIComponent(row.dataset.job)}/compare`,
@@ -230,6 +236,27 @@ $('#history-rows')?.addEventListener('click', event => {
     });
   }
 });
+
+const benchmarkDialog = $('#benchmark-dialog');
+if (benchmarkDialog) {
+  $$('[data-benchmark-close]', benchmarkDialog).forEach(button => button.addEventListener('click', () => benchmarkDialog.close()));
+  $('#benchmark-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const submit = $('button[type="submit"]', event.target);
+    submit.disabled = true;
+    try {
+      renderAnalysis(await api(`/api/queue/${encodeURIComponent(benchmarkDialog.dataset.job)}/benchmark`, {
+        method: 'POST', body: JSON.stringify({seconds: Number($('#benchmark-seconds').value)}),
+      }));
+      benchmarkDialog.close();
+    } catch (error) {
+      $('#benchmark-error').textContent = error.message;
+      $('#benchmark-error').hidden = false;
+    } finally {
+      submit.disabled = false;
+    }
+  });
+}
 
 document.addEventListener('click', event => {
   const button = event.target.closest('[data-worker-action]');
