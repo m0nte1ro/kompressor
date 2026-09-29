@@ -47,7 +47,7 @@
         {% set item = row.item %}{% set result = row.eligibility %}
         {% if scope == 'show' and season.number != item.season %}
         {% set season.number = item.season %}
-        <tr class="season" data-season="{{ item.season }}"><th scope="rowgroup" colspan="10">Season {{ item.season }} <button class="season-tags" data-tag-kind="season" data-tag-id="{{ show.id }}" data-tag-season="{{ item.season }}">Manage season tags</button></th></tr>
+        <tr class="season" data-season="{{ item.season }}"><th scope="rowgroup" colspan="10"><input type="checkbox" class="season-select" data-season="{{ item.season }}" aria-label="Select all episodes in season {{ item.season }}"> Season {{ item.season }} <button class="season-tags" data-tag-kind="season" data-tag-id="{{ show.id }}" data-tag-season="{{ item.season }}">Manage season tags</button></th></tr>
         {% endif %}
         <tr class="media-row" data-id="{{ item.id }}" data-season="{{ item.season if scope == 'show' else '' }}"
             data-name="{{ row.entry.name }}" data-preset="{{ row.preset.id if row.preset else '' }}"
