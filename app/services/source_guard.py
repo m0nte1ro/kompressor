@@ -39,7 +39,6 @@ class SourceGuard:
                 or old.generation != reference.generation
                 or old.size != reference.size
                 or old.mtime_ns != reference.mtime_ns
-                or old.ctime_ns != reference.ctime_ns
                 or old.hardlinks != reference.hardlinks):
             raise Conflict("Source physical identity or stat facts changed after the job was queued.")
         fresh = self.source.observe(record.root_id, record.relative_path)
@@ -47,12 +46,13 @@ class SourceGuard:
             raise Conflict("Source cannot be revalidated: file/root unavailable.")
         if fresh.hardlinks is None or fresh.hardlinks != 1:
             raise Conflict("Source is hardlinked or its hardlink count is unknown.")
-        # Deliberately stricter than reconciliation: even a byte-identical physical
-        # replacement needs a new review. Hash equality cannot bypass these checks.
+        # Deliberately stricter than reconciliation for content/identity facts.
+        # ctime is intentionally not an identity check: chmod/chown/ACL maintenance
+        # changes it without changing file contents. Device/inode/generation, size,
+        # mtime, hardlink count and any available fingerprints still have to match.
         if (fresh.root_id != old.root_id or fresh.relative_path != old.relative_path
                 or fresh.media_id != old.media_id or fresh.scope != old.scope
                 or fresh.physical_key() is None or fresh.physical_key() != old.physical_key()
                 or fresh.size != old.size or fresh.mtime_ns != old.mtime_ns
-                or fresh.ctime_ns != old.ctime_ns
                 or full_match(old, fresh) is False or sample_match(old, fresh) is False):
             raise Conflict("Source changed since its revision was captured. Reconcile and review again.")
