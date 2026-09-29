@@ -80,24 +80,22 @@ def test_replace_swaps_in_verified_output_with_source_owner_and_mode(tmp_path, m
     assert not workspace_outputs(workspace)
 
 
-def test_replace_succeeds_when_unprivileged_container_cannot_chown(
+def test_replace_does_not_attempt_to_chown(
         tmp_path, monkeypatch, probe_facts):
     application, source, workspace, _ = build_real_app(
         tmp_path, monkeypatch, probe_facts, hevc_output(probe_facts), output_size=1_000_000)
-    original_mode = source.stat().st_mode & 0o777
 
-    def denied(*args, **kwargs):
-        raise PermissionError(1, "Operation not permitted")
+    def forbidden(*args, **kwargs):
+        raise AssertionError("replacement must not call chown")
 
-    monkeypatch.setattr(replacement.os, "chown", denied)
+    monkeypatch.setattr(replacement.os, "chown", forbidden)
     with TestClient(application):
         saved = run_one(application.state.media_processor, replace_source=True)
 
     assert saved["status"] == "completed", saved
     assert saved["source_replaced"] is True
     assert source.stat().st_size == 1_000_000
-    assert source.stat().st_mode & 0o777 == original_mode
-    assert any("owner/group could not be preserved" in reason for reason in saved["reasons"])
+    assert not any("owner/group" in reason for reason in saved["reasons"])
     assert not workspace_outputs(workspace)
 
 
