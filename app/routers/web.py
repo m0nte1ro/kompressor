@@ -64,7 +64,8 @@ def movies(request: Request, processor: Processor):
 def shows(request: Request, processor: Processor):
     cards = processor.get_shows()
     return render(request, "shows.html", "shows", "Shows", cards=cards,
-                  subtitle="Series inventory · inherited series, season and episode tags")
+                  subtitle="Series inventory · inherited series, season and episode tags",
+                  media_backend=media_backend(processor))
 
 
 @router.get("/shows/{show_id}", response_class=HTMLResponse)
