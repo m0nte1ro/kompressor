@@ -3,6 +3,7 @@ import {$, $$, api} from './common.js';
 let version = null;
 let busy = false;
 let stopped = false;
+let manualScanRequested = false;
 const buttons = $('[data-scan-library]');
 const live = $('#discovery-status');
 const isLibrary = ['movies', 'shows'].includes(document.body.dataset.page);
