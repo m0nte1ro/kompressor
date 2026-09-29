@@ -142,18 +142,9 @@ class SourceReplacer:
                 destination.write(chunk)
             destination.flush()
             os.fsync(destination.fileno())
-        # Preserve the original mode. Ownership preservation is best-effort:
-        # unprivileged containers can be allowed to create/rename files through
-        # bind-mount ACLs while still being forbidden from chowning them to the
-        # source UID/GID. That must not block an otherwise safe replacement.
-        ownership_note = None
-        try:
-            os.chown(incoming, source.st_uid, source.st_gid)
-        except OSError as error:
-            ownership_note = (
-                "Source replaced, but owner/group could not be preserved "
-                f"({error}); the replacement keeps Kompressor's created ownership."
-            )
+        # Preserve the original mode. Do not attempt to preserve owner/group:
+        # on unprivileged LXC bind mounts Kompressor may be allowed to create,
+        # rename and delete files via ACLs while chown remains forbidden.
         try:
             os.chmod(incoming, stat.S_IMODE(source.st_mode))
         except OSError as error:
@@ -195,7 +186,7 @@ class SourceReplacer:
         save(journal)
 
         # 4. The replacement is verified; the backup can go.
-        notes = [ownership_note] if ownership_note else []
+        notes = []
         if _identity(backup) == (journal.source_device, journal.source_inode):
             try:
                 backup.unlink()
