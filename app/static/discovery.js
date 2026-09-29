@@ -64,6 +64,7 @@ function showReport(report) {
 
 buttons.forEach(button => button.addEventListener('click', async () => {
   buttons.forEach(item => { item.disabled = true; });
+  manualScanRequested = true;
   try {
     showReport(await api('/api/library/scan', {method: 'POST'}));
     version = null;
@@ -74,6 +75,7 @@ buttons.forEach(button => button.addEventListener('click', async () => {
       live.hidden = false;
       live.textContent = error.message;
     }
+    manualScanRequested = false;
     buttons.forEach(item => { item.disabled = false; });
   }
 }));
@@ -89,6 +91,11 @@ async function poll() {
     if (isLibrary && current !== version && !document.querySelector('dialog[open]')) {
       await updateLibrary();
       version = current;
+    }
+    if (manualScanRequested && report.state === 'completed') {
+      manualScanRequested = false;
+      window.location.reload();
+      return;
     }
   } catch (error) {
     live.hidden = false;
