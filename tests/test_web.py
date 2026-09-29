@@ -127,3 +127,13 @@ def test_summary_includes_blocked_media_estimates(client):
     assert "Estimated saving" in html
     assert "Planning midpoint · not measured" in html
     assert "~" in html
+
+
+def test_rescan_button_is_available_on_filesystem_library_pages(client, monkeypatch):
+    processor = client.app.state.media_processor
+    monkeypatch.setattr(processor, "get_scan_status",
+                        lambda: {"backend": "filesystem", "state": "idle", "roots": []})
+    for url in ["/movies", "/shows", "/shows/show-modern-family", "/settings"]:
+        html = client.get(url).text
+        assert 'data-scan-library' in html
+        assert "Rescan library" in html
