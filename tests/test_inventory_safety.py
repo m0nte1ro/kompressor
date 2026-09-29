@@ -35,7 +35,7 @@ def replace_observation(snapshot: ScanSnapshot, **changes) -> ScanSnapshot:
 
 @pytest.mark.parametrize('boundary', ['before_processing', 'before_replacement'])
 @pytest.mark.parametrize('changes', [
-    {'hardlinks': 2}, {'hardlinks': None}, {'size': 0}, {'mtime_ns': 44}, {'ctime_ns': 45},
+    {'hardlinks': 2}, {'hardlinks': None}, {'size': 0}, {'mtime_ns': 44},
     {'inode': 111}, {'generation': 'reused'}, {'filesystem_id': None},
 ])
 def test_both_boundaries_require_fresh_revision_and_hardlinks(scenario, boundary, changes):
@@ -48,6 +48,25 @@ def test_both_boundaries_require_fresh_revision_and_hardlinks(scenario, boundary
 
 
 @pytest.mark.parametrize('boundary', ['before_processing', 'before_replacement'])
+@pytest.mark.parametrize('boundary', ['before_processing', 'before_replacement'])
+def test_ctime_only_change_is_allowed(scenario, boundary):
+    snapshot, service, source, guard, reference = scenario
+    # Permission/ownership/ACL maintenance changes ctime without changing content.
+    changed = replace_observation(snapshot, ctime_ns=(snapshot.files[0].ctime_ns or 0) + 1)
+    source.load_snapshot(changed)
+    getattr(guard, boundary)(reference)
+
+
+@pytest.mark.parametrize('boundary', ['before_processing', 'before_replacement'])
+def test_ctime_only_reconcile_keeps_captured_reference_valid(scenario, boundary):
+    snapshot, service, source, guard, reference = scenario
+    changed = replace_observation(snapshot, ctime_ns=(snapshot.files[0].ctime_ns or 0) + 1)
+    source.load_snapshot(changed)
+    result = service.reconcile(changed)
+    assert result.unchanged == [reference.file_id]
+    getattr(guard, boundary)(reference)
+
+
 def test_changed_persisted_revision_invalidates_captured_reference(scenario, boundary):
     snapshot, service, source, guard, reference = scenario
     changed = replace_observation(snapshot, size=1)
