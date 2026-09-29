@@ -76,6 +76,13 @@ function selectionChanged() {
   const checked = visible.filter(row => $('.media-select', row).checked).length;
   $('#select-all').checked = visible.length > 0 && checked === visible.length;
   $('#select-all').indeterminate = checked > 0 && checked < visible.length;
+
+  $('.season-select', library).forEach(control => {
+    const seasonRows = rows.filter(row => row.dataset.season === control.dataset.season);
+    const seasonChecked = seasonRows.filter(row => $('.media-select', row).checked).length;
+    control.checked = seasonRows.length > 0 && seasonChecked === seasonRows.length;
+    control.indeterminate = seasonChecked > 0 && seasonChecked < seasonRows.length;
+  });
 }
 
 function filterRows() {
@@ -168,7 +175,13 @@ if (library) {
     selectionChanged();
   });
   library.addEventListener('change', event => {
-    if (event.target.matches('.media-select')) selectionChanged();
+    if (event.target.matches('.season-select')) {
+      rows.filter(row => row.dataset.season === event.target.dataset.season)
+        .forEach(row => { $('.media-select', row).checked = event.target.checked; });
+      selectionChanged();
+    } else if (event.target.matches('.media-select')) {
+      selectionChanged();
+    }
   });
   library.addEventListener('click', event => {
     const button = event.target.closest('[data-action]');
