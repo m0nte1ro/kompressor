@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 {% block content %}
 <p class="notice">Real jobs show validated output paths and measured savings. Replace jobs show whether the source was replaced; keep-original jobs leave it untouched. Seed-mode jobs remain simulations with estimated savings.</p>
+<p id="analysis-status" class="notice" role="status" hidden></p>
 <div class="stats" id="history-stats"></div>
 <div class="table-wrap"><table data-sortable>
   <caption class="sr-only">Encode and simulated job history</caption>

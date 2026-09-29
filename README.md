@@ -121,7 +121,8 @@ See the [full Settings audit](docs/SETTINGS_AUDIT.md) and
   followed by five seconds of validation. Filesystem mode uses independent real CPU and GPU lanes when their runtime
   prerequisites are available. Completed/failed/skipped/blocked jobs appear in
   History. A completed keep-original real encode offers **Replace source**, which
-  re-validates the kept output and swaps it in on its worker lane.
+  re-validates the kept output and swaps it in on its worker lane, and **Compare**,
+  which writes random side-by-side screenshots to `<workspace>/compare/`.
 - Default order is estimated bytes saved, descending. Manual priority overrides
   this order; Move next overrides priority within the same lane. Changing a job’s
   priority clears its Move next override. Active jobs require Stop & Skip.

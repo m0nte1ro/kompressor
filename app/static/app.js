@@ -1,10 +1,10 @@
-import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js?v=11';
-import './presets.js?v=11';
-import './settings.js?v=11';
-import './discovery.js?v=11';
-import {setupTags} from './tags.js?v=11';
-import {compressionModal} from './compression.js?v=11';
-import {renderHistory, renderQueue} from './queue.js?v=11';
+import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js?v=12';
+import './presets.js?v=12';
+import './settings.js?v=12';
+import './discovery.js?v=12';
+import {setupTags} from './tags.js?v=12';
+import {compressionModal} from './compression.js?v=12';
+import {renderAnalysis, renderHistory, renderQueue} from './queue.js?v=12';
 
 let queue = {lanes: [], history: [], pending_count: 0};
 
@@ -132,6 +132,7 @@ async function refreshQueue() {
   });
   renderQueue(queue);
   renderHistory(queue);
+  if ($('#analysis-status')) renderAnalysis(await api('/api/queue/analysis/status'));
   renderLibraryQueue();
 }
 
@@ -221,6 +222,11 @@ $('#history-rows')?.addEventListener('click', event => {
     mutate(async () => {
       await api(`/api/queue/${encodeURIComponent(row.dataset.job)}/replace-source`, {method: 'POST'});
       notify('Replacement queued on its worker lane.');
+    });
+  } else if (button.dataset.historyAction === 'compare') {
+    mutate(async () => {
+      renderAnalysis(await api(`/api/queue/${encodeURIComponent(row.dataset.job)}/compare`,
+        {method: 'POST', body: JSON.stringify({count: 6})}));
     });
   }
 });

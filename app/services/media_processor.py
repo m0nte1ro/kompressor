@@ -17,6 +17,7 @@ from app.services.library_discovery import LibraryDiscoveryService, configured_r
 from app.services.discovery import MediaScanner, ProbeService
 from app.services.tags import TagService
 from app.services.encoding_runtime import roots_overlap_workspace
+from app.services.analysis import AnalysisService
 
 
 class MediaProcessor:
@@ -24,7 +25,8 @@ class MediaProcessor:
                  queue: QueueService, scanner: MediaScanner | None, probe: ProbeService | None,
                  preferences: SQLitePreferencesRepository | None = None,
                  inventory: ReconciliationService | None = None,
-                 discovery: LibraryDiscoveryService | None = None, runtime_settings: dict | None = None):
+                 discovery: LibraryDiscoveryService | None = None, runtime_settings: dict | None = None,
+                 analysis: AnalysisService | None = None):
         self.catalog = catalog
         self.presets = presets
         self.queue = queue
@@ -33,6 +35,7 @@ class MediaProcessor:
         self.preferences = preferences
         self.inventory = inventory
         self.discovery = discovery
+        self.analysis = analysis
         self.runtime_settings = runtime_settings or {}
 
     def get_library(self):
@@ -128,6 +131,17 @@ class MediaProcessor:
 
     def replace_with_kept_output(self, job_id: str) -> dict:
         return self.queue.enqueue_replacement(job_id)
+
+    def _analysis(self) -> AnalysisService:
+        if self.analysis is None:
+            raise InvalidOperation("Comparisons and benchmarks need real filesystem encoding.")
+        return self.analysis
+
+    def compare_output(self, job_id: str, count: int = 6) -> dict:
+        return self._analysis().start_compare(job_id, count)
+
+    def get_analysis_status(self) -> dict:
+        return self.analysis.status() if self.analysis else {"state": "unavailable"}
 
     def stop_job(self, job_id: str):
         self.queue.skip(job_id)

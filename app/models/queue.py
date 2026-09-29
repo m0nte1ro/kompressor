@@ -72,6 +72,9 @@ class QueueJob(BaseModel):
     # instead of encoding again.
     reuse_output_path: str | None = None
     replaces_job_id: str | None = None
+    # Latest History quality tools run on a kept output (see services/analysis.py).
+    comparison: dict | None = None
+    vmaf: dict | None = None
     estimate_basis: str = "bitrate"
     estimated_saving_low: int | None = None
     estimated_saving_high: int | None = None

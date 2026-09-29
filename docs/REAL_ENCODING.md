@@ -173,6 +173,28 @@ deleted and the original History row notes that its output was moved into the
 source. On any failure the kept output stays in the workspace and can be retried.
 An item with another queued or active job cannot be replaced from History.
 
+## History quality tools
+
+Completed keep-original encodes (output still in the workspace, source unchanged
+since encoding) offer read-only quality tools in History. They run one at a time in
+a background thread of the WebUI process under `nice -n 19`. They only read the source
+and output, and write only below `<workspace>/compare/<name>-<job>/`. Progress and the
+latest result show above the History table; results are saved on the job.
+
+**Compare** takes six random frames between 5% and 95% of the source. Each is a PNG
+with the source on the left and the output on the right, at the source's resolution
+and the same timestamp:
+`<workspace>/compare/<name>-<job>/compare-<UTC time>/01_00h12m03.417s_source-left_output-right.png`.
+Untagged sources that the encoder assumed SDR get the same colour tags stamped before the
+RGB conversion, so both halves use the same matrix. Look at textures, faces, dark
+areas and gradients at 100%; still frames cannot show motion artefacts.
+
+The same screenshots from a shell (same command builder; progress printed per frame):
+
+```sh
+.venv/bin/python -m app.tools.compare "$SRC" "$OUT" --count 6 --out /mnt/kompressor/compare/manual
+```
+
 ### Manual CT checks for replacement
 
 Run as the service user in CT 110. They leave progress visible, per the other CT checks.

@@ -1,6 +1,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, Response
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.dependencies import Processor
 from app.models.queue import EnqueueRequest, PriorityRequest
@@ -81,6 +82,21 @@ def move_next(processor: Processor, job_id: str) -> Response:
 @router.post("/{job_id}/replace-source", status_code=201)
 def replace_source(processor: Processor, job_id: str) -> dict:
     return processor.replace_with_kept_output(job_id)
+
+
+class CompareRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    count: int = Field(default=6, ge=1, le=20)
+
+
+@router.post("/{job_id}/compare", status_code=202)
+def compare(processor: Processor, job_id: str, payload: CompareRequest | None = None) -> dict:
+    return processor.compare_output(job_id, (payload or CompareRequest()).count)
+
+
+@router.get("/analysis/status")
+def analysis_status(processor: Processor) -> dict:
+    return processor.get_analysis_status()
 
 
 @router.post("/{job_id}/skip", status_code=204)

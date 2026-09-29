@@ -8,6 +8,7 @@ from app.models.inventory import SourceReference
 from app.models.media import Episode, Movie
 from app.models.queue import QueueJob
 from app.services.encoding_capability import CPUEncodeCapability, GPUEncodeCapability, MediaItem
+from app.services.analysis import AnalysisTarget
 from app.services.errors import Conflict
 from app.services.source_guard import SourceGuard
 from app.services.filesystem_source import FilesystemObservationSource
@@ -21,6 +22,12 @@ if TYPE_CHECKING:
 
 
 Backend = Literal["cpu", "qsv"]
+
+
+def _primary_video(item: MediaItem):
+    if item.probe is None:
+        return None
+    return next((s for s in item.probe.streams if s.kind == "video" and not s.dispositions.get("attached_pic")), None)
 log = logging.getLogger(__name__)
 
 
@@ -296,6 +303,23 @@ class RealEncoderWorker:
             raise Conflict("Kept output failed validation: " + "; ".join(errors))
         self.guard.before_processing(reference)
         self._replace_source(job, reference, item, capability, source_path, output, output.stat().st_size)
+
+    def analysis_target(self, job: QueueJob, item: MediaItem) -> AnalysisTarget:
+        """Read-only pair for comparisons: only while the source is still the encoded revision."""
+        assert job.output_path is not None
+        try:
+            output = self.encoder.kept_output(job.id, job.output_path)
+        except FFmpegError as error:
+            raise Conflict(str(error)) from error
+        reference = job.source_reference
+        if reference is None or self.source.reference_for(item.id, reference.revision_id) != reference:
+            raise Conflict("The source changed since this output was encoded; comparisons would be meaningless.")
+        source = self.source.path_for(reference)
+        video = _primary_video(item)
+        if source is None or video is None or item.duration_seconds is None:
+            raise Conflict("The source file, its video stream or its duration is unavailable.")
+        return AnalysisTarget(job_id=job.id, name=job.name, source=source, output=output,
+                              duration=item.duration_seconds, video=video)
 
     def discard_kept_output(self, job: QueueJob) -> None:
         """Remove a kept output once it has been moved into its source (by copy)."""

@@ -108,12 +108,36 @@ export function keptOutput(job) {
     && !job.source_replaced && Boolean(job.output_path);
 }
 
+function analysisResults(job) {
+  const lines = [];
+  if (job.comparison) {
+    lines.push(`Screenshots (${job.comparison.files.length}): <code>${esc(job.comparison.folder)}</code>`);
+  }
+  return lines.map(line => `<small>${line}</small>`).join('');
+}
+
 function historyActions(job, pending) {
-  if (!keptOutput(job)) return '';
+  if (!keptOutput(job)) return analysisResults(job);
   const replacing = pending.some(other => other.replaces_job_id === job.id);
   return `<div class="job-controls">${replacing
     ? '<span class="badge blue">Replacement queued</span>'
-    : '<button class="danger" data-history-action="replace">Replace source</button>'}</div>`;
+    : '<button class="danger" data-history-action="replace">Replace source</button>'}
+    <button data-history-action="compare" title="Random side-by-side screenshots: source left, output right">Compare</button></div>
+    ${analysisResults(job)}`;
+}
+
+export function renderAnalysis(status) {
+  const box = $('#analysis-status');
+  if (!box) return;
+  const labels = {comparison: 'Comparison screenshots'};
+  const what = `${labels[status.kind] ?? 'Analysis'} · ${status.name ?? ''}`;
+  const text = status.state === 'running' ? `${what} · ${Math.round(status.progress ?? 0)}%…`
+    : status.state === 'completed' && status.kind === 'comparison' ? `${what} · saved to ${status.result.folder}`
+    : status.state === 'failed' || status.state === 'cancelled' ? `${what} · ${status.state}: ${status.error}`
+    : '';
+  box.textContent = text;
+  box.hidden = !text;
+  box.classList.toggle('error', status.state === 'failed');
 }
 
 export function renderHistory(queue) {

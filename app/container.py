@@ -33,6 +33,7 @@ from app.services.source_guard import SourceGuard
 from app.workers.ffmpeg import FFmpegEncoder
 from app.workers.real import RealEncoderWorker
 from app.services.presets import PresetService
+from app.services.analysis import AnalysisService
 
 
 def build_media_processor(config: Settings, database_path: Path | None = None, *,
@@ -123,6 +124,10 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
         queue.recover()
     elif process_role == "worker":
         queue.recover(backends={worker_backend})
+    # History quality tools are read-only and run in the WebUI process.
+    analysis = (AnalysisService(config.ffmpeg_binary, config.workspace_root / "compare",
+                                queue.analysis_target, queue.record_analysis)
+                if isinstance(worker, RealEncoderWorker) and process_role == "web" else None)
     return MediaProcessor(
         catalog,
         PresetService(presets, database.transaction),
@@ -132,6 +137,7 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
         preferences=preferences,
         inventory=reconciliation,
         discovery=discovery,
+        analysis=analysis,
         runtime_settings={"media_backend": "filesystem" if discovery else "seed", "database_path": str(db_path),
                           "ffprobe_timeout": config.ffprobe_timeout, **diagnostics},
     )

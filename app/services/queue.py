@@ -235,6 +235,28 @@ class QueueService:
             wake()
         return job.model_dump()
 
+    def analysis_target(self, job_id: str):
+        """Source/output pair of a kept keep-original output, for History quality tools."""
+        job = self._find(job_id)
+        if (job.execution_mode != "real" or job.status != "completed" or job.replace_source
+                or job.source_replaced or not job.output_path):
+            raise QueueConflict("Comparisons need a completed keep-original encode whose output is still kept.")
+        resolve = getattr(self.worker, "analysis_target", None)
+        if resolve is None:
+            raise InvalidOperation("Comparisons need real filesystem encoding.")
+        return resolve(job, self.catalog.find(job.media_id, job.scope).item)
+
+    def record_analysis(self, job_id: str, kind: str, result: dict) -> None:
+        with self.lock, self.repository.transaction():
+            job = self._find(job_id)
+            if kind == "comparison":
+                job.comparison = result
+            elif kind == "vmaf":
+                job.vmaf = result
+            else:
+                raise InvalidOperation(f"Unknown analysis kind: {kind}")
+            self.repository.save(job)
+
     def mark_output_used(self, kept_job_id: str, replacement_job_id: str) -> None:
         with self.lock, self.repository.transaction():
             kept = self._find(kept_job_id)
