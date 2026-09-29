@@ -195,6 +195,31 @@ def test_probe_bridge_preserves_interlace_and_hdr_safety(config, monkeypatch, na
             assert any('Dolby Vision' in r for r in result['reasons'])
 
 
+def test_rescan_reprobes_replaced_file_and_updates_codec_in_ui(config, probe):
+    with TestClient(create_app(config=config)) as client:
+        scan(client)
+        old = client.get('/api/library').json()['movies'][0]
+        assert old['video_codec'] == 'h264'
+
+        path = Path(old['path'])
+        path.write_bytes(b'encoded replacement with a different inode size and codec')
+        hevc = probe.return_value.model_copy(deep=True)
+        hevc.streams = [
+            stream.model_copy(update={'codec': 'hevc'}) if stream.kind == 'video' else stream
+            for stream in hevc.streams
+        ]
+        probe.side_effect = lambda _path: hevc.model_copy(deep=True)
+
+        report = scan(client).json()
+        assert report['state'] == 'completed'
+        new = client.get('/api/library').json()['movies'][0]
+        assert new['id'] == old['id']
+        assert new['revision_id'] != old['revision_id']
+        assert new['video_codec'] == 'hevc'
+        html = client.get('/movies').text
+        assert 'HEVC' in html
+
+
 def test_probe_failure_after_change_does_not_reuse_old_metadata(config, probe):
     with TestClient(create_app(config=config)) as client:
         scan(client)
