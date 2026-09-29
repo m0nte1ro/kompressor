@@ -142,13 +142,22 @@ class SourceReplacer:
                 destination.write(chunk)
             destination.flush()
             os.fsync(destination.fileno())
-        # Same owner/group/mode as the original, so library managers can keep
-        # upgrading or deleting it. Refuse rather than leave a foreign-owned file.
+        # Preserve the original mode. Ownership preservation is best-effort:
+        # unprivileged containers can be allowed to create/rename files through
+        # bind-mount ACLs while still being forbidden from chowning them to the
+        # source UID/GID. That must not block an otherwise safe replacement.
+        ownership_note = None
         try:
             os.chown(incoming, source.st_uid, source.st_gid)
+        except OSError as error:
+            ownership_note = (
+                "Source replaced, but owner/group could not be preserved "
+                f"({error}); the replacement keeps Kompressor's created ownership."
+            )
+        try:
             os.chmod(incoming, stat.S_IMODE(source.st_mode))
         except OSError as error:
-            raise ReplacementAborted(f"Could not give the replacement the source's owner and mode: {error}") from error
+            raise ReplacementAborted(f"Could not give the replacement the source's mode: {error}") from error
         copied = incoming.lstat()
         journal.incoming_device, journal.incoming_inode = copied.st_dev, copied.st_ino
         save(journal)
@@ -186,7 +195,7 @@ class SourceReplacer:
         save(journal)
 
         # 4. The replacement is verified; the backup can go.
-        notes = []
+        notes = [ownership_note] if ownership_note else []
         if _identity(backup) == (journal.source_device, journal.source_inode):
             try:
                 backup.unlink()
