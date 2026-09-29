@@ -11,7 +11,7 @@ from app.services.encoding_capability import CPUEncodeCapability, GPUEncodeCapab
 from app.services.errors import Conflict
 from app.services.source_guard import SourceGuard
 from app.services.filesystem_source import FilesystemObservationSource
-from app.workers.ffmpeg import EncodingCancelled, FFmpegEncoder
+from app.workers.ffmpeg import EncodingCancelled, FFmpegEncoder, FFmpegError
 from app.workers.replacement import SourceReplacer, replacement_reasons
 
 if TYPE_CHECKING:
@@ -235,6 +235,9 @@ class RealEncoderWorker:
             raise Conflict("Current source path is unavailable.")
         if item.probe is None:
             raise Conflict("Source technical metadata is unavailable.")
+        if job.reuse_output_path is not None:
+            self._replace_with_kept_output(job, reference, item, capability, source_path)
+            return
 
         output = self.encoder.encode(
             job, source_path, item.probe,
@@ -272,24 +275,63 @@ class RealEncoderWorker:
                 return
         self._replace_source(job, reference, item, capability, source_path, final_path, size)
 
+    def _replace_with_kept_output(self, job: QueueJob, reference: SourceReference, item: MediaItem,
+                                  capability, source_path: Path) -> None:
+        """History "Replace source": the full output checks again, then the normal swap."""
+        queue = self.queue
+        assert queue is not None and item.probe is not None
+        assert job.reuse_output_path is not None and job.replaces_job_id is not None
+        output = self.encoder.kept_output(job.replaces_job_id, job.reuse_output_path)
+        if not queue.set_real_validating(job.id, str(output)):
+            raise EncodingCancelled("Job was stopped before output validation.")
+        output_probe = self.probe.inspect(output)
+        with self._lock:
+            if job.id in self._cancelled or self._stop.is_set():
+                raise EncodingCancelled("Stopped during output validation.")
+        errors = capability.validate_output(item, job, output_probe, output)
+        if not errors:
+            errors = self.encoder.copied_audio_mismatches(job, source_path, item.probe, output, output_probe)
+        if errors:
+            queue.record_validation_errors(job.id, errors)
+            raise Conflict("Kept output failed validation: " + "; ".join(errors))
+        self.guard.before_processing(reference)
+        self._replace_source(job, reference, item, capability, source_path, output, output.stat().st_size)
+
+    def discard_kept_output(self, job: QueueJob) -> None:
+        """Remove a kept output once it has been moved into its source (by copy)."""
+        if job.reuse_output_path is None or job.replaces_job_id is None:
+            return
+        try:
+            self.encoder.kept_output(job.replaces_job_id, job.reuse_output_path).unlink()
+        except (OSError, FFmpegError):
+            pass
+
     def _replace_source(self, job: QueueJob, reference: SourceReference, item: MediaItem,
                         capability, source_path: Path, output_path: Path, size: int) -> None:
         queue = self.queue
         assert queue is not None
+        reused = job.reuse_output_path is not None
         saving = job.source_size - size
         percent = saving / job.source_size * 100 if job.source_size else 0.0
         minimum = job.preset.minimum_expected_saving_percent
-        if saving <= 0 or percent < minimum:
-            self.encoder.cleanup(job.id, remove_final=True)
-            if not queue.skip_real_job(job.id, size, (
-                    f"Measured saving {percent:.1f}% is below the preset minimum of {minimum:g}%. "
-                    "The source was kept and the output discarded.")):
+        # A History replacement is an explicit choice after seeing the measured
+        # result, so only "must be smaller" applies; encodes use the preset minimum.
+        if saving <= 0 or (not reused and percent < minimum):
+            if reused:
+                reason = (f"The kept output is not smaller than the source ({percent:.1f}% saving). "
+                          "The source and the kept output were left unchanged.")
+            else:
+                self.encoder.cleanup(job.id, remove_final=True)
+                reason = (f"Measured saving {percent:.1f}% is below the preset minimum of {minimum:g}%. "
+                          "The source was kept and the output discarded.")
+            if not queue.skip_real_job(job.id, size, reason):
                 raise EncodingCancelled("Job was stopped before the saving check was persisted.")
             return
         journal = self.replacer.plan(job.id, source_path, size)
         # From here the job cannot be stopped: Stop & Skip is refused while replacing.
         if not queue.set_real_replacing(job.id, journal):
-            self.encoder.cleanup(job.id, remove_final=True)
+            if not reused:
+                self.encoder.cleanup(job.id, remove_final=True)
             raise EncodingCancelled("Job was stopped before source replacement.")
 
         def verify(path: Path) -> list[str]:
@@ -302,7 +344,12 @@ class RealEncoderWorker:
             should_abort=self._stop.is_set)
         if not queue.complete_real_job(job.id, str(source_path), size, source_replaced=True, notes=notes):
             raise RuntimeError("The source was replaced, but completion could not be recorded.")
-        self.encoder.cleanup(job.id, remove_final=True)
+        if reused:
+            assert job.replaces_job_id is not None
+            self.discard_kept_output(job)
+            queue.mark_output_used(job.replaces_job_id, job.id)
+        else:
+            self.encoder.cleanup(job.id, remove_final=True)
 
     def advance(self, job: QueueJob, seconds: float) -> None:
         raise RuntimeError("The real worker is driven by its background thread, not fake ticks.")

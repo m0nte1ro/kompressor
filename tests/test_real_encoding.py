@@ -454,7 +454,7 @@ def build_real_app(tmp_path, monkeypatch, source_probe, output_probe=None, *, ex
     })
 
     def inspect(self, path):
-        if ".kompressor.partial.mkv" in path.name and output_probe:
+        if ".kompressor" in path.name and output_probe:  # partial or kept workspace output
             return output_probe
         # After an in-place replacement the source path holds the (smaller) output.
         if path == source and output_probe and path.stat().st_size == output_size:

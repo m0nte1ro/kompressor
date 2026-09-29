@@ -109,6 +109,23 @@ class FFmpegEncoder:
         self._cancelled: set[str] = set()
         self._paths: dict[str, tuple[Path, Path]] = {}
 
+    def kept_output(self, job_id: str, path: str) -> Path:
+        """A completed keep-original output, confirmed to be that job's own workspace file."""
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", job_id):
+            raise FFmpegError("Job ID is not a safe workspace directory name.")
+        jobs_root = self.workspace_root / "jobs"
+        job_dir = jobs_root / job_id
+        candidate = Path(path)
+        if (self.workspace_root.is_symlink() or jobs_root.is_symlink() or job_dir.is_symlink()
+                or candidate.is_symlink() or not candidate.name.endswith(".kompressor.mkv")
+                or candidate.name.endswith(".kompressor.partial.mkv")
+                or candidate.parent.resolve() != job_dir.resolve()
+                or not job_dir.resolve().is_relative_to(jobs_root.resolve())):
+            raise FFmpegError("The kept output is not a Kompressor workspace output of that job.")
+        if not candidate.is_file():
+            raise FFmpegError("The kept output is no longer in the workspace.")
+        return candidate
+
     def paths(self, job: QueueJob, source_path: Path) -> tuple[Path, Path]:
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", job.id):
             raise FFmpegError("Job ID is not a safe workspace directory name.")

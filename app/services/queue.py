@@ -188,6 +188,60 @@ class QueueService:
                 wake()
         return {"added": added, "excluded": excluded}
 
+    def enqueue_replacement(self, job_id: str) -> dict:
+        """Queue a replace-only job that swaps a kept, validated output into its source.
+
+        The lane worker re-validates the kept output (including the bit-exact audio
+        check) and re-checks the source before the same journalled swap a replace
+        encode uses. Nothing is re-encoded.
+        """
+        if not getattr(self.worker, "filesystem_mode", False):
+            raise InvalidOperation("Replacing from History needs real filesystem encoding.")
+        if not getattr(self.worker, "enabled", False):
+            raise InvalidOperation("Real encoding is unavailable: " + (
+                getattr(self.worker, "unavailable_reason", None) or "runtime prerequisites failed."))
+        with self.lock, self.repository.transaction():
+            kept = self._find(job_id)
+            if (kept.execution_mode != "real" or kept.status != "completed" or kept.replace_source
+                    or kept.source_replaced or not kept.output_path):
+                raise QueueConflict("Only completed keep-original real encodes with a kept output can replace their source.")
+            jobs = self.repository.get_all()
+            if any(j.media_id == kept.media_id and j.scope == kept.scope and j.status in PENDING for j in jobs):
+                raise QueueConflict("This item already has a queued or active job.")
+            if kept.backend not in self.supported_backends:
+                raise QueueConflict(f"The {'GPU' if kept.backend == 'qsv' else 'CPU'} worker lane is not available.")
+            job = kept.model_copy(deep=True, update={
+                "id": str(uuid4()), "status": "queued", "created_at": now(), "started_at": None,
+                "finished_at": None, "progress": 0, "progress_known": False, "elapsed_seconds": 0,
+                "reasons": [], "output_path": None, "output_size": None, "measured_saving": None,
+                "error_message": None, "ffmpeg_exit_code": None, "validation_errors": [],
+                "cancel_requested": False, "cancel_reason": None, "replacement": None,
+                "source_replaced": False, "move_next_order": 0, "replace_source": True,
+                "reuse_output_path": kept.output_path, "replaces_job_id": kept.id,
+            })
+            entry = self.catalog.find(job.media_id, job.scope)
+            result = self.catalog.evaluate(entry, job.preset, job.requested_preserve_audio, job.preserve_subtitles)
+            reasons = list(result.reasons)
+            if result.preserve_audio != job.preserve_audio:
+                reasons.append("The audio policy changed since this output was encoded; encode again instead.")
+            capability_check = getattr(self.worker, "enqueue_reasons", None)
+            if capability_check:
+                reasons.extend(capability_check(entry.item, job))
+            if reasons:
+                raise QueueConflict("Cannot replace the source: " + " ".join(dict.fromkeys(reasons)))
+            self.repository.add(job)
+        wake = getattr(self.worker, "wake", None)
+        if wake:
+            wake()
+        return job.model_dump()
+
+    def mark_output_used(self, kept_job_id: str, replacement_job_id: str) -> None:
+        with self.lock, self.repository.transaction():
+            kept = self._find(kept_job_id)
+            kept.output_path = None
+            kept.reasons = [*kept.reasons, "This kept output was moved into the source from History."]
+            self.repository.save(kept)
+
     def _find(self, job_id: str) -> QueueJob:
         job = next((j for j in self.repository.get_all() if j.id == job_id), None)
         if job is None:
@@ -326,6 +380,11 @@ class QueueService:
                     current.error_message = ("Worker stopped during source replacement. " + detail
                                              + ("" if outcome == "manual" else " Submit the job again."))
                 self.repository.save(current)
+            if outcome == "replaced" and job.reuse_output_path and job.replaces_job_id:
+                discard = getattr(self.worker, "discard_kept_output", None)
+                if discard:
+                    discard(job)
+                self.mark_output_used(job.replaces_job_id, job.id)
             if outcome != "manual":
                 cleanup = getattr(self.worker, "cleanup_interrupted", None)
                 if cleanup:

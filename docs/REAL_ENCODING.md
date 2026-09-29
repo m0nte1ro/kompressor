@@ -153,6 +153,26 @@ If the worker is stopped during the copy, the job fails with the original untouc
 The systemd stop timeout (15 s) can interrupt a long copy; recovery handles it the
 same way.
 
+### Replacing a kept output from History
+
+A completed keep-original job keeps its validated MKV under
+`<workspace>/jobs/<job-id>/`. History shows **Replace source** for it. After a
+confirmation, this queues a replace-only job on the same worker lane
+(`POST /api/queue/{job_id}/replace-source`). The worker does not encode again. It:
+
+- confirms the kept file is that job's own workspace output;
+- re-runs policy, capability and output validation, including the bit-exact audio check;
+- re-checks the source against the identity captured when the output was encoded
+  (a source changed since then, e.g. upgraded by Sonarr, fails the job);
+- runs the same journalled swap as above.
+
+Because the choice is explicit and made after seeing the measured result, the
+preset's minimum saving is not applied. The output must still be smaller than the
+source, or the job is skipped and nothing changes. On success the kept output is
+deleted and the original History row notes that its output was moved into the
+source. On any failure the kept output stays in the workspace and can be retried.
+An item with another queued or active job cannot be replaced from History.
+
 ### Manual CT checks for replacement
 
 Run as the service user in CT 110. They leave progress visible, per the other CT checks.

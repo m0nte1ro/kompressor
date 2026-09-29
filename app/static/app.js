@@ -1,10 +1,10 @@
-import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js?v=10';
-import './presets.js?v=10';
-import './settings.js?v=10';
-import './discovery.js?v=10';
-import {setupTags} from './tags.js?v=10';
-import {compressionModal} from './compression.js?v=10';
-import {renderHistory, renderQueue} from './queue.js?v=10';
+import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js?v=11';
+import './presets.js?v=11';
+import './settings.js?v=11';
+import './discovery.js?v=11';
+import {setupTags} from './tags.js?v=11';
+import {compressionModal} from './compression.js?v=11';
+import {renderHistory, renderQueue} from './queue.js?v=11';
 
 let queue = {lanes: [], history: [], pending_count: 0};
 
@@ -207,6 +207,22 @@ $('#queue-lanes')?.addEventListener('change', event => {
   if (!event.target.matches('[data-priority]')) return;
   const jobId = event.target.closest('[data-job]').dataset.job;
   mutate(() => queueAction(jobId, 'priority', event.target.value));
+});
+
+$('#history-rows')?.addEventListener('click', event => {
+  const button = event.target.closest('[data-history-action]');
+  if (!button) return;
+  const row = button.closest('[data-job]');
+  if (button.dataset.historyAction === 'replace') {
+    const confirmed = window.confirm(`Replace the source of “${row.dataset.name}” with this kept output?\n\n`
+      + 'The output is validated again (including a bit-exact audio check) and the source is re-checked first. '
+      + 'The original is deleted only after the replaced file is verified.');
+    if (!confirmed) return;
+    mutate(async () => {
+      await api(`/api/queue/${encodeURIComponent(row.dataset.job)}/replace-source`, {method: 'POST'});
+      notify('Replacement queued on its worker lane.');
+    });
+  }
 });
 
 document.addEventListener('click', event => {

@@ -68,6 +68,10 @@ class QueueJob(BaseModel):
     replace_source: bool = False
     replacement: ReplacementJournal | None = None
     source_replaced: bool = False
+    # History "Replace source": this job swaps in the kept output of replaces_job_id
+    # instead of encoding again.
+    reuse_output_path: str | None = None
+    replaces_job_id: str | None = None
     estimate_basis: str = "bitrate"
     estimated_saving_low: int | None = None
     estimated_saving_high: int | None = None

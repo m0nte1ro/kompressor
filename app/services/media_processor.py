@@ -126,6 +126,9 @@ class MediaProcessor:
     def move_job_next(self, job_id: str):
         self.queue.prioritize(job_id)
 
+    def replace_with_kept_output(self, job_id: str) -> dict:
+        return self.queue.enqueue_replacement(job_id)
+
     def stop_job(self, job_id: str):
         self.queue.skip(job_id)
 

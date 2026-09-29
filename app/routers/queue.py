@@ -78,6 +78,11 @@ def move_next(processor: Processor, job_id: str) -> Response:
     return Response(status_code=204)
 
 
+@router.post("/{job_id}/replace-source", status_code=201)
+def replace_source(processor: Processor, job_id: str) -> dict:
+    return processor.replace_with_kept_output(job_id)
+
+
 @router.post("/{job_id}/skip", status_code=204)
 def skip(processor: Processor, job_id: str) -> Response:
     processor.stop_job(job_id)

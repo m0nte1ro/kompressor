@@ -26,6 +26,7 @@ function jobDetails(job) {
   const source = job.execution_mode !== 'real'
     ? job.replace_source ? 'Replace after validation · simulated only' : 'Keep original · simulated test copy'
     : job.source_replaced ? `Source replaced · ${esc(job.output_path)}`
+    : job.reuse_output_path ? 'Replace source with the kept output after re-validation'
     : job.replace_source ? 'Replace source after validation and bit-exact audio check'
     : `Keep original · output ${esc(job.output_path || 'in workspace after validation')}`;
   return `<div class="job-name">${esc(job.name)}</div>
@@ -101,10 +102,25 @@ export function renderQueue(queue) {
   }
 }
 
+// Completed keep-original real encodes whose output is still in the workspace.
+export function keptOutput(job) {
+  return job.execution_mode === 'real' && job.status === 'completed' && !job.replace_source
+    && !job.source_replaced && Boolean(job.output_path);
+}
+
+function historyActions(job, pending) {
+  if (!keptOutput(job)) return '';
+  const replacing = pending.some(other => other.replaces_job_id === job.id);
+  return `<div class="job-controls">${replacing
+    ? '<span class="badge blue">Replacement queued</span>'
+    : '<button class="danger" data-history-action="replace">Replace source</button>'}</div>`;
+}
+
 export function renderHistory(queue) {
   const rows = $('#history-rows');
   if (!rows) return;
-  const key = JSON.stringify(queue.history);
+  const pending = queue.lanes.flatMap(lane => [...(lane.active ? [lane.active] : []), ...lane.queued]);
+  const key = JSON.stringify([queue.history, pending.map(job => job.replaces_job_id)]);
   if (rows.dataset.rendered === key) return;
   rows.dataset.rendered = key;
   const completed = queue.history.filter(j => j.status === 'completed');
@@ -133,7 +149,7 @@ export function renderHistory(queue) {
       .map(message => `<small class="reason">${esc(message)}</small>`).join('');
     const outputPath = job.output_path ? `<small><code>${esc(job.output_path)}</code></small>` : '';
     const finished = job.finished_at ? new Date(job.finished_at).toLocaleString() : '—';
-    return `<tr data-sort-name="${esc(job.name)}" data-sort-status="${esc(job.status)}"
+    return `<tr data-job="${esc(job.id)}" data-name="${esc(job.name)}" data-sort-name="${esc(job.name)}" data-sort-status="${esc(job.status)}"
       data-sort-preset="${esc(job.preset.name)}" data-sort-source="${job.source_size ?? 0}"
       data-sort-output="${actualOutput ? job.output_size : outputEstimate}" data-sort-saving="${actualSaving ? job.measured_saving : planningSaving(job)}"
       data-sort-video="${esc(job.source_codec)}" data-sort-elapsed="${job.elapsed_seconds ?? 0}"
@@ -146,7 +162,8 @@ export function renderHistory(queue) {
     <td class="saving">${savingText}</td>
     <td>${esc(label(job.source_codec))} → ${esc(label(job.preset.destination_codec))}</td>
     <td>${esc(duration(job.elapsed_seconds))}</td><td>${esc(finished)}</td>
+    <td>${historyActions(job, pending)}</td>
   </tr>`;
-  }).join('') || '<tr><td colspan="9" class="empty">No completed or stopped jobs yet. Add jobs from Movies or Shows to get started.</td></tr>';
+  }).join('') || '<tr><td colspan="10" class="empty">No completed or stopped jobs yet. Add jobs from Movies or Shows to get started.</td></tr>';
   window.dispatchEvent(new CustomEvent('table-updated', {detail: {table: rows.closest('table')}}));
 }
