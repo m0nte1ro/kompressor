@@ -10,6 +10,7 @@
   <div class="card stat"><span>Blocked</span><strong>{{ rows | length - eligible | length }}</strong><small>Reasons shown below</small></div>
 </section>
 {% if scope == 'show' %}<a class="button back" href="/shows">← All shows</a> <button data-tag-kind="show" data-tag-id="{{ show.id }}">Manage series tags</button>{% endif %}
+{% if media_backend == 'filesystem' %}<button class="button" data-scan-library>Rescan library</button>{% endif %}
 <section id="library" data-scope="{{ scope }}" data-media-backend="{{ media_backend }}" aria-label="Media library">
   <div class="toolbar">
     <div class="filters">
