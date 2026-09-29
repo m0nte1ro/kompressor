@@ -3,7 +3,7 @@ import {$, $$, api} from './common.js';
 let version = null;
 let busy = false;
 let stopped = false;
-const button = $('#scan-library');
+const buttons = $('[data-scan-library]');
 const live = $('#discovery-status');
 const isLibrary = ['movies', 'shows'].includes(document.body.dataset.page);
 
@@ -43,7 +43,7 @@ function showReport(report) {
     : `Library scan ${report.state} · ${report.roots.reduce((sum, root) => sum + root.discovered, 0)} files.${report.error ? ` ${report.error}` : ''}`;
   live.hidden = ['idle', 'disabled'].includes(report.state);
   live.textContent = text;
-  if (button) button.disabled = report.state === 'running';
+  buttons.forEach(button => { button.disabled = report.state === 'running'; });
   if ($('#scan-status')) $('#scan-status').textContent = text;
   const errors = $('#scan-errors');
   if (errors) {
@@ -62,16 +62,21 @@ function showReport(report) {
   }
 }
 
-button?.addEventListener('click', async () => {
-  button.disabled = true;
+buttons.forEach(button => button.addEventListener('click', async () => {
+  buttons.forEach(item => { item.disabled = true; });
   try {
     showReport(await api('/api/library/scan', {method: 'POST'}));
     version = null;
   } catch (error) {
-    $('#scan-status').textContent = error.message;
-    button.disabled = false;
+    const status = $('#scan-status');
+    if (status) status.textContent = error.message;
+    else {
+      live.hidden = false;
+      live.textContent = error.message;
+    }
+    buttons.forEach(item => { item.disabled = false; });
   }
-});
+}));
 
 async function poll() {
   if (busy || stopped) return;
