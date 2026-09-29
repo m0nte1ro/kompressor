@@ -152,3 +152,9 @@ def test_show_seasons_have_select_all_controls(client, catalog):
     assert 'class="season-select" data-season="3"' in html
     assert 'class="season-select" data-season="4"' in html
     assert 'aria-label="Select all episodes in season 3"' in html
+
+
+def test_discovery_script_uses_multi_button_selector_and_declares_manual_scan_state(client):
+    script = client.get("/static/discovery.js").text
+    assert "const buttons = $$('[data-scan-library]');" in script
+    assert "let manualScanRequested = false;" in script
