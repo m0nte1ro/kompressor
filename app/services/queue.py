@@ -5,7 +5,7 @@ from typing import Literal
 from uuid import uuid4
 
 from app.services.errors import Conflict, InvalidOperation, NotFound
-from app.models.queue import EnqueueRequest, Priority, QueueJob
+from app.models.queue import EnqueueRequest, Priority, QueueJob, ReplacementJournal
 from app.models.preferences import WorkerSettings
 from app.repositories.base import QueueRepository
 from app.services.catalog import CatalogService
@@ -13,7 +13,8 @@ from app.services.worker_control import WorkerControlService
 from app.workers.base import EncoderWorker
 
 
-ACTIVE = {"encoding", "validating", "stopping"}
+# "replacing" is active but never stoppable: the source swap must run to a known state.
+ACTIVE = {"encoding", "validating", "replacing", "stopping"}
 PENDING = {"queued", *ACTIVE}
 PRIORITIES = {"urgent": 3, "high": 2, "normal": 1, "low": 0}
 
@@ -220,6 +221,9 @@ class QueueService:
         job.cancel_reason = reason
 
     def skip(self, job_id: str, reason: str = "user_stop") -> None:
+        if self._find(job_id).status == "replacing":
+            raise QueueConflict("The source is being replaced and cannot be interrupted. "
+                                "The job finishes, or rolls back to the original, on its own.")
         if self._find_external_active(job_id):
             # The HTTP process does not own the ffmpeg subprocess. Persist the
             # cancellation request; the standalone worker observes it and stops
@@ -228,6 +232,8 @@ class QueueService:
                 job = self._find(job_id)
                 if job.status == "completed":
                     raise QueueConflict("The job completed before Stop & Skip took effect.")
+                if job.status == "replacing":
+                    raise QueueConflict("The source is being replaced and cannot be interrupted.")
                 if job.status not in ACTIVE:
                     raise QueueConflict("Only active jobs can be stopped and skipped.")
                 if job.status != "stopping":
@@ -281,13 +287,60 @@ class QueueService:
                     self.repository.save(job)
             self._start_idle_lanes()
 
+    def _recover_replacements(self, backends: set[str] | frozenset[str] | None) -> None:
+        """Resolve interrupted source swaps before any other recovery.
+
+        Filesystem work happens outside the database transaction. A job is never
+        requeued from here: the original is either untouched/restored (failed,
+        resubmit), the verified replacement is in place (completed), or the state
+        is unknown and left for manual review (failed, nothing changed).
+        """
+        resolve = getattr(self.worker, "recover_replacement", None)
+        if resolve is None:
+            return
+        for job in self.repository.get_all():
+            if job.status != "replacing" or (backends is not None and job.backend not in backends):
+                continue
+            if job.replacement is None:
+                outcome, detail = "untouched", "No replacement step had been recorded."
+            else:
+                outcome, detail = resolve(job)
+            with self.lock, self.repository.transaction():
+                current = self._find(job.id)
+                if current.status != "replacing":
+                    continue
+                current.finished_at = now()
+                if outcome == "replaced":
+                    current.status = "completed"
+                    current.source_replaced = True
+                    current.output_path = current.replacement.target if current.replacement else None
+                    current.output_size = current.replacement.output_size if current.replacement else None
+                    current.measured_saving = (current.source_size - current.output_size
+                                               if current.output_size is not None else None)
+                    current.reasons = [*current.reasons, "Completed after a worker restart. " + detail]
+                else:
+                    current.status = "failed"
+                    current.output_path = None
+                    current.output_size = None
+                    current.measured_saving = None
+                    current.error_message = ("Worker stopped during source replacement. " + detail
+                                             + ("" if outcome == "manual" else " Submit the job again."))
+                self.repository.save(current)
+            if outcome != "manual":
+                cleanup = getattr(self.worker, "cleanup_interrupted", None)
+                if cleanup:
+                    cleanup(job.id)
+
     def recover(self, backends: set[str] | frozenset[str] | None = None) -> None:
         """Recover only lanes owned by this process; seed recovery still covers all lanes."""
+        self._recover_replacements(backends)
         interrupted = []
         with self.lock, self.repository.transaction():
             for job in self.repository.get_all():
                 if backends is not None and job.backend not in backends:
                     continue
+                if job.status == "replacing":
+                    continue  # Only reachable without a replacement-aware worker; never requeue a swap.
                 if job.status == "stopping" and job.cancel_requested:
                     if job.backend in self.external_backends:
                         interrupted.append(job.id)
@@ -406,10 +459,31 @@ class QueueService:
                 job.validation_errors = errors
                 self.repository.save(job)
 
-    def complete_real_job(self, job_id: str, output_path: str, output_size: int) -> bool:
+    def set_real_replacing(self, job_id: str, journal: ReplacementJournal) -> bool:
+        """Last point at which a stop request wins; afterwards the swap is not stoppable."""
         with self.lock, self.repository.transaction():
             job = self._find(job_id)
-            if job.status != "validating" or job.cancel_requested:
+            if job.status != "validating" or job.cancel_requested or not job.replace_source:
+                return False
+            job.status = "replacing"
+            job.replacement = journal
+            self.repository.save(job)
+            return True
+
+    def update_replacement(self, job_id: str, journal: ReplacementJournal) -> None:
+        with self.lock, self.repository.transaction():
+            job = self._find(job_id)
+            if job.status != "replacing":
+                raise QueueConflict("Replacement journal update for a job that is not replacing.")
+            job.replacement = journal.model_copy(deep=True)
+            self.repository.save(job)
+
+    def complete_real_job(self, job_id: str, output_path: str, output_size: int, *,
+                          source_replaced: bool = False, notes: list[str] | None = None) -> bool:
+        with self.lock, self.repository.transaction():
+            job = self._find(job_id)
+            expected = "replacing" if source_replaced else "validating"
+            if job.status != expected or job.cancel_requested:
                 return False
             job.status = "completed"
             job.progress = 100
@@ -417,9 +491,26 @@ class QueueService:
             job.output_path = output_path
             job.output_size = output_size
             job.measured_saving = job.source_size - output_size
+            job.source_replaced = source_replaced
+            job.reasons = [*job.reasons, *(notes or [])]
             job.error_message = None
             job.cancel_requested = False
             job.cancel_reason = None
+            self.repository.save(job)
+            return True
+
+    def skip_real_job(self, job_id: str, output_size: int, reason: str) -> bool:
+        """A validated replace job whose measured saving does not justify replacement."""
+        with self.lock, self.repository.transaction():
+            job = self._find(job_id)
+            if job.status != "validating" or job.cancel_requested:
+                return False
+            job.status = "skipped"
+            job.finished_at = now()
+            job.output_path = None
+            job.output_size = output_size
+            job.measured_saving = job.source_size - output_size
+            job.reasons = [*job.reasons, reason]
             self.repository.save(job)
             return True
 
@@ -482,6 +573,8 @@ class QueueService:
                            if j.backend == backend and j.status in ACTIVE), None)
             if active is None:
                 return None
+            if active.status == "replacing":
+                return "finish"
             action = self.controls.quiet_action(backend, active)
             if action == "stop" and active.backend in self.external_backends:
                 self._request_cancel(active, "quiet_hours_cutoff")
@@ -560,7 +653,7 @@ class QueueService:
         with self.lock, self.repository.transaction():
             active = next((j for j in self.repository.get_all()
                            if j.backend == backend and j.status in ACTIVE), None)
-            job_id = active.id if active else None
+            job_id = active.id if active and active.status != "replacing" else None
         if job_id is None:
             return False
         self.skip(job_id, reason=reason)
@@ -574,15 +667,15 @@ class QueueService:
             for job in self.repository.get_all():
                 if backends is not None and job.backend not in backends:
                     continue
-                if job.status not in PENDING:
-                    continue
+                if job.status not in PENDING or job.status == "replacing":
+                    continue  # A source swap is never interrupted by policy changes.
                 before = job.model_dump()
                 result = None
                 try:
                     entry = self.catalog.find(job.media_id, job.scope)
-                    requested = job.requested_preserve_audio
+                    # The job's own request decides; None means preserve audio.
                     result = self.catalog.evaluate(entry, job.preset,
-                        job.preserve_audio if requested is None else requested, job.preserve_subtitles)
+                        job.requested_preserve_audio, job.preserve_subtitles)
                     reasons = list(result.reasons)
                     if job.execution_mode == "real":
                         # Runtime availability is checked when new work is

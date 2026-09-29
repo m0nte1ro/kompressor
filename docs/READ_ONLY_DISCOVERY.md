@@ -2,8 +2,9 @@
 
 The reconciliation milestone was closed in `f580cf4`. This milestone keeps that
 identity/revision model and adds read-only discovery/probe adapters. The separate
-[real encoding lanes](REAL_ENCODING.md) write only to the dedicated workspace;
-media roots remain read-only. This document's discovery flow does not encode,
+[real encoding lanes](REAL_ENCODING.md) write to the dedicated workspace and, for
+replace jobs only, swap a verified output into the source's directory; discovery
+itself never writes to media roots. This document's discovery flow does not encode,
 replace sources, hash media, use media servers or external metadata APIs.
 
 ## Enable and use
@@ -59,7 +60,8 @@ It includes present records from the currently configured roots. It exposes
 seed tag keys remain unchanged. Missing records/revisions stay in the reconciled
 inventory even when hidden from the active library views.
 
-Filesystem source mounts remain read-only. When ffmpeg/ffprobe/workspace
+Scanning never writes to source mounts; replace jobs need them read-write (see
+[source replacement](REAL_ENCODING.md#source-replacement)). When ffmpeg/ffprobe/workspace
 prerequisites pass, CPU jobs additionally require libx265 and GPU jobs require
 the configured render device plus hevc_vaapi. Each real lane runs in its own
 standalone worker process; unavailable lanes are reported explicitly and never

@@ -3,10 +3,16 @@ from app.models.media import spatial_resolution
 from app.models.preset import CompressionPreset
 
 
-def audio_plan(item, preset: CompressionPreset, preserve_audio: bool) -> list[dict]:
+def plan_audio_tracks(tracks, preset: CompressionPreset, preserve_audio: bool) -> list[dict]:
+    """The one copy/encode decision per audio track, in source order.
+
+    Estimates, the ffmpeg command and output validation all use this, so the
+    track that is planned as copied is the track ffmpeg copies and validation
+    checks. Tracks may be AudioTrack or probe StreamFacts (codec/channels/bitrate).
+    """
     rules = preset.efficient_audio_rules
     plan = []
-    for index, track in enumerate(item.audio):
+    for index, track in enumerate(tracks):
         if track.channels is None:
             plan.append({"track": index, "action": "copy", "codec": track.codec, "channels": None, "bitrate": track.bitrate})
             continue
@@ -28,6 +34,10 @@ def audio_plan(item, preset: CompressionPreset, preserve_audio: bool) -> list[di
                      "codec": codec if copy else rules.mono_stereo_codec if channels <= 2 else rules.multichannel_codec,
                      "channels": channels, "bitrate": bitrate if copy else target})
     return plan
+
+
+def audio_plan(item, preset: CompressionPreset, preserve_audio: bool) -> list[dict]:
+    return plan_audio_tracks(item.audio, preset, preserve_audio)
 
 
 def estimate(item, preset: CompressionPreset, preserve_audio: bool) -> dict:

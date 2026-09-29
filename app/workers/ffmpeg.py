@@ -14,6 +14,7 @@ from app.workers import vaapi
 from app.models.probe import MediaProbeResult, StreamFacts, assumed_sdr_colours
 from app.models.queue import QueueJob
 from app.services.encoding_capability import SUPPORTED_PIXEL_FORMATS
+from app.services.estimation import plan_audio_tracks
 
 
 # mkvmerge track statistics describe the source bitstream; they are stale once a
@@ -137,28 +138,6 @@ class FFmpegEncoder:
         return partial, final
 
     @staticmethod
-    def _audio_action(stream: StreamFacts, job: QueueJob) -> tuple[str, str | None, int | None, int | None]:
-        if job.preserve_audio or stream.channels is None:
-            return "copy", None, None, None
-        rules = job.preset.efficient_audio_rules
-        output_channels = stream.channels if rules.channel_handling == "preserve" else min(stream.channels, 2)
-        target = job.preset.stereo_audio_bitrate if output_channels <= 2 else job.preset.target_audio_bitrate or 640000
-        codec = stream.codec.lower()
-        should_copy = (
-            rules.channel_handling == "preserve"
-            and (
-                stream.bitrate is None and rules.copy_unknown_bitrate
-                or rules.copy_channels_above is not None and stream.channels > rules.copy_channels_above
-                or rules.copy_if_bitrate_at_or_below_target and codec in rules.copy_codecs
-                and stream.bitrate is not None and stream.bitrate <= target
-            )
-        )
-        if should_copy:
-            return "copy", None, None, None
-        output_codec = rules.mono_stereo_codec if output_channels <= 2 else rules.multichannel_codec
-        return "encode", output_codec, target, output_channels
-
-    @staticmethod
     def build_command(binary: str, job: QueueJob, source_path: Path,
                       partial_path: Path, probe: MediaProbeResult,
                       qsv_device: Path | None = None) -> list[str]:
@@ -185,9 +164,11 @@ class FFmpegEncoder:
 
         for stream in ordered:
             command.extend(["-map", f"0:{stream.index}"])
-        command.extend(["-map_metadata", "0" if job.preserve_subtitles else "-1",
-                        "-map_chapters", "0" if job.preserve_subtitles else "-1",
-                        "-c", "copy"])
+        # A bare "-map_metadata -1" also drops per-stream tags, wiping every audio
+        # track's language and title. Opting out of metadata only drops the global
+        # container tags; stream tags always follow their stream.
+        command.extend(["-map_metadata", "0"] if job.preserve_subtitles else ["-map_metadata:g", "-1"])
+        command.extend(["-map_chapters", "0" if job.preserve_subtitles else "-1", "-c", "copy"])
 
         assumed = assumed_sdr_colours(primary)
         # ffmpeg 7.1 takes primaries/transfer from the frames and negotiates
@@ -212,8 +193,8 @@ class FFmpegEncoder:
             command.extend(["-preset:v:0", job.preset.encoder_preset,
                             "-pix_fmt:v:0", "yuv420p10le" if job.preset.output_bit_depth == 10 else "yuv420p"])
         elif job.backend == "qsv":
+            source_resolution = f"{primary.resolution_class}p" if primary.resolution_class else "unknown"
             try:
-                source_resolution = f"{primary.resolution_class}p" if primary.resolution_class else "unknown"
                 nominal_bitrate = job.preset.video_bitrate_for(source_resolution)
                 command.extend(vaapi.video_args(
                     job.preset.output_bit_depth, job.preset.rate_control,
@@ -235,25 +216,92 @@ class FFmpegEncoder:
             command.extend(["-color_range:v:0", primary.color_range])
         command.extend(stale_statistics_args(primary, "v:0"))
 
-        subtitle_output_index = 0
-        audio_output_index = 0
-        for stream in ordered:
-            if stream.kind == "subtitle":
-                if stream.codec.lower() == "mov_text":
-                    command.extend([f"-c:s:{subtitle_output_index}", "srt"])
-                subtitle_output_index += 1
-            elif stream.kind == "audio":
-                action, codec, bitrate, channels = FFmpegEncoder._audio_action(stream, job)
-                if action == "encode":
-                    assert codec is not None and bitrate is not None and channels is not None
-                    command.extend([f"-c:a:{audio_output_index}", codec,
-                                    f"-b:a:{audio_output_index}", str(bitrate),
-                                    f"-ac:a:{audio_output_index}", str(channels)])
-                    command.extend(stale_statistics_args(stream, f"a:{audio_output_index}"))
-                audio_output_index += 1
+        subtitles = [stream for stream in ordered if stream.kind == "subtitle"]
+        for output_index, stream in enumerate(subtitles):
+            if stream.codec.lower() == "mov_text":
+                command.extend([f"-c:s:{output_index}", "srt"])
+        # "-c copy" above already copies every audio track bit-for-bit. Only tracks
+        # the shared plan marks "encode" get codec options; nothing else touches audio.
+        audio = [stream for stream in ordered if stream.kind == "audio"]
+        for output_index, (stream, track) in enumerate(
+                zip(audio, plan_audio_tracks(audio, job.preset, job.preserve_audio))):
+            if track["action"] != "encode":
+                continue
+            command.extend([f"-c:a:{output_index}", str(track["codec"]),
+                            f"-b:a:{output_index}", str(track["bitrate"]),
+                            f"-ac:a:{output_index}", str(track["channels"])])
+            command.extend(stale_statistics_args(stream, f"a:{output_index}"))
 
         command.extend(["-f", "matroska", str(partial_path)])
         return command
+
+    def packet_hashes(self, job_id: str, path: Path, selectors: list[str]) -> list[str]:
+        """SHA-256 of each selected stream's packet data, read without decoding.
+
+        A stream-copied track produces identical packets, so equal hashes prove the
+        output carries the source track bit-for-bit. The process is owned like an
+        encode, so Stop & Skip and worker shutdown terminate it.
+        """
+        command = [self.binary, "-hide_banner", "-nostdin", "-v", "error",
+                   "-protocol_whitelist", "file,pipe", "-i", str(path)]
+        for selector in selectors:
+            command.extend(["-map", selector])
+        command.extend(["-c", "copy", "-f", "streamhash", "-hash", "sha256", "-"])
+        try:
+            process = subprocess.Popen(command, shell=False, stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        except OSError as error:
+            raise FFmpegError(f"Could not run ffmpeg to verify audio: {error}") from error
+        with self._lock:
+            cancelled = job_id in self._cancelled
+            if not cancelled:
+                self._processes[job_id] = process
+        try:
+            if cancelled:
+                self._terminate(process)
+                raise EncodingCancelled("Audio verification was stopped.")
+            stdout, stderr = process.communicate()
+        finally:
+            if process.poll() is None:
+                self._terminate(process)
+            with self._lock:
+                self._processes.pop(job_id, None)
+                cancelled = job_id in self._cancelled
+        if cancelled:
+            raise EncodingCancelled("Audio verification was stopped.")
+        if process.returncode:
+            raise FFmpegError(f"Audio verification failed: {(stderr or '').strip()[-2000:]}",
+                              process.returncode)
+        hashes: dict[int, str] = {}
+        for line in stdout.splitlines():
+            match = re.fullmatch(r"(\d+),a,SHA256=([0-9a-f]{64})", line.strip())
+            if match:
+                hashes[int(match[1])] = match[2]
+        if sorted(hashes) != list(range(len(selectors))):
+            raise FFmpegError("Audio verification returned an unexpected hash report.")
+        return [hashes[index] for index in range(len(selectors))]
+
+    def copied_audio_mismatches(self, job: QueueJob, source_path: Path, source_probe: MediaProbeResult,
+                                output_path: Path, output_probe: MediaProbeResult) -> list[str]:
+        """Prove every audio track planned as "copy" is bit-identical in the output."""
+        source_audio = [stream for stream in source_probe.streams if stream.kind == "audio"]
+        output_audio = [stream for stream in output_probe.streams if stream.kind == "audio"]
+        if len(source_audio) != len(output_audio):
+            return [f"Output has {len(output_audio)} audio tracks; expected {len(source_audio)}."]
+        plan = plan_audio_tracks(source_audio, job.preset, job.preserve_audio)
+        copied = [ordinal for ordinal, track in enumerate(plan) if track["action"] == "copy"]
+        if not copied:
+            return []
+        source_hashes = self.packet_hashes(job.id, source_path, [f"0:{source_audio[i].index}" for i in copied])
+        # Output audio keeps source order, so ordinal N is the Nth source audio track.
+        output_hashes = self.packet_hashes(job.id, output_path, [f"0:a:{i}" for i in copied])
+        errors = []
+        for ordinal, expected, actual in zip(copied, source_hashes, output_hashes):
+            if expected != actual:
+                track = source_audio[ordinal]
+                errors.append(f"Copied audio track {ordinal + 1} ({track.codec}"
+                              f"{', ' + track.language if track.language else ''}) is not bit-identical to the source.")
+        return errors
 
     def encode(self, job: QueueJob, source_path: Path, probe: MediaProbeResult,
                progress_callback: Callable[[float | None, float], None],

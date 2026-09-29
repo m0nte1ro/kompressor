@@ -283,7 +283,6 @@ def test_execution_capability_rejects_unsupported_modes(probe_facts):
     assert not guard.reasons(item, job)
     variants = [
         (item, job.model_copy(update={"backend": "qsv"}), "CPU backend only"),
-        (item, job.model_copy(update={"replace_source": True}), "Source replacement is disabled"),
         (item.model_copy(update={"audio": [AudioTrack(codec="dts", channels=6, bitrate=1_500_000)]}),
             job.model_copy(update={"preserve_audio": False}), "audio conversion safely"),
         (item, job.model_copy(update={"preset": job.preset.model_copy(update={"target_resolution": "max_720p"})}), "source resolution only"),
@@ -409,6 +408,8 @@ class FakeProcess:
         self.stdout = io.StringIO("out_time_us=60000000\nprogress=continue\nout_time_us=120500000\nprogress=end\n")
         self.stderr = io.StringIO(stderr)
         self.returncode = exit_code
+        # Output to stdout ("-") means an unpatched helper such as audio hashing.
+        assert command[-1] != "-", "FakeProcess only simulates encodes that write a file"
         Path(command[-1]).touch()
         with Path(command[-1]).open("wb") as output:
             output.truncate(output_size)
@@ -431,10 +432,11 @@ class FakeProcess:
 
 
 def build_real_app(tmp_path, monkeypatch, source_probe, output_probe=None, *, exit_code=0,
-                   start_workers=False, runtime_available=True):
+                   start_workers=False, runtime_available=True, source_name="Fixture.mkv",
+                   output_size=100_000_000, replaced_probe=None):
     root = tmp_path / "movies"
     root.mkdir()
-    source = root / "Fixture.mkv"
+    source = root / source_name
     with source.open("wb") as handle:
         handle.truncate(400_000_000)
     workspace = tmp_path / "workspace"
@@ -452,13 +454,26 @@ def build_real_app(tmp_path, monkeypatch, source_probe, output_probe=None, *, ex
     })
 
     def inspect(self, path):
-        return output_probe if ".kompressor.partial.mkv" in path.name and output_probe else source_probe
+        if ".kompressor.partial.mkv" in path.name and output_probe:
+            return output_probe
+        # After an in-place replacement the source path holds the (smaller) output.
+        if path == source and output_probe and path.stat().st_size == output_size:
+            return replaced_probe or output_probe
+        return source_probe
     monkeypatch.setattr(FFprobeService, "inspect", inspect)
+    hashed = []
+
+    def packet_hashes(self, job_id, path, selectors):
+        # Copied tracks hash identically unless a test says otherwise.
+        hashed.append((Path(path), list(selectors)))
+        return [f"track-{ordinal}" for ordinal in range(len(selectors))]
+    monkeypatch.setattr(FFmpegEncoder, "packet_hashes", packet_hashes)
     spawned = []
     def popen(command, **kwargs):
         assert isinstance(command, list)
         assert kwargs["shell"] is False
-        process = FakeProcess(command, exit_code=exit_code, stderr="fixture ffmpeg error" if exit_code else "")
+        process = FakeProcess(command, exit_code=exit_code, output_size=output_size,
+                              stderr="fixture ffmpeg error" if exit_code else "")
         spawned.append(process)
         return process
     monkeypatch.setattr("app.workers.ffmpeg.subprocess.Popen", popen)
@@ -766,6 +781,8 @@ def test_qsv_worker_claims_validates_and_completes_show_job(tmp_path, monkeypatc
         return output_probe if ".kompressor.partial.mkv" in path.name else probe_facts
 
     monkeypatch.setattr(FFprobeService, "inspect", inspect)
+    monkeypatch.setattr(FFmpegEncoder, "packet_hashes",
+                        lambda self, job_id, path, selectors: [f"track-{i}" for i in range(len(selectors))])
     spawned = []
 
     def popen(command, **kwargs):

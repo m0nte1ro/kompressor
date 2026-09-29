@@ -33,8 +33,9 @@ real Intel UHD 730 visual/size/speed validation before being treated as settled.
 Both Movie presets and the Show preserve-quality and Show streaming-quality
 presets copy every audio track, language, codec, channel layout and lossless
 audio stream untouched. Movie Preserve Audio is forced and locked in the job
-modal. The Efficient Audio Show preset is the only built-in that enables
-conversion by default. Other custom presets may opt into conversion explicitly.
+modal. The Efficient Audio Show preset is the only built-in that can convert, and
+even it copies audio unless the job unticks Preserve Audio: no job converts audio by
+default. Custom presets may allow conversion the same way.
 
 The experimental efficient rules are deterministic:
 
@@ -92,9 +93,11 @@ leaves queued preset snapshots unchanged.
 
 Output handling is a job option, separate from presets. Seed mode simulates the
 selected intent without creating files. Filesystem mode has independent real
-CPU/libx265 and Intel GPU/hevc_vaapi lanes. Both accept keep-output only and write
-validated MKV artifacts to the dedicated workspace; neither replaces the source.
-The GPU Efficient Audio preset may encode AAC/E-AC3 tracks according to its rules.
+CPU/libx265 and Intel GPU/hevc_vaapi lanes. Both write a validated MKV to the
+dedicated workspace; a replace job (the WebUI default) then swaps it into an MKV
+source's path after the measured-saving and bit-exact audio checks, while a
+keep-original job leaves it in the workspace. The GPU Efficient Audio preset may
+encode AAC/E-AC3 tracks according to its rules when Preserve Audio is unticked.
 See [real encoding](REAL_ENCODING.md) for the conservative SDR/progressive/HEVC
 limits and validation boundary.
 

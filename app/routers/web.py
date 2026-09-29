@@ -37,6 +37,11 @@ def label(value: str | None) -> str:
 templates.env.filters.update(size=size, bitrate=bitrate, label=label)
 
 
+def media_backend(processor) -> str:
+    status = processor.get_scan_status()
+    return status.get("backend", "seed") if isinstance(status, dict) else "seed"
+
+
 def render(request: Request, template: str, page: str, title: str, **context):
     return templates.TemplateResponse(request=request, name=template, context={
         "page": page, "title": title, **context,
@@ -51,7 +56,8 @@ def index():
 @router.get("/movies", response_class=HTMLResponse)
 def movies(request: Request, processor: Processor):
     return render(request, "library.html", "movies", "Movies", scope="movie",
-                  rows=processor.get_movies(), subtitle="Media inventory and compression policies")
+                  rows=processor.get_movies(), subtitle="Media inventory and compression policies",
+                  media_backend=media_backend(processor))
 
 
 @router.get("/shows", response_class=HTMLResponse)
@@ -65,7 +71,8 @@ def shows(request: Request, processor: Processor):
 def episodes(request: Request, show_id: str, processor: Processor):
     detail = processor.get_show(show_id)
     return render(request, "library.html", "shows", detail["show"].name, scope="show", **detail,
-                  subtitle="All episodes · series → season → episode policy")
+                  subtitle="All episodes · series → season → episode policy",
+                  media_backend=media_backend(processor))
 
 
 @router.get("/queue", response_class=HTMLResponse)

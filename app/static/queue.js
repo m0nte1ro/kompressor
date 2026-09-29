@@ -23,9 +23,11 @@ function jobDetails(job) {
   const estimate = job.estimate_basis === 'planning_range'
     ? `${esc(size(job.estimated_saving_low))} – ${esc(size(job.estimated_saving_high))} planning estimate`
     : `~${esc(size(job.estimated_saving))} estimated reduction`;
-  const source = job.execution_mode === 'real'
-    ? `Keep original · output ${esc(job.output_path || 'in workspace after validation')}`
-    : job.replace_source ? 'Replace after validation · simulated only' : 'Keep original · simulated test copy';
+  const source = job.execution_mode !== 'real'
+    ? job.replace_source ? 'Replace after validation · simulated only' : 'Keep original · simulated test copy'
+    : job.source_replaced ? `Source replaced · ${esc(job.output_path)}`
+    : job.replace_source ? 'Replace source after validation and bit-exact audio check'
+    : `Keep original · output ${esc(job.output_path || 'in workspace after validation')}`;
   return `<div class="job-name">${esc(job.name)}</div>
     <p class="job-meta">${esc(job.preset.name)} · ${esc(label(job.backend))} · ${esc(label(job.preset.destination_codec))}</p>
     <p class="saving">${measuredChange(job) ? esc(measuredChange(job)) : estimate}</p>
@@ -62,7 +64,7 @@ export function renderQueue(queue) {
         toggle.setAttribute('aria-pressed', String(control.paused));
       }
       const stop = $('[data-worker-action="stop-active"]', section);
-      if (stop) stop.disabled = !lane.active;
+      if (stop) stop.disabled = !lane.active || lane.active.status === 'replacing';
     }
     const active = $('.active-slot', section);
     if (active.dataset.job !== (lane.active?.id ?? 'idle')) {
@@ -80,7 +82,9 @@ export function renderQueue(queue) {
       const seconds = Math.floor(lane.active.elapsed_seconds);
       const clock = `${duration(seconds)} ${lane.active.execution_mode === 'real' ? 'elapsed' : 'simulated'}`;
       $('.progress-text', active).textContent = [progress, clock, remaining(lane.active)].filter(Boolean).join(' · ');
-      $('.active-status', active).textContent = lane.active.status === 'validating' ? 'VALIDATING' : lane.active.status.toUpperCase();
+      $('.active-status', active).textContent = lane.active.status.toUpperCase();
+      // A source swap cannot be interrupted; the backend refuses Stop & Skip too.
+      $('[data-queue-action="skip"]', active).hidden = lane.active.status === 'replacing';
     }
     $('.queued-count', section).textContent = lane.queued.length;
     const list = $('.queued-list', section);
@@ -136,7 +140,7 @@ export function renderHistory(queue) {
       data-sort-finished="${job.finished_at ? new Date(job.finished_at).getTime() : 0}">
     <th scope="row">${esc(job.name)}${(job.reasons ?? []).map(reason => `<small class="reason">${esc(reason)}</small>`).join('')}${error}</th>
     <td><span class="badge ${job.status === 'completed' ? 'green' : job.status === 'failed' ? 'red' : 'blue'}">${esc(job.status)}</span></td>
-    <td>${esc(job.preset.name)}<small>${isReal ? (job.backend === 'qsv' ? 'GPU · source kept' : 'CPU · libx265 · source kept') : 'Simulation · source unchanged'}</small><small>${esc(label(job.backend))}</small></td>
+    <td>${esc(job.preset.name)}<small>${isReal ? `${job.backend === 'qsv' ? 'GPU' : 'CPU · libx265'} · ${job.source_replaced ? 'source replaced' : 'source kept'}` : 'Simulation · source unchanged'}</small><small>${esc(label(job.backend))}</small></td>
     <td>${esc(size(job.source_size))}</td>
     <td>${actualOutput ? esc(size(job.output_size)) : job.status === 'completed' ? job.estimate_basis === 'planning_range' ? `${esc(size(job.estimated_output_size_low))} – ${esc(size(job.estimated_output_size_high))} planning` : `~${esc(size(job.estimated_output_size))} estimate` : '—'}${outputPath}</td>
     <td class="saving">${savingText}</td>

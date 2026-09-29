@@ -156,9 +156,11 @@ class PolicyEngine:
                 "Source bitrate is below preset compression floor."
             )
 
+        # Audio is never converted by default: only an explicit per-job
+        # preserve_audio=False lets a conversion-capable preset touch audio.
+        # The preset's legacy preserve_audio_by_default no longer changes that.
         effective_preserve_audio = (
-            preserve_audio is True
-            or (preserve_audio is not False and preset.preserve_audio_by_default)
+            preserve_audio is not False
             or "Preserve Audio" in effective_tags
             or (preset.audio_policy == "preserve" and preset.audio_conversion_policy == "preserve")
         )

@@ -2,11 +2,12 @@
 
 This audit tracks the runtime effect of editable and environment settings. The
 [real encoding lanes](REAL_ENCODING.md) consume a conservative subset of preset/job
-fields and validate keep-output files. Filesystem mode has independent CPU/libx265
-and Intel GPU/hevc_vaapi worker processes; both remain confirmed-SDR, progressive,
-keep-resolution and keep-output only. CPU copies audio, while GPU may apply the
-Efficient Audio rules. Unsupported settings are refused instead of silently
-ignored. Filesystem source roots remain read-only.
+fields and validate their MKV output. Filesystem mode has independent CPU/libx265
+and Intel GPU/hevc_vaapi worker processes; both remain confirmed-SDR, progressive and
+keep-resolution, and either keep the output in the workspace or replace an MKV
+source after verification. Audio is copied unless a job opts out; only GPU may then
+apply the Efficient Audio rules. Unsupported settings are refused instead of silently
+ignored. The scanner never writes to source roots; only a replace job's swap does.
 
 ## Precedence and timing
 
@@ -79,7 +80,7 @@ checks in `services/presets.py`. API-only nested controls are included.
 | `hdr_metadata.preserve_mastering_display_metadata` | Same | Same | Yes | Snapshot; future encoder/validator | New job plan | PARTIALLY WIRED |
 | `hdr_metadata.preserve_max_cll`, `preserve_max_fall` | Same | Same | Yes | Snapshot; future encoder/validator | New job plan | PARTIALLY WIRED |
 | `audio_policy`, `audio_conversion_policy` | P / editor | Persisted edit > seed | Yes | Effective preserve decision, E audio plan; at least one efficient policy permits conversion | Eligibility/new jobs | WIRED |
-| `preserve_audio_by_default` | P / API, editor default policy mapping | Modal explicit override > preset default; Preserve Audio tag and all-preserve policies take precedence | Yes | Policy and modal initial checkbox | Eligibility/new jobs | WIRED |
+| `preserve_audio_by_default` | P / API, editor default policy mapping | Retained for compatibility | Yes | Nothing at runtime; audio is preserved unless the job explicitly sends `preserve_audio: false` | — | COMPATIBILITY ONLY |
 | `stereo_audio_bitrate`, `target_audio_bitrate` | P / editor | Persisted edit > defaults; efficient audio requires target | Yes | E plan; real GPU lane applies AAC/E-AC3 conversion where the plan says encode | Eligibility/new jobs/output validation | WIRED for GPU efficient audio |
 | `efficient_audio_rules.mono_stereo_codec`, `multichannel_codec` | `EfficientAudioRules` / API | Fixed validated AAC/E-AC3 values | Yes | E output audio plan | New job plan | WIRED |
 | `efficient_audio_rules.channel_handling` | Same | Explicit preserve/downmix > preserve default; legacy preserve_channels migrated | Yes | E channels, codec and bitrate planning; Preserve Audio overrides downmix | Eligibility/new jobs | WIRED |
@@ -88,11 +89,11 @@ checks in `services/presets.py`. API-only nested controls are included.
 | `efficient_audio_rules.copy_unknown_bitrate` | Same | Explicit bool > true | Yes | E unknown-bitrate handling | Eligibility/new jobs | WIRED |
 | `efficient_audio_rules.copy_channels_above` | Same | Explicit 2–16 or null > null | Yes | E conditional copying | Eligibility/new jobs | WIRED |
 | `minimum_source_bitrate` | P / editor | Persisted edit > default 0 | Yes | Policy source floor | Eligibility/new jobs | WIRED |
-| `minimum_expected_saving_percent` | P / editor | Persisted edit > default 20 | Yes | ABR eligibility block, quality-mode planning warning; actual output threshold not implemented | Eligibility/new job plan | PARTIALLY WIRED |
+| `minimum_expected_saving_percent` | P / editor | Persisted edit > default 20 | Yes | ABR eligibility block, quality-mode planning warning; the measured saving must meet it before a replace job swaps the source (otherwise skipped, source kept) | Eligibility/new job plan/replacement | WIRED |
 | `allow_hevc_reencode` | P / editor | Persisted edit > false | Yes | Policy HEVC recompression block | Eligibility/new jobs | WIRED |
-| Job `preserve_audio` | `models/queue.py`, compression modal | Explicit checkbox or null preset default; policy/tag overrides | Job snapshot | Policy/E; CPU requires copy plans, GPU supports copy or validated Efficient Audio plans | New job | WIRED |
-| Job `preserve_subtitles` (chapters/attachments/metadata) | Same | Explicit bool > true | Job snapshot | Real explicit stream/metadata/chapter mapping and validation counts | New job | WIRED for supported Matroska streams |
-| Job `replace_source` / keep output | Same | Explicit bool > false (keep output) | Job snapshot | Real worker refuses replacement; validated keep-output written under workspace | New job | WIRED for keep-output only |
+| Job `preserve_audio` | `models/queue.py`, compression modal | Explicit `false` opts out; `null`/omitted and the modal's default tick preserve; Preserve Audio tag and preserve-only presets always preserve | Job snapshot | Policy/E and the shared `plan_audio_tracks`; CPU requires copy plans, GPU supports copy or Efficient Audio plans; copied tracks verified by packet SHA-256 | New job | WIRED |
+| Job `preserve_subtitles` (chapters/attachments/metadata) | Same | Explicit bool > true | Job snapshot | Real explicit stream/chapter mapping and validation counts; opting out drops subtitles/attachments/chapters and global tags only (`-map_metadata:g -1`), never audio languages/titles | New job | WIRED for supported Matroska streams |
+| Job `replace_source` / keep output | Same; modal Output handling | Modal default true (replace); API default false (keep) | Job snapshot | Replace: MKV source, writable directory, measured saving ≥ preset minimum, journalled verified swap with backup; keep: validated MKV under workspace | New job | WIRED |
 | Queue priority / Move next | Queue models and UI | Explicit priority/order > normal, then estimated/planning bytes saved | Yes | Queue ordering across independent seed lanes and real CPU/GPU lanes | Immediately for queued jobs | WIRED |
 | Remove queued / Stop & Skip | Queue UI/API | Explicit action; active deletion prohibited | Yes | Seed fake lifecycle or owned ffmpeg process lifecycle | Immediately | WIRED |
 | Tags Preserve A/V, Preserve Video, Preserve Audio, Quality CPU | `models/tags.py`, tag dialog | Explicit assignment > seed direct tags; inherited union remains | Yes, semantic identity | TagService, Policy, queued-job revalidation | Immediately | WIRED |
@@ -105,8 +106,9 @@ checks in `services/presets.py`. API-only nested controls are included.
 filesystem jobs are accepted only when the selected lane's startup diagnostics
 and per-item execution guards pass. CPU consumes CRF/ABR plus libx265 settings;
 GPU consumes QVBR/legacy ICQ/ABR, VA-API profile/bit depth and optional Efficient
-Audio rules. Both enforce stream preservation, keep-resolution and keep-output
-semantics; unsupported combinations are excluded with a reason.
+Audio rules. Both enforce stream preservation, keep-resolution and bit-exact copied
+audio, and replace only MKV sources in writable directories; unsupported combinations
+are excluded with a reason.
 
 ## Absent settings and fixed behavior
 

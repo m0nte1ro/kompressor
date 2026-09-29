@@ -69,7 +69,8 @@ ICQ presets may still be edited, but this particular driver will reject them;
 they must be deliberately changed to QVBR or VBR before use. QVBR's quality number
 is not interchangeable with ICQ or CPU CRF. A ten-frame smoke does not establish
 perceptual quality, actual size or throughput on a full episode; start with
-keep-output and inspect real content before considering replacement. The seeded
+Keep original on a few real episodes and inspect them before relying on the
+default Replace choice. The seeded
 Top Gear example is 1080i and remains blocked because deinterlacing is not
 implemented; the restored 576p applicability helps progressive 576p sources.
 
@@ -110,22 +111,31 @@ shifted colours and cost about 3x wall time and 10x CPU on a 1080p sample. With
 colour conversion is applied. Output validation is unchanged and
 still requires the HEVC output to validate as confirmed SDR.
 
-Source guards, hardlink restrictions, confirmed-SDR/progressive-only eligibility,
-source-resolution preservation and keep-output remain in force. GPU validation
-checks the requested pixel format/profile, stream kinds/order, audio codecs and
-channels by output ordinal, and known stream languages/titles when metadata is
-preserved. If present, the primary video's ENCODER tag must contain hevc_vaapi.
-Output still stays in the dedicated workspace; no source is replaced.
+Source guards, hardlink restrictions, confirmed-SDR/progressive-only eligibility and
+source-resolution preservation remain in force. Validation, shared with the CPU lane,
+checks stream kinds/order, every audio track's planned codec, channels, language and
+title, and the packet SHA-256 of every copied audio track (see
+[Audio safety](REAL_ENCODING.md#audio-safety)). The GPU lane additionally requires
+the preset's pixel format/profile and, if present, a primary video ENCODER tag
+containing hevc_vaapi. A replace job swaps the output into the source path only after
+all of that and the minimum saving check
+([Source replacement](REAL_ENCODING.md#source-replacement)); a keep-original job
+leaves it in the workspace.
 
 ## Local verification
 
-- Full suite: `326 passed, 1 skipped, 2 warnings in 58.51s`.
-- Pyright in workspace standard mode: 0 errors, 0 warnings.
+Recorded after the source-replacement and audio-safety change:
+
+- Full suite: `460 passed, 3 skipped, 2 warnings`. The skips are the optional real
+  ffprobe test and the two real-ffmpeg audio tests, which need `ffmpeg` with libx265
+  on `PATH` (or `KOMPRESSOR_TEST_FFMPEG=/path/to/ffmpeg`). With a static ffmpeg 7.0.2
+  supplied that way: `462 passed, 1 skipped`.
+- Pyright 1.1 (standard mode) on `app/` and the new tests: 0 errors, 0 warnings.
 - All frontend JavaScript modules passed Node's syntax check.
 - `git diff --check` passed.
-- Hardware subprocesses in the migration tests are mocked. The optional real
-  ffprobe test is skipped when ffprobe is not installed. The two warnings are
-  existing Starlette/httpx and AnyIO deprecations.
+- Hardware subprocesses in the migration tests are mocked. The two warnings are
+  existing Starlette/httpx and AnyIO deprecations. In the CT, where ffmpeg exists,
+  plain `.venv/bin/python -m pytest` also runs the real audio tests.
 
 ## Manual CT checks — for the operator
 

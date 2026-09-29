@@ -49,6 +49,35 @@ export function compressionModal(scope, refreshQueue) {
     errorBox.hidden = !message;
   }
 
+  const realMode = () => $('#library')?.dataset.mediaBackend === 'filesystem';
+
+  function outputHandling() {
+    const replace = $('#replace-source').value === 'true';
+    $('#output-handling-note').textContent = !realMode()
+      ? 'Seed mode simulates the job: no file is created, replaced or deleted.'
+      : replace
+        ? 'Replace source: the original is swapped out only after the output passes validation, every copied audio track matches the source bit-for-bit, and the measured saving meets the preset minimum. The original stays beside it as a hidden backup until the replaced file is verified. MKV sources only.'
+        : 'Keep original: a separate validated MKV is written under the Kompressor workspace. This reclaims no storage and needs free workspace space.';
+    const warnings = [];
+    if (replace && !$('#preserve-audio').checked) {
+      warnings.push('Preserve Audio is off: tracks listed as "convert" below are permanently re-encoded in the replaced file.');
+    }
+    if (replace && !$('#preserve-subtitles').checked) {
+      warnings.push('Subtitles, chapters, attachments and container metadata will be permanently removed from the replaced file.');
+    }
+    $('#replace-warnings').textContent = warnings.join(' ');
+    $('#replace-warnings').hidden = !warnings.length;
+  }
+
+  function audioSummary(plan) {
+    if (!plan?.length) return 'Audio: no audio tracks';
+    const converted = plan.filter(track => track.action !== 'copy');
+    const copied = plan.length - converted.length;
+    if (!converted.length) return `Audio: all ${copied} track${copied === 1 ? '' : 's'} copied bit-for-bit`;
+    return `Audio: ${copied} copied bit-for-bit · ${converted.length} convert → ${
+      converted.map(track => `${label(track.codec)} ${track.channels} ch`).join(', ')}`;
+  }
+
   function properties(preset) {
     const mappedRates = preset.qvbr_bitrates_by_resolution ?? {};
     const nominal = Object.keys(mappedRates).length
@@ -64,9 +93,10 @@ export function compressionModal(scope, refreshQueue) {
     ];
     $('#preset-properties').innerHTML = fields.map(([name, value]) =>
       `<label class="field">${esc(name)}<select disabled><option>${esc(value)}</option></select></label>`).join('');
-    $('#audio-rule').textContent = 'Preserve Audio tags and the preset’s audio policy take precedence over this checkbox.';
+    $('#audio-rule').textContent = 'Audio is always copied unless you untick Preserve Audio; Preserve Audio tags and preserve-only presets copy it regardless.';
     const movieAudioForced = scope === 'movie' && preset.origin === 'built_in' && preset.audio_policy === 'preserve' && preset.audio_conversion_policy === 'preserve';
-    $('#preserve-audio').checked = movieAudioForced || preset.preserve_audio_by_default;
+    // Never pre-select conversion: the box starts ticked and only the user can untick it.
+    if (movieAudioForced || !preserveAudioTouched) $('#preserve-audio').checked = true;
     $('#preserve-audio').disabled = movieAudioForced;
     $('#preserve-audio-text').textContent = movieAudioForced ? 'Preserve Audio · required by this Movie preset' : 'Preserve Audio · copy every audio track';
   }
@@ -80,9 +110,11 @@ export function compressionModal(scope, refreshQueue) {
     const preset = presets.find(p => p.id === $('#preset').value);
     if (!preset) return;
     properties(preset);
+    outputHandling();
     $('#eligibility').textContent = 'Checking eligibility…';
     ['estimated-output', 'estimated-saving', 'estimated-percent'].forEach(id => $(`#${id}`).textContent = '—');
-    const overrides = {preserve_audio: $('#preserve-audio').checked, preserve_subtitles: $('#preserve-subtitles').checked};
+    const overrides = {preserve_audio: $('#preserve-audio').checked, preserve_subtitles: $('#preserve-subtitles').checked,
+      replace_source: $('#replace-source').value === 'true'};
     try {
       const [evaluated, queue] = await Promise.all([
         mapLimit(selected, async row => ({row, ...await api('/api/eligibility', {
@@ -99,10 +131,10 @@ export function compressionModal(scope, refreshQueue) {
       $('#estimated-saving').textContent = included.length ? `${size(total('estimated_saving_low'))} – ${size(total('estimated_saving_high'))}` : '—';
       $('#estimated-percent').textContent = total('source_size') ? `${(total('estimated_saving_low') / total('source_size') * 100).toFixed(0)}–${(total('estimated_saving_high') / total('source_size') * 100).toFixed(0)}%` : '—';
       $('#eligibility').innerHTML = `<strong>${included.length} eligible · ${results.length - included.length} excluded</strong>
-        <p class="muted">Planning estimates for eligible, unqueued items only. CRF/ICQ/QVBR ranges are assumptions, not output bounds. Keeping originals reclaims 0 bytes.</p>
+        <p class="muted">Planning estimates for eligible, unqueued items only. CRF/ICQ/QVBR ranges are assumptions, not output bounds. ${overrides.replace_source ? 'Replacement happens only if the measured saving meets the preset minimum.' : 'Keeping originals reclaims 0 bytes.'}</p>
         <div class="eligibility-items">${results.map(r => `<div class="eligibility-item">
           <strong>${esc(r.row.dataset.name)}</strong> <span class="badge ${r.excluded ? 'red' : 'green'}">${r.excluded ? 'Excluded' : 'Eligible'}</span>
-          <p class="muted">Audio: ${r.preserve_audio ? 'preserved by effective policy' : 'preset conversion policy'} · ${r.estimate_basis === 'planning_range' ? `Planning saving ${esc(size(r.estimated_saving_low))} – ${esc(size(r.estimated_saving_high))}` : `Estimated saving ~${esc(size(r.estimated_saving))}`}</p>
+          <p class="muted">${esc(audioSummary(r.audio_plan))} · ${r.estimate_basis === 'planning_range' ? `Planning saving ${esc(size(r.estimated_saving_low))} – ${esc(size(r.estimated_saving_high))}` : `Estimated saving ~${esc(size(r.estimated_saving))}`}</p>
           ${r.reasons.length ? `<ul>${r.reasons.map(reason => `<li>${esc(reason)}</li>`).join('')}</ul>` : ''}
           ${r.warnings.map(warning => `<p class="hdr">${esc(warning)}</p>`).join('')}
         </div>`).join('')}</div>`;
@@ -126,15 +158,10 @@ export function compressionModal(scope, refreshQueue) {
     const rect = dialog.getBoundingClientRect();
     if (event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) close();
   });
-  $('#preset').addEventListener('change', () => {
-    if (!preserveAudioTouched) {
-      const chosen = presets.find(p => p.id === $('#preset').value);
-      if (chosen) $('#preserve-audio').checked = chosen.preserve_audio_by_default;
-    }
-    evaluate();
-  });
+  $('#preset').addEventListener('change', evaluate);
   $('#preserve-audio').addEventListener('change', () => {preserveAudioTouched = true; evaluate();});
   $('#preserve-subtitles').addEventListener('change', evaluate);
+  $('#replace-source').addEventListener('change', evaluate);
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
@@ -195,7 +222,8 @@ export function compressionModal(scope, refreshQueue) {
     $('#preserve-audio-text').textContent = 'Preserve Audio · copy every audio track';
     preserveAudioTouched = false;
     $('#preserve-subtitles').checked = true;
-    $('#replace-source').value = 'false';
+    $('#replace-source').value = 'true';
+    outputHandling();
     dialog.showModal();
 
     // Source details are an indexed per-item lookup and are deliberately not on
@@ -206,8 +234,12 @@ export function compressionModal(scope, refreshQueue) {
       await loadPresets();
       if (session !== generation || !dialog.open) return;
       $('#preset').innerHTML = presets.map(p => `<option value="${esc(p.id)}" ${!p.enabled || p.destination_codec === 'av1' ? 'disabled' : ''}>${esc(p.name)} · ${esc(label(p.backend))}</option>`).join('');
-      const suggested = presets.find(p => p.id === rows[0].dataset.preset && p.enabled && p.destination_codec !== 'av1');
-      const chosen = suggested ?? presets.find(p => p.enabled && p.destination_codec !== 'av1');
+      const usable = p => p.enabled && p.destination_codec !== 'av1';
+      // The backend suggestion already prefers an eligible GPU preset for shows.
+      const suggested = presets.find(p => p.id === rows[0].dataset.preset && usable(p));
+      const chosen = suggested
+        ?? presets.find(p => usable(p) && (scope !== 'show' || p.backend === 'qsv'))
+        ?? presets.find(usable);
       if (!chosen) throw new Error('No available presets for this media scope.');
       $('#preset').value = chosen.id;
       properties(chosen);

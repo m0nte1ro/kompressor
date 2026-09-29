@@ -6,7 +6,8 @@ Schema version 2 replaced `metadata.reconciliation_inventory_v1` with relational
 storage. File/media/revision/artifact identity and reconciliation decisions are
 unchanged. The inventory adapter remains read-only and does not encode, hash,
 replace sources, perform external metadata lookup or integrate with media servers.
-The separate [real encoder workers](REAL_ENCODING.md) write job outputs outside media roots.
+The separate [real encoder workers](REAL_ENCODING.md) write job outputs to the workspace and, for
+replace jobs, swap verified outputs into source paths; a replaced file gets a new revision on the next scan.
 
 ## Tables and indexes
 

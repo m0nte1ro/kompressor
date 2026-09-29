@@ -61,9 +61,10 @@ views read a projection of that reconciled inventory. Seed mode remains the
 default. Roots have no production defaults and can be configured through settings.
 Scans are explicit and read-only. The separate [real encoding milestone](REAL_ENCODING.md)
 runs CPU/libx265 and Intel GPU/hevc_vaapi as independent worker processes when each
-lane's runtime prerequisites are available; both leave source media untouched and
-write validated outputs to the dedicated workspace. No source replacement or
-reconciliation redesign is included. See
+lane's runtime prerequisites are available. Both write validated outputs to the
+dedicated workspace and, for replace jobs, swap them into the source path only after
+verification (see [source replacement](REAL_ENCODING.md#source-replacement)). The
+scanner itself remains read-only and reconciliation is unchanged. See
 [READ_ONLY_DISCOVERY.md](READ_ONLY_DISCOVERY.md) for scan configuration, probe
 limitations, naming assumptions and verification details.
 
@@ -75,8 +76,8 @@ identities. It consumes fixture snapshots through MediaProcessor, with tiered
 fingerprint evidence, conservative rename matching and root-scoped absence rules.
 Raw probe/HDR facts are separate from semantic media identity and derived HDR
 classification. Source revision and hardlinks must be freshly revalidated both
-before processing and immediately before any future replacement. The existing seed catalogue/queue remains unchanged. Real scanning and probing
-are documented separately, and source replacement remains unimplemented. See
+before processing and immediately before replacement. The existing seed catalogue/queue remains unchanged. Real scanning, probing
+and source replacement are documented separately. See
 [RECONCILIATION.md](RECONCILIATION.md) for identity contracts and safety boundaries.
 
 ## Application boundary and composition
@@ -112,15 +113,18 @@ flow, and filesystem scans publish batches while they run.
 all ffmpeg arguments, stream mapping, progress, subprocess lifecycle and output
 paths. Real work runs outside HTTP requests and queue/database transactions. The
 CPU lane uses libx265 with CRF/ABR and copied audio. The GPU lane uses hevc_vaapi with
-ICQ/ABR and may apply the existing Efficient Audio rules. Both lanes currently
-accept only confirmed SDR progressive sources, unchanged resolution and keep-output
-MKV, then validate the result with ffprobe before promotion. HDR, deinterlacing and
-source replacement remain unsupported. See [REAL_ENCODING.md](REAL_ENCODING.md) for
-the current boundaries; the fake tick loop remains only for seed mode.
+QVBR/ABR (legacy ICQ snapshots still run as ICQ) and may apply the existing Efficient
+Audio rules when a job unticks Preserve Audio. Both lanes currently accept only
+confirmed SDR progressive sources and unchanged resolution, validate the MKV output
+with ffprobe plus a bit-exact check of every copied audio track, then either keep it
+in the workspace or replace an MKV source. HDR and deinterlacing remain unsupported.
+See [REAL_ENCODING.md](REAL_ENCODING.md) for the current boundaries; the fake tick
+loop remains only for seed mode.
 
-For compatibility, job-level `keep_output` remains represented by
-`replace_source: false` in the API and persistence; `true` records replacement
-intent only. Preset names, schemas and frontend contracts remain unchanged.
+Job-level output handling is `replace_source` in the API and persistence. The
+WebUI modal defaults to `true` (replace after verification); the API default stays
+`false` so scripted callers keep the original unless they ask. Preset names and
+schemas remain unchanged.
 Spatial applicability normalizes 1080i to the 1080p resolution class while keeping
 the display label and separate interlaced flag. Interlaced media is blocked for
 unsupported deinterlacing, not merely because its label ends in `i`.
@@ -418,7 +422,7 @@ destination codec:
 
 target video bitrate
 rate control and encoder configuration
-quality value and clearly experimental planning range when using CRF/ICQ
+quality value and clearly experimental planning range when using CRF/QVBR/ICQ
 
 target resolution:
   keep
@@ -436,7 +440,8 @@ audio policy:
     preserve
     efficient
 
-audio conversion policy and preserve-audio-by-default setting
+audio conversion policy (a legacy preserve-audio-by-default field is retained for
+compatibility; audio is always preserved unless the job opts out)
 efficient audio rules for mono/stereo codec, multichannel codec, bitrates,
 channel handling and copy conditions
 
@@ -484,18 +489,20 @@ Scope: Show; CPU/x265; HEVC; CRF quality mode; preserve source resolution;
 preserve audio; conservative, experimental high-fidelity starting point.
 
 Tone it down a bit + HEVC
-Scope: Show; Intel GPU/iGPU; HEVC; ICQ quality mode; preserve source resolution;
-preserve every audio track and language by default.
+Scope: Show; Intel GPU/iGPU (VA-API); HEVC; QVBR quality 23 with per-source-resolution
+nominal bitrates (480p 1, 576p 1.5, 720p 2.5, 1080p 4, 2160p 16 Mbps); preserve
+source resolution; preserve every audio track and language by default.
 
 Tone it down a bit + HEVC + Efficient Audio
 Scope: Show; Intel GPU/iGPU; exactly the same video policy as Show Streaming
-Quality; preserve source resolution; deterministic efficient audio by default.
+Quality; preserve source resolution; deterministic efficient audio when the job
+unticks Preserve Audio (audio is still copied by default).
 The rules retain languages, tracks and channel layouts, copy already-efficient
 tracks where sensible, use AAC for mono/stereo and E-AC3 for multichannel audio,
 and never downmix unless an explicit future audio policy requests it.
 
-All CRF/ICQ values, speed settings and planning ranges are experimental until
-validated against real media. CRF and ICQ values are not equivalent.
+All CRF/QVBR values, speed settings and planning ranges are experimental until
+validated against real media. CRF, QVBR and ICQ values are not equivalent.
 
 Preset names are user-owned display data and are separate from intent. Built-in
 intent may remain preserve_quality or streaming_quality without changing a name
@@ -532,8 +539,14 @@ They belong to the preset.
 
 Only these per-job overrides remain editable:
 
-Preserve Audio
+Preserve Audio (ticked by default for every preset; conversion only when unticked)
 Preserve subtitles / chapters / attachments / metadata
+Output handling (Replace source after validation, the default, or Keep original)
+
+For Shows the suggested preset is the first eligible GPU preset (a Quality CPU tag
+falls back to CPU). Movies keep their CPU presets. The modal lists each item's
+audio plan (tracks copied bit-for-bit or converted) and warns when replacing would
+permanently convert audio or drop subtitles/metadata.
 
 The modal should also display:
 
@@ -551,7 +564,7 @@ estimated output size
 estimated saving
 estimated saving percentage
 
-For CRF/ICQ presets, planning ranges remain internal estimate metadata. Do not
+For CRF/QVBR/ICQ presets, planning ranges remain internal estimate metadata. Do not
 present them as editable encoder settings or a midpoint as an exact predicted
 output.
 
@@ -581,8 +594,10 @@ Audio option is checked and locked for those presets. Movie audio conversion,
 downmixing and track removal are not supported by the built-in presets.
 
 The Show preserve-quality and Show streaming-quality intents copy every audio
-track untouched by default. The Efficient Audio Show preset is the only built-in
-that enables conversion by default.
+track untouched. The Efficient Audio Show preset is the only built-in that can
+convert audio, and only when the job explicitly unticks Preserve Audio: no job
+converts audio by default. Copied tracks are verified bit-for-bit (packet SHA-256)
+before a job completes or replaces its source.
 
 For a preset explicitly configured for audio conversion, it may use efficient codecs such as:
 
@@ -1035,12 +1050,10 @@ Initial controls:
 
 Stop & Skip
 
-This means production behaviour will eventually:
-
-terminate encoder
-delete temporary output
-mark job skipped
-start next job
+In production this terminates the encoder (or audio verification), deletes the
+temporary output, marks the job skipped and lets the lane start its next job. A job
+that is already replacing its source cannot be stopped; the swap always finishes or
+rolls back to the original.
 
 Pause support may be implemented later.
 
@@ -1069,7 +1082,7 @@ This allows the full WebUI workflow to be developed without media tooling.
 
 37. Production Job Lifecycle
 
-Eventually a real job should follow:
+A real replace job follows:
 
 DISCOVERED
 → QUEUED
@@ -1077,6 +1090,9 @@ DISCOVERED
 → VALIDATING
 → REPLACING
 → COMPLETED
+
+(keep-original jobs complete after VALIDATING; a replace job whose measured saving
+misses the preset minimum is SKIPPED with the source kept)
 
 Failure:
 
@@ -1086,9 +1102,9 @@ ENCODING
 The original file must remain untouched until the new output has passed validation.
 
 Output handling is a job option, not a quality preset. `replace_source: false`
-keeps the original and stores a validated real output in the Kompressor workspace;
-seed mode simulates that choice. `replace_source: true` records intent for review
-but is refused by the real worker. No replacement workflow is implemented.
+keeps the original and stores a validated real output in the Kompressor workspace.
+`replace_source: true` (the WebUI default) replaces an MKV source as described in
+section 38. Seed mode simulates both choices.
 Future options such as sample_only must not require redesigning the preset model.
 
 38. Safe Replacement
@@ -1115,6 +1131,12 @@ If replacement fails:
 restore backup
 
 The operation should behave as transactionally as practical.
+
+Implemented as described in [REAL_ENCODING.md](REAL_ENCODING.md#source-replacement).
+The output is first copied next to the source and verified by SHA-256, because the
+workspace is a different filesystem. The backup is a hidden, job-named file in the
+source's directory. Each step is journalled so a killed worker can finish or roll back
+by device/inode identity. MKV sources only.
 
 39. Validation
 
@@ -1388,7 +1410,8 @@ A silently damaged original is not.
 
 50. Current Development State
 
-The repository currently has:
+This section records the seed-era baseline; README.md and docs/ describe the
+current filesystem, encoding and replacement state. The baseline had:
 
 FastAPI application
 Python 3.12 environment
@@ -1429,7 +1452,7 @@ Example result:
 
 backend = qsv
 destination codec = hevc
-rate control = experimental ICQ quality mode
+rate control = experimental QVBR quality mode with a 1080p nominal bitrate
 planning range rather than an exact output-size prediction
 Dune safety
 
@@ -1536,455 +1559,4 @@ Near-term milestones:
 14. media-server resource awareness
 
 Production encoding should only begin after the WebUI, policies, queue model and safety lifecycle are already well tested with fake data.
-
-
----
-
-## 2. Prompt para o Codex
-
-Depois de teres esse `PROJECT_SPEC.md` no repo, dava-lhe isto:
-
-```text
-You are working on the Kompressor repository.
-
-Repository location:
-
-~/kompressor
-
-First, read `PROJECT_SPEC.md` completely.
-
-Treat it as the source of truth for product intent, architecture, safety rules, development constraints, UI behaviour, preset behaviour and future production requirements.
-
-Then inspect the entire current repository before making changes.
-
-Do not blindly regenerate or replace existing code. Understand what already exists and preserve working architecture unless there is a concrete reason to change it.
-
-Before changing anything:
-
-1. Run `git status`.
-2. Confirm the working tree is clean.
-3. Inspect:
-   - current FastAPI app
-   - models
-   - repositories
-   - services
-   - fixtures
-   - tests
-   - pyproject.toml
-4. Run the current tests/API sanity checks if practical.
-
-Do not install or depend on:
-
-- ffmpeg
-- ffprobe
-- Intel GPU
-- Node
-- npm
-- React
-- Vue
-- real media files
-- Sonarr
-- Radarr
-- qBittorrent
-- Plex
-- Jellyfin
-- external APIs
-
-Development must remain entirely seed/fake-data driven.
-
-## Task
-
-Implement the first real seed-backed Kompressor WebUI.
-
-The backend already contains media models, seed repositories, preset models and an eligibility/policy engine.
-
-Do not duplicate eligibility rules in JavaScript.
-
-The browser must consume backend behaviour.
-
-The UI should be polished enough to represent the intended product, not merely a debug page.
-
-Use:
-
-- FastAPI
-- Jinja2
-- vanilla JavaScript
-- custom CSS
-
-HTMX is allowed only if it genuinely simplifies something.
-
-Keep frontend and backend in the same repository.
-
-Prefer:
-
-```text
-app/templates/
-app/static/
-
-Keep JavaScript in dedicated static files rather than large inline scripts.
-
-Keep CSS in dedicated static files.
-
-Required navigation
-
-Create a persistent sidebar with:
-
-Movies
-Shows
-Queue
-History
-Settings
-
-Movies, Shows and Queue should be meaningfully interactive.
-
-History and Settings should also have useful seed-backed views.
-
-Movies page
-
-Render seed Movies as a flat table.
-
-Columns:
-
-mass-select checkbox
-Movie
-Year
-Source
-Resolution
-Codec
-HDR / DV
-Bitrate
-Size
-Audio
-Policy / Tags
-Estimated Saving
-Action
-
-Add:
-
-search
-basic useful filters
-individual compression action
-mass selection
-
-Movie compression must only expose presets with:
-
-scope == "movie"
-
-Show presets must never appear in Movie workflows.
-
-Protected media should remain visible.
-
-Do not hide blocked actions without explanation.
-
-Examples that must visibly demonstrate policy behaviour:
-
-Dune: Part Two is protected.
-hardlinked media is blocked.
-Shows page
-
-Initial page lists Shows with useful summary information.
-
-Opening a Show displays all Episodes in one flat table.
-
-Do not display actual season directories.
-
-Use small visual separators such as:
-
-Season 1
-Season 2
-
-Episode columns:
-
-checkbox
-Episode
-Resolution
-Codec
-Bitrate
-Size
-Audio
-Effective Policy / Tags
-Estimated Saving
-Action
-
-Support search and mass selection.
-
-Show/Episode compression must only expose presets with:
-
-scope == "show"
-
-Movie presets must never appear.
-
-Compression modal
-
-The modal should intentionally be simple.
-
-Editable:
-
-Preset
-Preserve Audio
-Preserve subtitles / chapters / attachments / metadata
-
-Preset technical properties are read-only.
-
-Display them using disabled/read-only controls or clearly styled information fields:
-
-Video backend
-Destination codec
-Target bitrate
-Resolution policy
-Audio policy
-HDR policy
-
-Also show:
-
-source summary
-source codec
-source resolution
-source bitrate
-source size
-audio summary
-HDR/DV status
-eligibility result
-blocking reasons
-warnings
-estimated output
-estimated saving
-estimated saving percentage
-
-Whenever the selected preset or editable override changes, call the backend eligibility API.
-
-Do not implement policy rules in JavaScript.
-
-Preserve Audio inheritance/tag overrides should be clearly shown.
-
-For bulk operations:
-
-evaluate all selected items
-display eligible count
-display excluded count
-blocked items must not prevent eligible items being queued
-
-Example:
-
-93 eligible
-7 excluded
-
-Queue
-
-Implement a development-only fake dual-lane queue.
-
-One logical scheduler conceptually has:
-
-CPU Queue
-GPU Queue
-
-Render these as visibly separate lanes.
-
-Jobs are assigned according to the selected preset backend.
-
-CPU and GPU lanes represent independent workers that may run concurrently.
-
-This original UI scope describes seed mode only: it uses no subprocesses, ffmpeg
-or real encoding. Seed mode still uses the fake infrastructure below. The current
-filesystem real-encode slice is documented in [REAL_ENCODING.md](REAL_ENCODING.md).
-
-Use clean fake infrastructure, preferably a fake queue repository/service and fixture data if necessary.
-
-Each lane should support/display:
-
-active job
-queued jobs
-fake progress
-media name
-preset
-estimated saving
-priority
-Move Next
-remove queued job
-Stop & Skip active fake job
-
-An active job must not have the same ordinary delete/X behaviour as a queued job.
-
-Default ordering should favour estimated bytes saved.
-
-Manual priority override should still be possible.
-
-Fake progress/state transitions are welcome if they can be implemented cleanly without overengineering.
-
-History
-
-Create a useful seed-backed History view.
-
-Show examples such as:
-
-source size
-final size
-bytes/percentage saved
-source codec
-destination codec
-backend CPU/GPU
-preset
-elapsed time
-completion time
-success/failure state
-
-Also include summary statistics such as:
-
-total saved
-files processed
-average reduction
-CPU jobs
-GPU jobs
-failed jobs
-
-Fake data is fine.
-
-Settings
-
-Settings should represent the intended product. Preset CRUD is persistent; future
-worker, scanner and infrastructure settings may remain informational until their
-production adapters exist.
-
-At minimum show:
-
-Movie Presets
-
-Only Movie presets.
-
-Show Presets
-
-Only Show presets.
-
-For each preset show:
-
-name
-scope
-intent
-origin
-backend
-destination codec
-target bitrate or experimental planning range
-resolution policy
-audio policy
-audio conversion policy
-preserve-audio-by-default state
-HDR preservation
-minimum source bitrate
-minimum expected saving
-allow HEVC re-encode
-enabled state
-
-Also visually represent future settings sections for:
-
-paths
-workers
-safety policies
-tags
-scanning
-
-Do not invent large amounts of backend persistence yet.
-
-Design
-
-Use a dark, compact, polished, desktop-first visual design.
-
-This is a self-hosted homelab tool.
-
-Avoid generic oversized SaaS cards and excessive gradients.
-
-Tables should be information-dense but readable.
-
-Use clear badges for:
-
-Preserve A/V
-Preserve Video
-Preserve Audio
-Quality CPU
-Quality Floor
-Hardlinked
-Dolby Vision
-HDR10
-Interlaced
-Already HEVC
-Low bitrate
-Queued
-Encoding
-Protected
-
-Blocked items should explain why.
-
-Architecture constraints
-
-Respect PROJECT_SPEC.md.
-
-In particular:
-
-no ffmpeg dependencies in development
-no real filesystem media scanning yet
-no external metadata APIs
-no authentication
-no database unless clearly required for this milestone
-no development-mode conditionals scattered throughout application code
-maintain clear future adapter boundaries
-frontend must not contain duplicated policy logic
-Movie and Show preset scope separation must be enforced by backend behaviour
-original media safety philosophy must not be weakened
-
-If a significant contradiction exists between the current implementation and PROJECT_SPEC.md, stop and explain it before performing a major refactor.
-
-Tests
-
-Add useful tests for new backend endpoints/services.
-
-At minimum preserve tests around:
-
-Movie preset scoping
-Show preset scoping
-Modern Family sample eligibility
-Dune safety/protection
-hardlinked media blocking
-
-Add tests for queue API/service behaviour if you create queue backend endpoints.
-
-Run:
-
-pytest
-
-Also start/import the FastAPI app locally to catch runtime/import/template errors.
-
-Do not require browser automation.
-
-Git workflow
-
-Do not push.
-
-Before making changes:
-
-git status
-
-At the end:
-
-Run tests.
-Show test result.
-Show git diff --stat.
-Summarize created/modified files.
-Briefly explain architecture choices.
-Create one coherent commit:
-
-Add seed-backed Kompressor web interface
-
-Do not modify LICENSE.
-
-Do not commit:
-
-.venv
-local databases
-logs
-generated temporary files
-credentials
-secrets
-
-After committing, stop.
-
-Do not push to GitHub.
 ````

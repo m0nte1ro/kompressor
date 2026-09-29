@@ -38,10 +38,14 @@ page. Seed mode still needs no media tools and keeps its deterministic fake queu
 Filesystem mode can run independent CPU/libx265 and Intel GPU/hevc_vaapi lanes when
 their runtime prerequisites are available. Each encoder is a separate process from
 FastAPI, so restarting or stopping the WebUI does not terminate its ffmpeg subprocess.
-Both real lanes accept only confirmed SDR progressive sources, keep resolution and
-write a separate validated MKV under the workspace. CPU keeps audio copied; GPU can
-also apply the existing Efficient Audio preset rules. Source files remain untouched.
-HDR and source replacement are not enabled.
+Both real lanes accept only confirmed SDR progressive sources and keep resolution.
+Each job writes a validated MKV under the workspace, then either keeps it there
+(keep original) or swaps it in place of an MKV source (replace, the WebUI default).
+Replacement happens only after output validation, a bit-exact check of every copied
+audio track and the preset's minimum measured saving; the original stays as a hidden
+backup until the replaced file is verified. Audio is copied untouched unless the
+job explicitly unticks Preserve Audio; CPU always copies audio, and GPU can then
+apply the Efficient Audio rules. HDR is not enabled.
 
 See [read-only discovery](docs/READ_ONLY_DISCOVERY.md) for scan behaviour and
 [real encoding](docs/REAL_ENCODING.md) for the supported encode slice, setup,
@@ -54,7 +58,9 @@ ffprobe (Debian/Ubuntu normally provides both in the `ffmpeg` package). Give the
 application user read/traverse access to media roots, a writable application data
 directory outside those roots, and a separate writable workspace with a `jobs/`
 subdirectory. Settings reports whether the binaries, libx265 and workspace are
-usable at startup.
+usable at startup. Source replacement additionally needs the media mount to be
+read-write for the worker user; on a read-only mount replace jobs are excluded with
+a reason and keep-original jobs still work.
 
 ```sh
 export KOMPRESSOR_MEDIA_BACKEND=filesystem
@@ -89,9 +95,11 @@ paths override environment defaults, including saved empty paths. Missing
 ffprobe leaves files listed with unknown metadata and reported errors.
 
 Series naming currently requires a series directory and `SxxExx` episode names;
-unsupported names are reported, not resolved through external metadata. The scanner never writes to the media roots; validated outputs go only to the
-separate workspace. There is no authentication; use the intended private homelab
-network.
+unsupported names are reported, not resolved through external metadata. The scanner
+never writes to the media roots. Only a replace job's worker writes there, and only
+into the source's own directory (a job-named hidden copy and backup next to the
+source, both removed afterwards). There is no authentication; use the intended
+private homelab network.
 
 See the [full Settings audit](docs/SETTINGS_AUDIT.md) and
 [schema, migration and scale report](docs/INVENTORY_STORAGE.md).
@@ -101,8 +109,10 @@ See the [full Settings audit](docs/SETTINGS_AUDIT.md) and
 - Movies and Shows display the existing JSON inventory. Episode tables are flat,
   with season separators, search, filters and mass selection.
 - Review opens scoped presets and reads `/api/eligibility` for each selected item.
-  Technical settings are read-only. Preserve Audio and container metadata are the
-  only per-job options; the backend applies inherited protection tags.
+  Technical settings are read-only. Preserve Audio (ticked by default), container
+  metadata and output handling (replace by default) are the only per-job options;
+  the backend applies inherited protection tags. Show rows suggest an eligible GPU
+  preset first; movies keep their CPU presets.
 - Queue submissions re-evaluate every item. Blocked, missing or already pending
   items are excluded individually. Encoder settings are copied from the preset,
   never accepted as client overrides.
@@ -172,12 +182,16 @@ must be checked after encoding; pre-encode minimum-saving shortfalls produce a
 warning. The editor fills these ranges from the selected intent; they are optional
 advanced planning metadata, not values that control CRF, ICQ or x265.
 
-Jobs default to `replace_source: false` (keep the original and write a separate
-test output). `true` records replacement intent, but the real worker refuses it.
-Seed mode simulates jobs without touching files. Filesystem mode writes a validated
-keep-output artifact under the workspace and never changes the source. Keeping the
-original reclaims no storage and requires free workspace space; actual output size
-and saving are recorded only after validation.
+The compression modal defaults to replacing the source. The API keeps
+`replace_source: false` as its default, so scripted callers keep the original unless
+they ask. Seed mode simulates either choice without touching files. In filesystem
+mode a replace job swaps the validated output into the source path (MKV sources
+only) when the measured saving meets the preset minimum; otherwise the source is
+kept, the output discarded and the job recorded as skipped. A keep-original job
+leaves its validated MKV under the workspace; it reclaims no storage and needs free
+workspace space. Actual output size and saving are recorded only after validation.
+See [real encoding](docs/REAL_ENCODING.md#source-replacement) for the swap and
+recovery details.
 
 Tag writes and pending-job revalidation share a transaction. Queued jobs get
 updated effective audio policy and savings. Jobs that become ineligible move to

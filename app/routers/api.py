@@ -16,6 +16,7 @@ class EligibilityRequest(BaseModel):
     preset_id: str
     preserve_audio: bool | None = None
     preserve_subtitles: bool = True
+    replace_source: bool = False
 
 
 @router.get("/healthz")

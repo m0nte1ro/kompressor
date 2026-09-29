@@ -248,7 +248,8 @@ class PresetSettings(BaseModel):
 
     def video_bitrate_for(self, source_resolution: str) -> int | None:
         if self.rate_control == "qvbr" and self.qvbr_bitrates_by_resolution:
-            return self.qvbr_bitrates_by_resolution.get(source_resolution)
+            return next((rate for resolution, rate in self.qvbr_bitrates_by_resolution.items()
+                         if resolution == source_resolution), None)
         return self.target_video_bitrate
 
 

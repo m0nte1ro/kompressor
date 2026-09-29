@@ -7,7 +7,8 @@ from app.models.preset import CompressionPreset, EncoderBackend
 from app.models.inventory import SourceReference
 
 
-JobStatus = Literal["queued", "encoding", "validating", "stopping", "completed", "skipped", "blocked", "failed"]
+JobStatus = Literal["queued", "encoding", "validating", "replacing", "stopping",
+                    "completed", "skipped", "blocked", "failed"]
 Priority = Literal["low", "normal", "high", "urgent"]
 
 
@@ -17,9 +18,25 @@ class EnqueueRequest(BaseModel):
     media_ids: list[str] = Field(min_length=1, max_length=500)
     scope: MediaScope
     preset_id: str
+    # None preserves audio. Conversion requires an explicit per-job False.
     preserve_audio: bool | None = None
     preserve_subtitles: bool = True
+    # API callers keep the original unless they ask; the WebUI modal defaults to replace.
     replace_source: bool = False
+
+
+class ReplacementJournal(BaseModel):
+    """Persisted before every filesystem step so an interrupted swap can be resolved."""
+    model_config = ConfigDict(extra="forbid")
+    target: str
+    incoming: str
+    backup: str
+    source_device: int
+    source_inode: int
+    output_size: int = Field(ge=0)
+    incoming_device: int | None = None
+    incoming_inode: int | None = None
+    phase: Literal["copying", "copied", "swapping", "swapped", "verified"] = "copying"
 
 
 class PriorityRequest(BaseModel):
@@ -49,6 +66,8 @@ class QueueJob(BaseModel):
     source_revision_id: str | None = None
     source_reference: SourceReference | None = None
     replace_source: bool = False
+    replacement: ReplacementJournal | None = None
+    source_replaced: bool = False
     estimate_basis: str = "bitrate"
     estimated_saving_low: int | None = None
     estimated_saving_high: int | None = None

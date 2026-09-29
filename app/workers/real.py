@@ -1,5 +1,6 @@
 """Standalone real encoder worker with one owned backend lane per process."""
 import logging
+from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import TYPE_CHECKING, Literal
 
@@ -11,6 +12,7 @@ from app.services.errors import Conflict
 from app.services.source_guard import SourceGuard
 from app.services.filesystem_source import FilesystemObservationSource
 from app.workers.ffmpeg import EncodingCancelled, FFmpegEncoder
+from app.workers.replacement import SourceReplacer, replacement_reasons
 
 if TYPE_CHECKING:
     from app.services.queue import QueueService
@@ -33,7 +35,7 @@ class RealEncoderWorker:
                  unavailable_reason: str | None, encoder: FFmpegEncoder,
                  source: FilesystemObservationSource, guard: SourceGuard,
                  capabilities: dict[str, CPUEncodeCapability | GPUEncodeCapability],
-                 probe: "TechnicalProbe"):
+                 probe: "TechnicalProbe", replacer: SourceReplacer | None = None):
         self.backend = backend
         self.runtime_backends = frozenset(supported_backends)
         self.supported_backends = (
@@ -49,6 +51,7 @@ class RealEncoderWorker:
         self.guard = guard
         self.capabilities = capabilities
         self.probe = probe
+        self.replacer = replacer or SourceReplacer()
         self.queue: QueueService | None = None
         self._stop = Event()
         self._wake = Event()
@@ -88,7 +91,22 @@ class RealEncoderWorker:
                 reasons.append("Source path or physical identity changed after the job was queued.")
         elif reference is not None:
             reasons.append("Source revision changed after the job was queued.")
+        if job.replace_source and reference is not None:
+            path = self.source.path_for(reference)
+            if path is None:
+                reasons.append("Current source path is unavailable.")
+            else:
+                reasons.extend(replacement_reasons(path))
         return list(dict.fromkeys(reasons))
+
+    def recover_replacement(self, job: QueueJob) -> tuple[str, str]:
+        """Resolve a replacement interrupted by a worker crash or kill.
+
+        A swap that had already been verified is completed; anything earlier is
+        rolled back to the original. Unknown states are left untouched.
+        """
+        assert job.replacement is not None
+        return self.replacer.resolve(job.replacement, finalize=True)
 
     def capture_source_reference(self, item: Movie | Episode) -> SourceReference | None:
         if item.revision_id is None:
@@ -204,6 +222,8 @@ class RealEncoderWorker:
         result = catalog.evaluate(entry, job.preset, job.requested_preserve_audio, job.preserve_subtitles)
         if not result.eligible:
             raise Conflict("Policy changed before execution: " + "; ".join(result.reasons))
+        if result.preserve_audio != job.preserve_audio:
+            raise Conflict("Audio policy changed before execution. Submit a new job.")
 
         item = entry.item
         capability = self._capability(job.backend)
@@ -230,6 +250,11 @@ class RealEncoderWorker:
             if job.id in self._cancelled or self._stop.is_set():
                 raise EncodingCancelled("Encoding stopped during output validation.")
         errors = capability.validate_output(item, job, output_probe, output.partial_path)
+        if not errors:
+            # Reads source and output in full: every track planned as copied must be
+            # bit-identical, or the job fails and nothing is promoted or replaced.
+            errors = self.encoder.copied_audio_mismatches(
+                job, source_path, item.probe, output.partial_path, output_probe)
         if errors:
             queue.record_validation_errors(job.id, errors)
             raise Conflict("Output validation failed: " + "; ".join(errors))
@@ -240,9 +265,44 @@ class RealEncoderWorker:
             self.guard.before_processing(reference)
             final_path = self.encoder.promote(job.id, output)
             size = final_path.stat().st_size
-            if not queue.complete_real_job(job.id, str(final_path), size):
-                self.encoder.cleanup(job.id, remove_final=True)
-                raise EncodingCancelled("Job was stopped before completion was persisted.")
+            if not job.replace_source:
+                if not queue.complete_real_job(job.id, str(final_path), size):
+                    self.encoder.cleanup(job.id, remove_final=True)
+                    raise EncodingCancelled("Job was stopped before completion was persisted.")
+                return
+        self._replace_source(job, reference, item, capability, source_path, final_path, size)
+
+    def _replace_source(self, job: QueueJob, reference: SourceReference, item: MediaItem,
+                        capability, source_path: Path, output_path: Path, size: int) -> None:
+        queue = self.queue
+        assert queue is not None
+        saving = job.source_size - size
+        percent = saving / job.source_size * 100 if job.source_size else 0.0
+        minimum = job.preset.minimum_expected_saving_percent
+        if saving <= 0 or percent < minimum:
+            self.encoder.cleanup(job.id, remove_final=True)
+            if not queue.skip_real_job(job.id, size, (
+                    f"Measured saving {percent:.1f}% is below the preset minimum of {minimum:g}%. "
+                    "The source was kept and the output discarded.")):
+                raise EncodingCancelled("Job was stopped before the saving check was persisted.")
+            return
+        journal = self.replacer.plan(job.id, source_path, size)
+        # From here the job cannot be stopped: Stop & Skip is refused while replacing.
+        if not queue.set_real_replacing(job.id, journal):
+            self.encoder.cleanup(job.id, remove_final=True)
+            raise EncodingCancelled("Job was stopped before source replacement.")
+
+        def verify(path: Path) -> list[str]:
+            return capability.validate_output(item, job, self.probe.inspect(path), path)
+
+        notes = self.replacer.replace(
+            journal, output_path,
+            before_swap=lambda: self.guard.before_replacement(reference),
+            verify=verify, save=lambda state: queue.update_replacement(job.id, state),
+            should_abort=self._stop.is_set)
+        if not queue.complete_real_job(job.id, str(source_path), size, source_replaced=True, notes=notes):
+            raise RuntimeError("The source was replaced, but completion could not be recorded.")
+        self.encoder.cleanup(job.id, remove_final=True)
 
     def advance(self, job: QueueJob, seconds: float) -> None:
         raise RuntimeError("The real worker is driven by its background thread, not fake ticks.")
