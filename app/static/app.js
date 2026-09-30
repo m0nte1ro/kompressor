@@ -1,10 +1,10 @@
-import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js?v=18';
-import './presets.js?v=18';
-import './settings.js?v=18';
-import './discovery.js?v=18';
-import {setupTags} from './tags.js?v=18';
-import {compressionModal} from './compression.js?v=18';
-import {renderAnalysis, renderHistory, renderQueue} from './queue.js?v=18';
+import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js?v=19';
+import './presets.js?v=19';
+import './settings.js?v=19';
+import './discovery.js?v=19';
+import {setupTags} from './tags.js?v=19';
+import {compressionModal} from './compression.js?v=19';
+import {renderAnalysis, renderHistory, renderQueue} from './queue.js?v=19';
 
 let queue = {lanes: [], history: [], pending_count: 0};
 
@@ -77,7 +77,7 @@ function selectionChanged() {
   $('#select-all').checked = visible.length > 0 && checked === visible.length;
   $('#select-all').indeterminate = checked > 0 && checked < visible.length;
 
-  $('.season-select', library).forEach(control => {
+  $$('.season-select', library).forEach(control => {
     const seasonRows = rows.filter(row => row.dataset.season === control.dataset.season);
     const seasonChecked = seasonRows.filter(row => $('.media-select', row).checked).length;
     control.checked = seasonRows.length > 0 && seasonChecked === seasonRows.length;
