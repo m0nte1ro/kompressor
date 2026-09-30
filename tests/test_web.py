@@ -158,3 +158,9 @@ def test_discovery_script_uses_multi_button_selector_and_declares_manual_scan_st
     script = client.get("/static/discovery.js").text
     assert "const buttons = $$('[data-scan-library]');" in script
     assert "let manualScanRequested = false;" in script
+
+
+def test_app_script_uses_multi_season_selector(client):
+    script = client.get("/static/app.js").text
+    assert "$$('.season-select', library).forEach" in script
+    assert "$('.season-select', library).forEach" not in script
