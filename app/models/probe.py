@@ -84,6 +84,17 @@ class StreamFacts(BaseModel):
 ABSENT_COLOUR_VALUES = {None, "unknown", "unspecified"}
 
 
+def mapped_kinds(preserve_subtitles: bool) -> frozenset[str]:
+    """Stream kinds copied into the Matroska output.
+
+    Data streams (e.g. MP4/MOV timecode tracks) are never mapped: the Matroska
+    muxer rejects them, and they carry nothing a player uses.
+    """
+    if preserve_subtitles:
+        return frozenset({"video", "audio", "subtitle", "attachment"})
+    return frozenset({"video", "audio"})
+
+
 def _untagged_8bit_progressive_sdr(stream: StreamFacts) -> tuple[str, str, str] | None:
     """Shared evidence checks for the per-codec untagged-SDR rules below.
 

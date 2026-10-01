@@ -14,7 +14,7 @@ from app.models.inventory import SourceReference
 from app.models.media import AudioTrack, Movie
 from app.models.preset import CompressionPreset
 from app.models.preferences import WorkerLaneSettings, WorkerSettings
-from app.models.probe import HDRSignalling, MediaProbeResult
+from app.models.probe import HDRSignalling, MediaProbeResult, StreamFacts
 from app.models.queue import EnqueueRequest, QueueJob
 from app.repositories.preset_seed import SeedPresetRepository
 from app.services.encoding_capability import CPUEncodeCapability, GPUEncodeCapability
@@ -1086,3 +1086,21 @@ def test_real_worker_blocks_persisted_fake_jobs_instead_of_encoding(tmp_path, mo
         assert blocked.status == "blocked"
         assert "cannot run in real mode" in blocked.reasons[0]
         assert spawned == []
+
+
+def test_data_streams_are_not_mapped_or_expected_in_the_matroska_output(probe_facts, tmp_path):
+    # MP4/MOV timecode tracks probe as data; the Matroska muxer rejects them.
+    timecode = StreamFacts(index=len(probe_facts.streams), kind="data", codec="bin_data")
+    source = probe_facts.model_copy(update={"streams": [*probe_facts.streams, timecode]})
+    job = queue_job(preserve_subtitles=True)
+    command = FFmpegEncoder.build_command("/usr/bin/ffmpeg", job, Path("/read-only/Film.mkv"),
+                                          tmp_path / "Fixture.kompressor.partial.mkv", source)
+    assert f"0:{timecode.index}" not in command
+    output = probe_facts.model_copy(update={"streams": [
+        stream.model_copy(update={"codec": "hevc", "pixel_format": "yuv420p10le",
+                                  "hdr": stream.hdr.model_copy(update={"bit_depth": 10})})
+        if stream.kind == "video" else stream for stream in probe_facts.streams]})
+    output_file = tmp_path / "output.mkv"
+    output_file.write_bytes(b"validated")
+    errors = CPUEncodeCapability().validate_output(movie_item(source), job, output, output_file)
+    assert not any("data" in error or "order" in error for error in errors), errors

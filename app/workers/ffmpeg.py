@@ -11,7 +11,7 @@ from threading import Lock, Thread
 from time import monotonic
 
 from app.workers import vaapi
-from app.models.probe import MediaProbeResult, StreamFacts, assumed_sdr_colours
+from app.models.probe import MediaProbeResult, StreamFacts, assumed_sdr_colours, mapped_kinds
 from app.models.queue import QueueJob
 from app.services.encoding_capability import SUPPORTED_PIXEL_FORMATS
 from app.services.estimation import plan_audio_tracks
@@ -163,7 +163,8 @@ class FFmpegEncoder:
             raise FFmpegError("Source has no primary video stream.")
         if primary.pixel_format not in SUPPORTED_PIXEL_FORMATS:
             raise FFmpegError(f"Unsupported or unknown source pixel format: {primary.pixel_format or 'unknown'}.")
-        streams = probe.streams if job.preserve_subtitles else [s for s in probe.streams if s.kind in {"video", "audio"}]
+        kinds = mapped_kinds(job.preserve_subtitles)
+        streams = [s for s in probe.streams if s.kind in kinds]
         ordered = [primary, *(s for s in streams if s.index != primary.index)]
 
         command = [binary, "-hide_banner", "-nostdin", "-y", "-v", "error",
