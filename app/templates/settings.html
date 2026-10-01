@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block content %}
-<p class="notice">Preset quality values and GPU settings are experimental starting points, not exact or Netflix-equivalent guarantees. Changes are saved locally and affect new job plans and eligibility. Queued jobs retain their original preset configuration. Real encoding, when enabled, supports CPU/libx265 and Intel GPU (VA-API)/hevc_vaapi lanes for confirmed SDR progressive sources, writing validated MKV output that either replaces the source after verification or is kept in the workspace.</p>
+<p class="notice">Preset quality values and GPU settings are experimental starting points, not exact or Netflix-equivalent guarantees. Changes are saved locally and affect new job plans and eligibility. Queued jobs retain their original preset configuration. Real encoding, when enabled, supports CPU (x265) and GPU (Intel VA-API) lanes for confirmed SDR progressive sources, writing validated MKV output that either replaces the source after verification or is kept in the workspace.</p>
 {% for scope, heading in [('movie', 'Movie presets'), ('show', 'Show presets')] %}
 <details class="preset-section" aria-label="{{ heading }}" open>
   <summary><h2>{{ heading }}</h2><span class="badge">{{ presets | selectattr('scope', 'equalto', scope) | list | length }} presets</span></summary>
@@ -9,14 +9,14 @@
   {% for preset in presets if preset.scope == scope %}
   <article class="card preset-card" data-preset-id="{{ preset.id }}"><header><h3>{{ preset.name }}</h3><span class="badge {{ 'green' if preset.enabled else 'red' }}">{{ 'Enabled' if preset.enabled else 'Disabled' }}</span></header>
     <dl>
-      <dt>Backend</dt><dd>{{ preset.backend | label }}</dd>
+      <dt>Encoder</dt><dd>{{ preset.backend | label }}</dd>
       <dt>Intent</dt><dd>{{ preset.intent | label }}</dd>
       <dt>Origin</dt><dd>{{ preset.origin | label }}</dd>
       <dt>Destination codec</dt><dd>{{ preset.destination_codec | label }}</dd>
       <dt>HDR input support</dt><dd>{{ preset.hdr_support | label }}</dd>
       <dt>HDR output policy</dt><dd>{{ preset.hdr_policy | label }}</dd>
-      <dt>Rate control</dt><dd>{{ preset.rate_control | upper }}{% if preset.quality_value is not none %} {{ preset.quality_value }}{% endif %}{% if preset.backend != 'qsv' %} · {{ preset.encoder_preset }}{% endif %}</dd>
-      {% if preset.backend == 'qsv' %}<dt>Output bit depth</dt><dd>{{ preset.output_bit_depth }} bit</dd><dt>Validation</dt><dd>Experimental</dd>{% else %}<dt>Output bit depth</dt><dd>{{ preset.output_bit_depth }} bit</dd>{% endif %}
+      <dt>Rate control</dt><dd>{{ preset.rate_control | upper }}{% if preset.quality_value is not none %} {{ preset.quality_value }}{% endif %}{% if preset.backend != 'gpu' %} · {{ preset.encoder_preset }}{% endif %}</dd>
+      {% if preset.backend == 'gpu' %}<dt>Output bit depth</dt><dd>{{ preset.output_bit_depth }} bit</dd><dt>Validation</dt><dd>Experimental</dd>{% else %}<dt>Output bit depth</dt><dd>{{ preset.output_bit_depth }} bit</dd>{% endif %}
       {% if preset.rate_control == 'qvbr' and preset.qvbr_bitrates_by_resolution %}<dt>Nominal bitrate by source resolution</dt><dd>{% for resolution, rate in preset.qvbr_bitrates_by_resolution.items() %}{{ resolution }}: {{ rate | bitrate }}{% if not loop.last %} · {% endif %}{% endfor %}</dd>{% elif preset.rate_control in ['abr', 'qvbr'] %}<dt>{{ 'Nominal video bitrate' if preset.rate_control == 'qvbr' else 'Target bitrate' }}</dt><dd>{{ preset.target_video_bitrate | bitrate }}</dd>{% endif %}
       <dt>Source resolutions</dt><dd>{{ preset.source_resolutions | join(', ') }}</dd>
       <dt>Target resolution</dt><dd>{{ preset.target_resolution | label }}</dd>
@@ -56,7 +56,7 @@
     <label class="field">Timezone
       <input name="timezone" value="{{ worker_controls.timezone }}" maxlength="100" placeholder="Europe/Lisbon">
     </label>
-    {% for backend, heading in [('cpu', 'CPU'), ('qsv', 'Intel GPU (VA-API)')] %}
+    {% for backend, heading in [('cpu', 'CPU'), ('gpu', 'GPU')] %}
     {% set lane = worker_controls.lanes[backend] %}
     <fieldset class="worker-schedule-lane">
       <legend>{{ heading }}</legend>
@@ -77,13 +77,13 @@
     <dt>ffmpeg</dt><dd>{{ runtime_settings.ffmpeg_binary }} · {{ 'available' if runtime_settings.ffmpeg_available is sameas true else 'not found' if runtime_settings.ffmpeg_available is sameas false else 'not checked' }}</dd>
     <dt>ffprobe</dt><dd>{{ runtime_settings.ffprobe_binary }} · {{ 'available' if runtime_settings.ffprobe_available is sameas true else 'not found' if runtime_settings.ffprobe_available is sameas false else 'not checked' }}</dd>
     <dt>libx265</dt><dd>{{ 'available' if runtime_settings.libx265_available is sameas true else 'unavailable' if runtime_settings.libx265_available is sameas false else 'not checked' }}</dd>
-    <dt>Intel GPU (VA-API) HEVC</dt><dd>{{ 'available' if runtime_settings.hevc_vaapi_available is sameas true else 'unavailable' if runtime_settings.hevc_vaapi_available is sameas false else 'not checked' }} · <code>{{ runtime_settings.qsv_device }}</code></dd>
+    <dt>GPU HEVC encoder (Intel VA-API)</dt><dd>{{ 'available' if runtime_settings.hevc_vaapi_available is sameas true else 'unavailable' if runtime_settings.hevc_vaapi_available is sameas false else 'not checked' }} · <code>{{ runtime_settings.gpu_device }}</code></dd>
     <dt>Workspace</dt><dd><code>{{ runtime_settings.workspace_root }}</code> · {{ 'writable' if runtime_settings.workspace_writable is sameas true else 'not writable' if runtime_settings.workspace_writable is sameas false and runtime_settings.media_backend == 'filesystem' else 'not checked' }}</dd>
     <dt>Encoding</dt><dd>{{ 'enabled' if runtime_settings.encoding_enabled else 'disabled' }} · {{ runtime_settings.encoder_mode }}</dd>
     <dt>Supported backends</dt><dd>{{ runtime_settings.supported_backends | join(', ') if runtime_settings.supported_backends else 'none' }}</dd>
   </dl>
   {% if runtime_settings.cpu_unavailable_reason and 'cpu' not in runtime_settings.supported_backends %}<p class="reason">CPU: {{ runtime_settings.cpu_unavailable_reason }}</p>{% endif %}
-  {% if runtime_settings.qsv_unavailable_reason and 'qsv' not in runtime_settings.supported_backends %}<p class="reason">GPU: {{ runtime_settings.qsv_unavailable_reason }}</p>{% endif %}
+  {% if runtime_settings.gpu_unavailable_reason and 'gpu' not in runtime_settings.supported_backends %}<p class="reason">GPU: {{ runtime_settings.gpu_unavailable_reason }}</p>{% endif %}
   {% if runtime_settings.unavailable_reason %}<p class="reason">{{ runtime_settings.unavailable_reason }}</p>{% endif %}
   <p class="muted">Runtime binary, GPU device and workspace settings come from the environment and require restart. Real output is written only below the configured workspace.</p>
 </section>

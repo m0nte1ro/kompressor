@@ -48,7 +48,7 @@ def bitrate(value: int | None) -> str:
 
 
 def label(value: str | None) -> str:
-    labels = {"cpu": "CPU · x265", "qsv": "Intel GPU (VA-API)", "hevc": "HEVC",
+    labels = {"cpu": "CPU · x265", "gpu": "GPU · Intel VA-API", "hevc": "HEVC",
               "h264": "H.264", "preserve": "Preserve source", "keep": "Keep source resolution",
               "efficient": "Efficient E-AC3 / AAC", "max_2160p": "Max 2160p",
               "max_1080p": "Max 1080p", "max_720p": "Max 720p", "max_576p": "Max 576p",
@@ -105,7 +105,7 @@ def episodes(request: Request, show_id: str, processor: Processor):
 @router.get("/queue", response_class=HTMLResponse)
 def queue(request: Request, processor: Processor):
     return render(request, "queue.html", "queue", "Queue",
-                  subtitle="Independent CPU and Intel GPU (VA-API) workers · estimated saving first",
+                  subtitle="Independent CPU and GPU workers · estimated saving first",
                   scan_status=processor.get_scan_status(), runtime_settings=processor.get_runtime_settings())
 
 
@@ -128,10 +128,10 @@ def settings(request: Request, processor: Processor):
         "media_backend": scan_status.get("backend", "seed"),
         "ffmpeg_binary": "ffmpeg", "ffprobe_binary": "ffprobe",
         "ffmpeg_available": None, "ffprobe_available": None, "libx265_available": None,
-        "hevc_vaapi_available": None, "qsv_available": False, "qsv_device": "/dev/dri/renderD128",
+        "hevc_vaapi_available": None, "gpu_available": False, "gpu_device": "/dev/dri/renderD128",
         "workspace_root": "not configured", "workspace_writable": None,
         "encoding_enabled": False, "encoder_mode": "seed fake simulation",
-        "supported_backends": ["cpu", "qsv"] if scan_status.get("backend") == "seed" else [],
+        "supported_backends": ["cpu", "gpu"] if scan_status.get("backend") == "seed" else [],
         "unavailable_reason": None, **runtime_settings,
     }
     runtime_settings.setdefault("startup", dict(runtime_settings))

@@ -14,7 +14,7 @@ export const duration = value => {
   return `${seconds}s`;
 };
 export const bitrate = value => value == null ? '—' : `${(value / 1e6).toFixed(1)} Mbps`;
-export const label = value => ({cpu: 'CPU · x265', qsv: 'Intel GPU (VA-API)', hevc: 'HEVC', h264: 'H.264',
+export const label = value => ({cpu: 'CPU · x265', gpu: 'GPU · Intel VA-API', hevc: 'HEVC', h264: 'H.264',
   preserve: 'Preserve source', keep: 'Keep source resolution', efficient: 'Efficient E-AC3 / AAC',
   max_2160p: 'Max 2160p', max_1080p: 'Max 1080p', max_720p: 'Max 720p', max_576p: 'Max 576p', max_480p: 'Max 480p',
   sdr_only: 'SDR sources only', hdr10_experimental: 'SDR + HDR10 · experimental',

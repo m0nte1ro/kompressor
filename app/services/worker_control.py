@@ -28,7 +28,7 @@ class WorkerControlService:
         settings = self.get()
         return self.save(settings.model_copy(update={
             "cpu": settings.cpu.model_copy(update={"paused": paused}),
-            "qsv": settings.qsv.model_copy(update={"paused": paused}),
+            "gpu": settings.gpu.model_copy(update={"paused": paused}),
         }))
 
     def pause_all(self) -> WorkerSettings:
@@ -76,7 +76,7 @@ class WorkerControlService:
     def snapshot(self, at: datetime | None = None) -> dict:
         settings = self.get()
         lanes = {}
-        for backend in ("cpu", "qsv"):
+        for backend in ("cpu", "gpu"):
             lane = getattr(settings, backend)
             quiet = self._quiet_active(settings, backend, at)
             lanes[backend] = {

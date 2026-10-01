@@ -26,7 +26,7 @@ def test_eligibility_regressions(client, scope, media, preset, eligible, reason)
     if reason:
         assert any(reason in item for item in result["reasons"])
     else:
-        assert result["backend"] == "qsv"
+        assert result["backend"] == "gpu"
         assert result["planning_saving"] > 0
 
 

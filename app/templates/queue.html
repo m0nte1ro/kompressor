@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block content %}
 {% if scan_status.backend == 'filesystem' and runtime_settings.encoding_enabled %}
-<p class="notice">Real jobs run only on available lanes: {% if 'cpu' in runtime_settings.supported_backends %}CPU/libx265{% endif %}{% if 'cpu' in runtime_settings.supported_backends and 'qsv' in runtime_settings.supported_backends %} + {% endif %}{% if 'qsv' in runtime_settings.supported_backends %}Intel GPU (VA-API)/hevc_vaapi{% endif %}. Confirmed SDR progressive sources keep their resolution. Replace jobs swap the source only after validation, a bit-exact check of every copied audio track and the preset minimum saving; keep-original jobs write a validated MKV to the Kompressor workspace. Progress and measured savings come from the real encode.</p>
+<p class="notice">Real jobs run only on available lanes: {% if 'cpu' in runtime_settings.supported_backends %}CPU · x265{% endif %}{% if 'cpu' in runtime_settings.supported_backends and 'gpu' in runtime_settings.supported_backends %} + {% endif %}{% if 'gpu' in runtime_settings.supported_backends %}GPU · Intel VA-API{% endif %}. Confirmed SDR progressive sources keep their resolution. Replace jobs swap the source only after validation, a bit-exact check of every copied audio track and the preset minimum saving; keep-original jobs write a validated MKV to the Kompressor workspace. Progress and measured savings come from the real encode.</p>
 {% elif scan_status.backend == 'filesystem' %}
 <p class="notice">Filesystem queue is read-only until runtime prerequisites are available. {{ runtime_settings.unavailable_reason or 'Encoding is disabled.' }}</p>
 {% else %}
@@ -15,7 +15,7 @@
   </div>
 </div>
 <div class="queue-grid" id="queue-lanes">
-  {% for backend, label in [('cpu', 'CPU Queue'), ('qsv', 'Intel GPU (VA-API) Queue')] %}
+  {% for backend, label in [('cpu', 'CPU Queue'), ('gpu', 'GPU Queue')] %}
   {% set backend_enabled = backend in runtime_settings.supported_backends %}
   <section class="card lane {{ 'lane-disabled' if not backend_enabled }}" data-backend="{{ backend }}" aria-label="{{ label }}">
     <header class="lane-head">

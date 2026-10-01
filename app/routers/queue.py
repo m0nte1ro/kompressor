@@ -47,17 +47,17 @@ def stop_all(processor: Processor) -> dict:
 
 
 @router.post("/workers/{backend}/pause")
-def pause_worker(processor: Processor, backend: Literal["cpu", "qsv"]) -> dict:
+def pause_worker(processor: Processor, backend: Literal["cpu", "gpu"]) -> dict:
     return processor.pause_worker(backend)
 
 
 @router.post("/workers/{backend}/resume")
-def resume_worker(processor: Processor, backend: Literal["cpu", "qsv"]) -> dict:
+def resume_worker(processor: Processor, backend: Literal["cpu", "gpu"]) -> dict:
     return processor.resume_worker(backend)
 
 
 @router.post("/workers/{backend}/stop-active", status_code=202)
-def stop_active_worker(processor: Processor, backend: Literal["cpu", "qsv"]) -> dict:
+def stop_active_worker(processor: Processor, backend: Literal["cpu", "gpu"]) -> dict:
     return {"stopping": processor.stop_active_worker(backend)}
 
 

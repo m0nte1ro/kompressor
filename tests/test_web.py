@@ -84,11 +84,11 @@ def test_settings_groups_presets_and_shows_policy_fields(client):
     assert html.count('<details class="preset-section"') == 2
     assert '<details id="audio-conversion-options" class="notice" hidden>' in html
     assert 'id="library-paths-form"' in html
-    qsv_start = html.index('data-preset-id="show-streaming-quality"')
-    qsv_card = html[qsv_start:html.index('</article>', qsv_start)]
-    assert "Encoder effort" not in qsv_card
-    assert "Validation" in qsv_card and "Experimental" in qsv_card
-    assert "Output bit depth" in qsv_card
+    gpu_start = html.index('data-preset-id="show-streaming-quality"')
+    gpu_card = html[gpu_start:html.index('</article>', gpu_start)]
+    assert "Encoder effort" not in gpu_card
+    assert "Validation" in gpu_card and "Experimental" in gpu_card
+    assert "Output bit depth" in gpu_card
     assert "Conversion profile" in html
     assert 'class="quality-range"' in html
     assert 'id="quality-value-output"' in html

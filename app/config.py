@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 
 from pydantic_settings import (
     BaseSettings,
@@ -35,12 +35,14 @@ class Settings(BaseSettings):
     ffprobe_timeout: float = Field(default=30, gt=0, le=600)
     ffmpeg_binary: str = Field(default="ffmpeg", min_length=1)
     workspace_root: Path = Path("/mnt/kompressor")
-    # Legacy environment key KOMPRESSOR_QSV_DEVICE now selects the VA-API render node.
-    qsv_device: Path = Path("/dev/dri/renderD128")
+    # Render node of the Intel GPU used for VA-API encoding. KOMPRESSOR_QSV_DEVICE is
+    # the name used before the rename and is still read when the new one is unset.
+    gpu_device: Path = Field(default=Path("/dev/dri/renderD128"), validation_alias=AliasChoices(
+        "gpu_device", "KOMPRESSOR_GPU_DEVICE", "KOMPRESSOR_QSV_DEVICE"))
     timezone: str = "UTC"
 
 
-    @field_validator("workspace_root", "qsv_device")
+    @field_validator("workspace_root", "gpu_device")
     @classmethod
     def absolute_paths(cls, value: Path) -> Path:
         if not value.is_absolute():

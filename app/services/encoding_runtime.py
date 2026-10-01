@@ -41,8 +41,8 @@ def roots_overlap_workspace(workspace_root: Path, media_roots: dict[str, Path]) 
 
 def capability_status(ffmpeg_binary: str, ffprobe_binary: str, workspace_root: Path,
                       media_roots: dict[str, Path],
-                      qsv_device: Path = Path("/dev/dri/renderD128"),
-                      backends: set[str] | frozenset[str] = frozenset({"cpu", "qsv"})) -> dict:
+                      gpu_device: Path = Path("/dev/dri/renderD128"),
+                      backends: set[str] | frozenset[str] = frozenset({"cpu", "gpu"})) -> dict:
     common_reasons: list[str] = []
     ffmpeg = executable(ffmpeg_binary)
     ffprobe = executable(ffprobe_binary)
@@ -73,7 +73,7 @@ def capability_status(ffmpeg_binary: str, ffprobe_binary: str, workspace_root: P
         common_reasons.append("Workspace or media root cannot be resolved.")
 
     requested = frozenset(backends)
-    unknown = requested - {"cpu", "qsv"}
+    unknown = requested - {"cpu", "gpu"}
     if unknown:
         raise ValueError(f"Unknown encoder backends: {', '.join(sorted(unknown))}")
 
@@ -91,46 +91,46 @@ def capability_status(ffmpeg_binary: str, ffprobe_binary: str, workspace_root: P
             cpu_reasons.append(cpu_error or "libx265 is unavailable.")
         cpu_ready = not cpu_reasons
 
-    qsv_available: bool | None = None
-    qsv_reasons: list[str] = []
-    qsv_path = qsv_device.expanduser().absolute()
-    qsv_ready = False
-    if "qsv" in requested:
-        qsv_reasons = [*common_reasons]
-        qsv_error = None
+    gpu_available: bool | None = None
+    gpu_reasons: list[str] = []
+    gpu_path = gpu_device.expanduser().absolute()
+    gpu_ready = False
+    if "gpu" in requested:
+        gpu_reasons = [*common_reasons]
+        gpu_error = None
         if ffmpeg is not None and ffprobe is not None and not common_reasons:
-            qsv_available, qsv_error = FFmpegEncoder.vaapi_runtime_check(ffmpeg, qsv_path, ffprobe, root)
+            gpu_available, gpu_error = FFmpegEncoder.vaapi_runtime_check(ffmpeg, gpu_path, ffprobe, root)
         else:
-            qsv_available = False
-        if not qsv_available:
-            qsv_reasons.append(qsv_error or "Intel GPU (VA-API) HEVC is unavailable.")
-        qsv_ready = not qsv_reasons
+            gpu_available = False
+        if not gpu_available:
+            gpu_reasons.append(gpu_error or "GPU HEVC encoder (Intel VA-API) is unavailable.")
+        gpu_ready = not gpu_reasons
 
     supported = [
-        backend for backend, ready in (("cpu", cpu_ready), ("qsv", qsv_ready))
+        backend for backend, ready in (("cpu", cpu_ready), ("gpu", gpu_ready))
         if backend in requested and ready
     ]
     requested_reasons = [
         *(cpu_reasons if "cpu" in requested else []),
-        *(qsv_reasons if "qsv" in requested else []),
+        *(gpu_reasons if "gpu" in requested else []),
     ]
     overall_reason = None if supported else "; ".join(dict.fromkeys(requested_reasons))
 
     return {
         "available": bool(supported),
         "cpu_available": cpu_ready,
-        "qsv_available": qsv_ready,
+        "gpu_available": gpu_ready,
         "supported_backends": supported,
         "ffmpeg_available": ffmpeg is not None,
         "ffprobe_available": ffprobe_ready,
         "libx265_available": x265_available,
-        "hevc_vaapi_available": qsv_available,
-        "qsv_device": str(qsv_path),
+        "hevc_vaapi_available": gpu_available,
+        "gpu_device": str(gpu_path),
         "ffmpeg_binary": ffmpeg or ffmpeg_binary,
         "ffprobe_binary": ffprobe or ffprobe_binary,
         "workspace_root": str(root),
         "workspace_writable": writable,
         "cpu_unavailable_reason": "; ".join(dict.fromkeys(cpu_reasons)) if cpu_reasons else None,
-        "qsv_unavailable_reason": "; ".join(dict.fromkeys(qsv_reasons)) if qsv_reasons else None,
+        "gpu_unavailable_reason": "; ".join(dict.fromkeys(gpu_reasons)) if gpu_reasons else None,
         "unavailable_reason": overall_reason,
     }

@@ -88,7 +88,7 @@ export function compressionModal(scope, refreshQueue) {
       : `${preset.rate_control.toUpperCase()} ${preset.quality_value ?? bitrate(preset.target_video_bitrate)}`;
     const fields = [
       ['Backend', label(preset.backend)], ['Destination codec', label(preset.destination_codec)],
-      ['Rate control', rateControl], ...(preset.backend === 'qsv' ? [['Output bit depth', `${preset.output_bit_depth} bit`], ['Validation', 'Experimental']] : [['Encoder effort', preset.encoder_preset], ['Output bit depth', `${preset.output_bit_depth} bit`]]), ['Target resolution', label(preset.target_resolution)],
+      ['Rate control', rateControl], ...(preset.backend === 'gpu' ? [['Output bit depth', `${preset.output_bit_depth} bit`], ['Validation', 'Experimental']] : [['Encoder effort', preset.encoder_preset], ['Output bit depth', `${preset.output_bit_depth} bit`]]), ['Target resolution', label(preset.target_resolution)],
       ['Audio policy', preset.audio_policy === 'efficient' ? 'Efficient conversion' : 'Preserve every audio track by default'], ...(preset.audio_policy === 'efficient' ? [['Conversion profile', 'AAC stereo / E-AC3 multichannel']] : []), ['HDR input support', label(preset.hdr_support)], ['HDR output policy', label(preset.hdr_policy)],
     ];
     $('#preset-properties').innerHTML = fields.map(([name, value]) =>
@@ -238,7 +238,7 @@ export function compressionModal(scope, refreshQueue) {
       // The backend suggestion already prefers an eligible GPU preset for shows.
       const suggested = presets.find(p => p.id === rows[0].dataset.preset && usable(p));
       const chosen = suggested
-        ?? presets.find(p => usable(p) && (scope !== 'show' || p.backend === 'qsv'))
+        ?? presets.find(p => usable(p) && (scope !== 'show' || p.backend === 'gpu'))
         ?? presets.find(usable);
       if (!chosen) throw new Error('No available presets for this media scope.');
       $('#preset').value = chosen.id;

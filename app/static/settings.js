@@ -49,7 +49,7 @@ if (workerForm) {
         body: JSON.stringify({
           timezone: workerForm.elements.timezone.value,
           cpu: lane('cpu'),
-          qsv: lane('qsv'),
+          gpu: lane('gpu'),
         }),
       });
       status.textContent = 'Saved';

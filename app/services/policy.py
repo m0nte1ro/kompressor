@@ -56,7 +56,7 @@ class PolicyEngine:
             reasons.append("HDR to SDR tone mapping is not implemented in this workflow.")
         if preset.rate_control != "abr":
             warnings.append("Planning range only: quality-based output may fall outside it. Actual savings must be checked after encoding.")
-        if preset.backend == "qsv":
+        if preset.backend == "gpu":
             warnings.append("GPU quality and rate-control support require validation on your Intel hardware.")
 
         if "Quality CPU" in effective_tags and preset.backend != "cpu":
