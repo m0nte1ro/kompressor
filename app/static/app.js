@@ -237,6 +237,14 @@ $('#history-rows')?.addEventListener('click', event => {
       await api(`/api/queue/${encodeURIComponent(row.dataset.job)}/replace-source`, {method: 'POST'});
       notify('Replacement queued on its worker lane.');
     });
+  } else if (button.dataset.historyAction === 'delete') {
+    const kept = button.closest('.job-controls')?.querySelector('[data-history-action="replace"]');
+    const confirmed = window.confirm(`Delete “${row.dataset.name}” from History?`
+      + (kept ? '\n\nThis also deletes its kept output file. The source is not touched.' : ''));
+    if (!confirmed) return;
+    mutate(async () => {
+      await api(`/api/queue/history/${encodeURIComponent(row.dataset.job)}`, {method: 'DELETE'});
+    });
   } else if (button.dataset.historyAction === 'benchmark') {
     const dialog = $('#benchmark-dialog');
     dialog.dataset.job = row.dataset.job;

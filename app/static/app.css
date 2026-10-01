@@ -76,6 +76,7 @@ tbody tr:last-child > * { border-bottom: 0; }
 .violet { border-color: #554473; background: #1c1528; color: #e4d8ff; }
 .hdr { color: #ffe0a8; }
 .saving { color: #bff8c6; }
+.saving.larger { color: var(--red); }
 .job-state { display: block; margin-top: 5px; }
 .season th { background: #151e29; color: #9caec0; font-size: 10px; text-transform: uppercase; letter-spacing: .1em; padding: 8px 14px; }
 .empty { padding: 28px 16px; text-align: center; color: var(--muted); }

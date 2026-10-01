@@ -278,6 +278,20 @@ class QueueService:
                 raise QueueConflict("Only queued jobs can be removed. Use Stop & Skip for active jobs.")
             self.repository.remove(job_id)
 
+    def delete_history(self, job_id: str) -> None:
+        """Forget a finished job. A kept output still in the workspace goes with it."""
+        with self.lock, self.repository.transaction():
+            job = self._find(job_id)
+            if job.status in PENDING:
+                raise QueueConflict("Only finished jobs can be deleted from History.")
+            if any(j.replaces_job_id == job.id and j.status in PENDING for j in self.repository.get_all()):
+                raise QueueConflict("A replacement using this kept output is queued or running.")
+            self.repository.remove(job_id)
+        cleanup = getattr(self.worker, "cleanup_interrupted", None)
+        if cleanup and job.execution_mode == "real":
+            # Only Kompressor's own outputs in <workspace>/jobs/<id>; never the source.
+            cleanup(job.id)
+
     def prioritize(self, job_id: str, priority: Priority | None = None) -> None:
         with self.lock, self.repository.transaction():
             job = self._find(job_id)

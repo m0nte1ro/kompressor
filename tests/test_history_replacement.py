@@ -136,3 +136,24 @@ def test_seed_mode_refuses_history_replacement(client):
                                            "media_ids": ["movie-king-of-comedy"]}).json()["added"][0]
     assert client.post(f"/api/queue/{added['id']}/replace-source").status_code == 422
 
+
+
+def test_deleting_a_history_entry_removes_its_kept_output_but_never_the_source(
+        tmp_path, monkeypatch, probe_facts):
+    application, source, _ = kept(tmp_path, monkeypatch, probe_facts, output_size=1_000_000)
+    with TestClient(application) as client:
+        processor = application.state.media_processor
+        original = run_one(processor, replace_source=False)
+        output = Path(original["output_path"])
+        before = source.stat()
+
+        replacement = processor.replace_with_kept_output(original["id"])
+        refused = client.delete(f"/api/queue/history/{original['id']}")
+        assert refused.status_code == 409 and "replacement" in refused.json()["detail"]
+        assert client.delete(f"/api/queue/history/{replacement['id']}").status_code == 409
+        processor.remove_queued_job(replacement["id"])
+
+        assert client.delete(f"/api/queue/history/{original['id']}").status_code == 204
+        assert all(job["id"] != original["id"] for job in client.get("/api/queue").json()["history"])
+        assert not output.exists()
+        assert source.stat().st_ino == before.st_ino and source.stat().st_size == before.st_size

@@ -13,6 +13,11 @@ function measuredChange(job) {
     : `${size(saving)} saved (${percent.toFixed(1)}%) measured`;
 }
 
+// Measured outputs that grew are shown in red, savings in green.
+function savingClass(job) {
+  return (job.measured_saving ?? 0) < 0 ? 'saving larger' : 'saving';
+}
+
 // Linear extrapolation from progress so far; hidden until 1% so early noise is not shown.
 function remaining(job) {
   if (job.status !== 'encoding' || !(job.progress >= 1 && job.progress < 100) || !(job.elapsed_seconds > 0)) return null;
@@ -31,7 +36,7 @@ function jobDetails(job) {
     : `Keep original · output ${esc(job.output_path || 'in workspace after validation')}`;
   return `<div class="job-name">${esc(job.name)}</div>
     <p class="job-meta">${esc(job.preset.name)} · ${esc(label(job.backend))} · ${esc(label(job.preset.destination_codec))}</p>
-    <p class="saving">${measuredChange(job) ? esc(measuredChange(job)) : estimate}</p>
+    <p class="${savingClass(job)}">${measuredChange(job) ? esc(measuredChange(job)) : estimate}</p>
     <p class="job-meta">${source}</p>`;
 }
 
@@ -121,13 +126,15 @@ function analysisResults(job) {
 }
 
 function historyActions(job, pending) {
-  if (!keptOutput(job)) return analysisResults(job);
   const replacing = pending.some(other => other.replaces_job_id === job.id);
+  const remove = replacing ? '' : '<button data-history-action="delete" title="Remove this entry from History">Delete</button>';
+  if (!keptOutput(job)) return `${remove ? `<div class="job-controls">${remove}</div>` : ''}${analysisResults(job)}`;
   return `<div class="job-controls">${replacing
     ? '<span class="badge blue">Replacement queued</span>'
     : '<button class="danger" data-history-action="replace">Replace source</button>'}
     <button data-history-action="compare" title="Random side-by-side screenshots: source left, output right">Compare</button>
-    <button data-history-action="benchmark" title="VMAF score for a segment of chosen length">Benchmark</button></div>
+    <button data-history-action="benchmark" title="VMAF score for a segment of chosen length">Benchmark</button>
+    ${remove}</div>
     ${analysisResults(job)}`;
 }
 
@@ -190,7 +197,7 @@ export function renderHistory(queue) {
     <td>${esc(job.preset.name)}<small>${isReal ? `${job.backend === 'qsv' ? 'GPU' : 'CPU · libx265'} · ${job.source_replaced ? 'source replaced' : 'source kept'}` : 'Simulation · source unchanged'}</small><small>${esc(label(job.backend))}</small></td>
     <td>${esc(size(job.source_size))}</td>
     <td>${actualOutput ? esc(size(job.output_size)) : job.status === 'completed' ? job.estimate_basis === 'planning_range' ? `${esc(size(job.estimated_output_size_low))} – ${esc(size(job.estimated_output_size_high))} planning` : `~${esc(size(job.estimated_output_size))} estimate` : '—'}${outputPath}</td>
-    <td class="saving">${savingText}</td>
+    <td class="${actualSaving ? savingClass(job) : 'saving'}">${savingText}</td>
     <td>${esc(label(job.source_codec))} → ${esc(label(job.preset.destination_codec))}</td>
     <td>${esc(duration(job.elapsed_seconds))}</td><td>${esc(finished)}</td>
     <td>${historyActions(job, pending)}</td>

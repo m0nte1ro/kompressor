@@ -179,3 +179,10 @@ def test_every_module_gets_a_content_versioned_url(client):
         assert not re.search(r"from '[^']+\?v=|import '[^']+\?v=", script.read_text())
     response = client.get("/static/common.js")
     assert response.headers["cache-control"] == "no-cache"
+
+
+def test_history_marks_grown_outputs_red_and_offers_delete(client):
+    script = client.get("/static/queue.js").text
+    assert "'saving larger'" in script and 'data-history-action="delete"' in script
+    assert ".saving.larger { color: var(--red); }" in client.get("/static/app.css").text
+    assert "/api/queue/history/" in client.get("/static/app.js").text

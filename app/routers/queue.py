@@ -61,6 +61,12 @@ def stop_active_worker(processor: Processor, backend: Literal["cpu", "qsv"]) -> 
     return {"stopping": processor.stop_active_worker(backend)}
 
 
+@router.delete("/history/{job_id}", status_code=204)
+def delete_history(processor: Processor, job_id: str) -> Response:
+    processor.delete_history_job(job_id)
+    return Response(status_code=204)
+
+
 @router.delete("/{job_id}", status_code=204)
 def remove(processor: Processor, job_id: str) -> Response:
     processor.remove_queued_job(job_id)

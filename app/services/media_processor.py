@@ -123,6 +123,9 @@ class MediaProcessor:
     def remove_queued_job(self, job_id: str):
         self.queue.remove(job_id)
 
+    def delete_history_job(self, job_id: str):
+        self.queue.delete_history(job_id)
+
     def prioritize_job(self, job_id: str, priority: Priority):
         self.queue.prioritize(job_id, priority)
 
