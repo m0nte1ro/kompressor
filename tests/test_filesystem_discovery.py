@@ -130,6 +130,39 @@ def test_real_inventory_reaches_ui_api_and_keeps_seed_mode_separate(config, prob
         assert client.get('/api/library').json()['movies'][0]['id'] == movie['id']
 
 
+def test_cached_cropped_hevc_is_2160p_after_restart_without_reprobing(config, monkeypatch):
+    facts = parse_ffprobe(json.loads((PROJECT_ROOT / 'fixtures/ffprobe/progressive.json').read_text()))
+    facts.streams[0] = facts.streams[0].model_copy(update={
+        'width': 3828, 'height': 2068, 'resolution_class': None,
+        'codec': 'hevc', 'scan_type': 'unknown',
+    })
+    probe = Mock(side_effect=lambda path: facts.model_copy(deep=True))
+    monkeypatch.setattr(FFprobeService, 'inspect', probe)
+    with TestClient(create_app(config=config)) as client:
+        scan(client)
+    assert probe.call_count == 2
+
+    with TestClient(create_app(config=config)) as client:
+        movie = client.get('/api/library').json()['movies'][0]
+        assert (movie['width'], movie['height'], movie['resolution']) == (3828, 2068, '2160p')
+        assert movie['interlaced'] is False
+        source = movie['probe']['streams'][0]
+        assert source['resolution_class'] == 2160 and source['scan_type_inferred'] is True
+        html = client.get('/movies').text
+        assert '3828×2068' in html and 'progressive (inferred)' in html
+        result = client.post('/api/eligibility', json={
+            'scope': 'movie', 'media_id': movie['id'], 'preset_id': 'movie-preserve-quality',
+        }).json()
+        assert 'Source scan type is unknown.' not in result['reasons']
+        assert not any('Source resolution' in reason for reason in result['reasons'])
+        assert 'Preset does not allow HEVC recompression.' in result['reasons']
+        assert 'Scan type is not signalled in the file; treated as progressive.' in result['warnings']
+        scan(client)
+        assert probe.call_count == 2
+        refreshed = client.get('/api/library').json()['movies'][0]
+        assert (refreshed['id'], refreshed['revision_id']) == (movie['id'], movie['revision_id'])
+
+
 def test_restart_persistence_rename_and_real_tags(config, probe):
     with TestClient(create_app(config=config)) as client:
         scan(client)

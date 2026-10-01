@@ -105,6 +105,14 @@ video bitrate, dimensions, channels or colour metadata remain unknown; unavailab
 estimates display a dash. API clients must accept nulls for these fields in real
 inventory mode. Seed fixtures still carry their previous known values.
 
+Resolution classes use measured dimensions, allowing letterboxing and small edge
+crops: one dimension must be within 2% below a nominal raster edge, and neither
+may exceed that raster. For example, 3828×2068 is classified as 2160; its actual
+dimensions remain unchanged and appear in Technical metadata. Missing classes in
+cached probes are derived on load, so this correction needs no rescan or ffprobe
+run. Missing dimensions and rasters outside the supported classes stay unknown;
+a resolution in the filename is not evidence of measured dimensions.
+
 1920×1080 interlaced content stays resolution class 1080 with an `1080i` display
 label. It is blocked with: “Interlaced source requires deinterlacing; no validated
 pipeline is enabled”. A scan type the file does not signal (common for

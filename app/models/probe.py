@@ -5,6 +5,22 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 
+def resolution_class(width: int | None, height: int | None) -> int | None:
+    """Classify nominal rasters, allowing small edge crops and letterboxing.
+
+    At least one dimension must be within 2% below its nominal raster edge;
+    neither may exceed that raster. Raw dimensions remain unchanged.
+    """
+    if width is None or height is None:
+        return None
+    if height in (480, 576) and width <= 1024:
+        return height
+    for w, h in [(3840, 2160), (1920, 1080), (1280, 720), (720, 576), (640, 480)]:
+        if width <= w and height <= h and (width * 100 >= w * 98 or height * 100 >= h * 98):
+            return h
+    return None
+
+
 class HDRSignalling(BaseModel):
     model_config = ConfigDict(extra="forbid")
     transfer: str | None = None
@@ -71,6 +87,14 @@ class StreamFacts(BaseModel):
     field_order: Literal["top_first", "bottom_first", "unknown"] = "unknown"
     hdr: HDRSignalling | None = None
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def infer_missing_resolution_class(self):
+        # Also applies to cached observations created by the old exact-edge
+        # classifier, without re-probing or changing source revisions.
+        if self.kind == "video" and self.resolution_class is None:
+            self.resolution_class = resolution_class(self.width, self.height)
+        return self
 
     @model_validator(mode="after")
     def infer_legacy_full_range(self):
