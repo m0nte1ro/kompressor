@@ -111,16 +111,19 @@ A replace job (the WebUI default) runs the full encode and validation above, the
    `.mkv` source in a writable directory (not a read-only mount) with room for the
    output plus 256 MiB. The validated output is copied next to the source as
    `.<job-id>.kompressor-incoming` (a hidden name the scanner ignores), fsynced,
-   given the source's owner, group and mode, and re-read to confirm its SHA-256
-   matches the workspace output.
+   given the source's mode, and re-read to confirm its SHA-256 matches the
+   workspace output.
 3. **Swap.** SourceGuard re-checks the source afresh (same revision, path, inode,
-   size, mtime/ctime, exactly one hardlink). The original is renamed to
+   size, mtime, exactly one hardlink; ctime is ignored so chmod/ACL maintenance
+   does not block replacement). The original is renamed to
    `.<job-id>.kompressor-backup`, and the verified copy is renamed into the source path.
 4. **Final validation.** The file now at the source path must be the staged copy
    (same inode and size) and pass the same ffprobe output validation. On failure the
    copy is removed and the backup renamed back: the original is restored.
-5. **Cleanup.** Only after that is the backup deleted and the workspace output
-   removed. History shows the job as completed with `Source replaced` and the
+5. **Cleanup.** Only after that is the replacement given the source's owner and
+   group (best effort: where chown is not permitted, e.g. unprivileged LXC, the job
+   notes the new owner instead of failing), the backup deleted and the workspace
+   output removed. History shows the job as completed with `Source replaced` and the
    measured saving.
 
 Every step is journalled on the job (paths, the original's and the copy's device and
@@ -129,8 +132,8 @@ next start resolves the job before any other recovery, using only identity check
 
 | Found at startup | Result |
 | --- | --- |
-| Original at the source path, no backup | Staged copy removed; job failed, original untouched |
-| Source path empty, original at the backup | Backup renamed back; job failed, original restored |
+| Original at the source path, no backup | Staged copy removed, original untouched; the validated output is kept as a History result (Replace source retries the swap) |
+| Source path empty, original at the backup | Backup renamed back, original restored; validated output kept as above |
 | Staged copy at the source path, phase before `verified` | Rolled back to the original; job failed |
 | Staged copy at the source path, phase `verified` | Backup removed; job completed |
 | Staged copy at the source path, backup already gone | Job completed |
@@ -149,7 +152,8 @@ recompression" unless a preset allows it.
 Limits: MKV sources only (the output is Matroska; changing a file's extension
 would look like a missing file to Sonarr/Radarr). Replacement needs the media
 mount read-write for the worker user. Extended attributes and ACLs are not copied.
-If the worker is stopped during the copy, the job fails with the original untouched.
+If the worker is stopped during the copy, the original is untouched and the
+validated output is kept in History instead of being discarded.
 The systemd stop timeout (15 s) can interrupt a long copy; recovery handles it the
 same way.
 
@@ -172,6 +176,11 @@ source, or the job is skipped and nothing changes. On success the kept output is
 deleted and the original History row notes that its output was moved into the
 source. On any failure the kept output stays in the workspace and can be retried.
 An item with another queued or active job cannot be replaced from History.
+
+Any finished History entry can be deleted (`DELETE /api/queue/history/{job_id}`).
+A kept output still in the workspace is deleted with it; the source is never
+touched. Deleting is refused while a replacement from that output is pending.
+Measured savings are shown in green and outputs that grew in red.
 
 ## History quality tools
 
