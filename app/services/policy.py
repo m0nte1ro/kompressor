@@ -39,6 +39,9 @@ class PolicyEngine:
                         and stream.hdr.classify().uncertain and assumed_sdr_colours(stream) is None):
                     reasons.append("Dynamic HDR metadata is uncertain; transcoding is blocked.")
                     break
+        if item.probe and any(s.kind == "video" and s.scan_type_inferred and s.scan_type == "progressive"
+                              for s in item.probe.streams):
+            warnings.append("Scan type is not signalled in the file; treated as progressive.")
         if item.duration_seconds is None:
             reasons.append("Source duration is unknown.")
         if item.interlaced is None:

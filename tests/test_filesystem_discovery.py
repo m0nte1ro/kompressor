@@ -297,3 +297,19 @@ def test_scanner_does_not_hash_or_probe_unsupported_files(roots):
     assert {item.relative_path for item in report.files} == {'Comedy/Film (1982).mkv', 'nested/another.MP4'}
     assert len({item.media_id for item in report.files}) == 2
     assert all(item.probe is None and item.fingerprints.full is None for item in report.files)
+
+
+def test_movie_without_signalled_scan_type_is_not_blocked(config, monkeypatch):
+    payload = json.loads((PROJECT_ROOT / 'fixtures/ffprobe/progressive.json').read_text())
+    for stream in payload['streams']:
+        stream.pop('field_order', None)
+    facts = parse_ffprobe(payload)
+    monkeypatch.setattr(FFprobeService, 'inspect', lambda self, path: facts.model_copy(deep=True))
+    with TestClient(create_app(config=config)) as client:
+        scan(client)
+        movie = client.get('/api/library').json()['movies'][0]
+        assert movie['interlaced'] is False and movie['resolution'] == '1080p'
+        result = client.post('/api/eligibility', json={'scope': 'movie', 'media_id': movie['id'],
+                                                       'preset_id': 'movie-streaming-quality'}).json()
+        assert not any('scan type' in reason for reason in result['reasons'])
+        assert any('treated as progressive' in warning for warning in result['warnings'])

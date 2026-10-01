@@ -130,3 +130,30 @@ def test_real_ffprobe_when_installed(tmp_path: Path):
     result = FFprobeService().inspect(path)
     assert result.streams[0].kind == 'audio' and result.streams[0].codec == 'pcm_s16le'
     assert path.read_bytes() == before
+
+
+def unsignalled_scan(probe_payload):
+    for stream in probe_payload['streams']:
+        stream.pop('field_order', None)
+    facts = parse_ffprobe(probe_payload)
+    assert next(s for s in facts.streams if s.kind == 'video').scan_type == 'unknown'
+    return facts
+
+
+@pytest.mark.parametrize('name,scan', [
+    ('Film.2010.1080p.BluRay.x264.mkv', 'progressive'),
+    ('Film (2010).mkv', 'progressive'),
+    ('Film.2010.1080i.HDTV.mkv', 'interlaced'),
+    ('Show.S01E01.576i.mkv', 'interlaced'),
+])
+def test_unsignalled_scan_type_is_resolved_from_name_and_resolution(probe_payload, name, scan):
+    from app.models.probe import with_inferred_scan_type
+    video = next(s for s in with_inferred_scan_type(unsignalled_scan(probe_payload), name).streams
+                 if s.kind == 'video')
+    assert video.scan_type == scan and video.scan_type_inferred
+
+
+def test_signalled_scan_type_is_never_overridden_by_the_name():
+    from app.models.probe import with_inferred_scan_type
+    facts = fixture('interlaced')
+    assert with_inferred_scan_type(facts, 'Film.1080p.mkv') is facts

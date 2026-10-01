@@ -98,7 +98,9 @@ class _HEVCEncodeCapability:
                 errors.append(f"Output video codec is {output_video.codec}, expected HEVC.")
             if output_video.width != item.width or output_video.height != item.height:
                 errors.append("Output resolution does not match the source.")
-            if output_video.scan_type != "progressive":
+            # Encoders often leave the field order unset; only signalled
+            # interlacing is a failure (the source was checked progressive).
+            if output_video.scan_type in {"interlaced", "mixed"}:
                 errors.append(
                     f"Output scan type is {output_video.scan_type}; expected progressive."
                 )

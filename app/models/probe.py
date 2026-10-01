@@ -1,4 +1,5 @@
 """Normalized probe facts, independent of Movie/Show identity and ffprobe JSON."""
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
@@ -62,6 +63,8 @@ class StreamFacts(BaseModel):
     height: int | None = Field(default=None, gt=0)
     resolution_class: int | None = Field(default=None, gt=0)
     scan_type: Literal["progressive", "interlaced", "mixed", "unknown"] = "unknown"
+    # Set in memory by with_inferred_scan_type(); never persisted.
+    scan_type_inferred: bool = False
     frame_rate: str | None = None
     pixel_format: str | None = None
     color_range: Literal["tv", "pc"] | None = None
@@ -175,3 +178,30 @@ class MediaProbeResult(BaseModel):
         if any(ch.end_seconds < ch.start_seconds for ch in self.chapters):
             raise ValueError("Chapter end precedes start.")
         return self
+
+
+# Release names say "1080i" for interlaced broadcast captures; "1080p" or no
+# tag at all is the overwhelmingly common progressive case.
+INTERLACED_NAME = re.compile(r"(?<![0-9])(?:480|576|720|1080)i(?![a-z0-9])", re.IGNORECASE)
+
+
+def with_inferred_scan_type(probe: MediaProbeResult, name: str) -> MediaProbeResult:
+    """Resolve an unsignalled scan type instead of blocking the file.
+
+    Many progressive MKVs carry no field order and ffprobe's frame sample cannot
+    prove a whole stream progressive. Interlacing that is signalled, or a
+    "1080i"-style name, still counts as interlaced; otherwise a video stream with
+    a known resolution is treated as progressive.
+    """
+    def resolve(stream: StreamFacts) -> StreamFacts:
+        if stream.kind != "video" or stream.scan_type != "unknown":
+            return stream
+        if INTERLACED_NAME.search(name):
+            return stream.model_copy(update={"scan_type": "interlaced", "scan_type_inferred": True})
+        if stream.resolution_class is None:
+            return stream
+        return stream.model_copy(update={"scan_type": "progressive", "scan_type_inferred": True})
+
+    if not any(s.kind == "video" and s.scan_type == "unknown" for s in probe.streams):
+        return probe
+    return probe.model_copy(update={"streams": [resolve(s) for s in probe.streams]})

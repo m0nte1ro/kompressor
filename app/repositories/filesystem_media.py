@@ -7,7 +7,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from app.models.inventory import LibraryFile
 from app.models.media import AudioTrack, Episode, HDRType, MediaLibrary, Movie, Season, Show
-from app.models.probe import StreamFacts, assumed_sdr_colours
+from app.models.probe import StreamFacts, assumed_sdr_colours, with_inferred_scan_type
 from app.models.tags import TagTarget
 from app.repositories.inventory import InventoryRepository
 from app.services.errors import NotFound
@@ -40,6 +40,8 @@ def source_video_bitrate(record: LibraryFile, probe, video: StreamFacts | None) 
 
 def media_fields(record: LibraryFile, root: Path, encoding_enabled: bool = False) -> dict:
     probe = record.observation.probe
+    if probe is not None:
+        probe = with_inferred_scan_type(probe, Path(record.relative_path).name)
     videos = [s for s in probe.streams if s.kind == 'video' and not s.dispositions.get('attached_pic')] if probe else []
     video: StreamFacts | None = videos[0] if videos else None
     hdr: HDRType | None = 'unknown'
