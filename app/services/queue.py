@@ -522,13 +522,6 @@ class QueueService:
             job.elapsed_seconds = max(job.elapsed_seconds, elapsed)
             self.repository.save(job)
 
-    def record_source_sample(self, job_id: str, digest: str) -> None:
-        with self.lock, self.repository.transaction():
-            job = self._find(job_id)
-            if job.status == "encoding":
-                job.source_sample = digest
-                self.repository.save(job)
-
     def set_real_validating(self, job_id: str, output_path: str) -> bool:
         with self.lock, self.repository.transaction():
             job = self._find(job_id)
