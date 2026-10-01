@@ -9,8 +9,10 @@ WorkingDirectory=/root/kompressor
 EnvironmentFile=/etc/kompressor/kompressor.env
 ExecStart=/root/kompressor/.venv/bin/python -m app.worker_main qsv
 Restart=on-failure
+# 2 = configuration error. An unavailable GPU (exit 3, e.g. /dev/dri not ready
+# yet after boot) is retried.
 RestartPreventExitStatus=2
-RestartSec=2
+RestartSec=10
 # The worker owns the GPU ffmpeg subprocess and performs bounded termination.
 KillMode=mixed
 TimeoutStopSec=15

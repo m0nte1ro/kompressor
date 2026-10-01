@@ -30,8 +30,10 @@ def run(backend: str = "cpu") -> int:
         print("Real worker requires KOMPRESSOR_MEDIA_BACKEND=filesystem.", file=sys.stderr)
         return 2
     if backend not in worker.supported_backends or not worker.enabled:
+        # Usually transient (the render device or driver is not ready yet after a
+        # host/LXC boot): exit 3 so systemd retries, unlike configuration errors (2).
         print(worker.unavailable_reason or f"{'GPU' if backend == 'qsv' else 'CPU'} worker is unavailable in this runtime.", file=sys.stderr)
-        return 2
+        return 3
 
     stopping = Event()
 
