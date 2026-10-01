@@ -433,6 +433,9 @@ class FFmpegEncoder:
 
     def cleanup(self, job_id: str, remove_final: bool = False) -> None:
         with self._lock:
+            # Runs at the end of every job; a stop that arrived after encode()
+            # (e.g. during audio verification) must not linger.
+            self._cancelled.discard(job_id)
             paths = self._paths.get(job_id)
         if not paths:
             return
