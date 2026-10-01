@@ -28,17 +28,19 @@ from app.workers.encoder import FakeEncoder
 from app.services.discovery import FakeMediaScanner, FakeProbeService
 from app.services.media_processor import MediaProcessor
 from app.services.filesystem_source import FilesystemObservationSource
-from app.services.encoding_capability import CPUEncodeCapability
+from app.services.encoding_capability import CPUEncodeCapability, GPUEncodeCapability
 from app.services.source_guard import SourceGuard
 from app.workers.ffmpeg import FFmpegEncoder
 from app.workers.real import RealEncoderWorker
 from app.services.presets import PresetService
+from app.services.analysis import AnalysisService
 
 
 def build_media_processor(config: Settings, database_path: Path | None = None, *,
                           media: MediaRepository | None = None,
                           initial_presets: list[CompressionPreset] | None = None,
-                          process_role: Literal["web", "worker"] = "web") -> MediaProcessor:
+                          process_role: Literal["web", "worker"] = "web",
+                          worker_backend: Literal["cpu", "qsv"] = "cpu") -> MediaProcessor:
     db_path = database_path if database_path is not None else config.database_path
     defaults = LibraryPaths(movies_path=str(config.movies_root) if config.movies_root else "",
                             shows_path=str(config.shows_root) if config.shows_root else "")
@@ -55,14 +57,30 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
         def roots() -> dict[str, Path]:
             return configured_roots(preferences.get_library_paths(), db_path)
         roots()
-        runtime = capability_status(config.ffmpeg_binary, config.ffprobe_binary, config.workspace_root, roots())
+        runtime_backends = frozenset({"cpu", "qsv"}) if process_role == "web" else frozenset({worker_backend})
+        runtime = capability_status(
+            config.ffmpeg_binary, config.ffprobe_binary, config.workspace_root,
+            roots(), config.qsv_device, runtime_backends)
         ffprobe = FFprobeService(config.ffprobe_binary, config.ffprobe_timeout)
         source = FilesystemObservationSource(inventory_repository, roots)
-        worker = RealEncoderWorker(enabled=runtime["available"], unavailable_reason=runtime["unavailable_reason"],
-            encoder=FFmpegEncoder(config.ffmpeg_binary, config.workspace_root),
-            source=source, guard=SourceGuard(inventory_repository, source),
-            capability=CPUEncodeCapability(), probe=ffprobe)
-        media_repository = FilesystemMediaRepository(inventory_repository, roots, encoding_enabled=worker.enabled)
+        supported = frozenset(runtime.get("supported_backends") or (["cpu"] if runtime.get("available") else []))
+        owned_backend = worker_backend if process_role == "worker" else None
+        unavailable_reason = (
+            runtime.get(f"{worker_backend}_unavailable_reason")
+            if owned_backend is not None else runtime["unavailable_reason"]
+        )
+        worker = RealEncoderWorker(
+            backend=owned_backend,
+            supported_backends=supported,
+            unavailable_reason=unavailable_reason,
+            encoder=FFmpegEncoder(config.ffmpeg_binary, config.workspace_root, qsv_device=config.qsv_device),
+            source=source,
+            guard=SourceGuard(inventory_repository, source),
+            capabilities={"cpu": CPUEncodeCapability(), "qsv": GPUEncodeCapability()},
+            probe=ffprobe,
+        )
+        media_repository = FilesystemMediaRepository(
+            inventory_repository, roots, encoding_enabled=bool(supported))
         discovery = LibraryDiscoveryService(FilesystemScanner(), ffprobe, reconciliation, roots, db_path)
     else:
         media_repository = media if media is not None else SeedMediaRepository(config.seed_media_path)
@@ -72,7 +90,12 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
     )
     if initial_presets is None:
         from app.repositories.preset_migration import upgrade_streaming_presets
-        upgrade_streaming_presets(database, SeedPresetRepository(config.seed_presets_path).get_all())
+        seeded_presets = SeedPresetRepository(config.seed_presets_path).get_all()
+        upgrade_streaming_presets(database, seeded_presets)
+        from app.repositories.preset_migration import upgrade_gpu_qvbr_presets
+        upgrade_gpu_qvbr_presets(database, seeded_presets)
+        from app.repositories.preset_migration import upgrade_gpu_resolution_rates
+        upgrade_gpu_resolution_rates(database, seeded_presets)
     tagger = TagService(media_repository, SQLiteTagRepository(database))
     catalog = CatalogService(media_repository, presets, PolicyEngine(), tagger)
     if worker is None:
@@ -81,10 +104,13 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
     queue = QueueService(SQLiteQueueRepository(database), catalog, worker, controls=controls)
     if isinstance(worker, RealEncoderWorker):
         worker.bind(queue, catalog)
+        assert runtime is not None
         diagnostics = worker.diagnostics(runtime)
     else:
         diagnostics = {"ffmpeg_binary": config.ffmpeg_binary, "ffprobe_binary": config.ffprobe_binary,
                        "ffmpeg_available": None, "ffprobe_available": None, "libx265_available": None,
+                       "hevc_vaapi_available": None, "qsv_device": str(config.qsv_device),
+                       "qsv_available": False, "cpu_available": False,
                        "workspace_root": str(config.workspace_root), "encoding_enabled": False,
                        "encoder_mode": "seed fake simulation" if discovery is None else "disabled",
                        "supported_backends": ["cpu", "qsv"] if discovery is None else [],
@@ -94,8 +120,14 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
     # a standalone worker may still own its ffmpeg subprocess. Recovery therefore
     # belongs to the real worker process. Seed mode remains embedded and recovers
     # with the web application as before.
-    if not isinstance(worker, RealEncoderWorker) or process_role == "worker":
+    if not isinstance(worker, RealEncoderWorker):
         queue.recover()
+    elif process_role == "worker":
+        queue.recover(backends={worker_backend})
+    # History quality tools are read-only and run in the WebUI process.
+    analysis = (AnalysisService(config.ffmpeg_binary, config.workspace_root / "compare",
+                                queue.analysis_target, queue.record_analysis)
+                if isinstance(worker, RealEncoderWorker) and process_role == "web" else None)
     return MediaProcessor(
         catalog,
         PresetService(presets, database.transaction),
@@ -105,6 +137,7 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
         preferences=preferences,
         inventory=reconciliation,
         discovery=discovery,
+        analysis=analysis,
         runtime_settings={"media_backend": "filesystem" if discovery else "seed", "database_path": str(db_path),
                           "ffprobe_timeout": config.ffprobe_timeout, **diagnostics},
     )

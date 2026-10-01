@@ -1,11 +1,18 @@
 """Planning estimates, not measured encode sizes or perceptual quality scores."""
+from app.models.media import spatial_resolution
 from app.models.preset import CompressionPreset
 
 
-def audio_plan(item, preset: CompressionPreset, preserve_audio: bool) -> list[dict]:
+def plan_audio_tracks(tracks, preset: CompressionPreset, preserve_audio: bool) -> list[dict]:
+    """The one copy/encode decision per audio track, in source order.
+
+    Estimates, the ffmpeg command and output validation all use this, so the
+    track that is planned as copied is the track ffmpeg copies and validation
+    checks. Tracks may be AudioTrack or probe StreamFacts (codec/channels/bitrate).
+    """
     rules = preset.efficient_audio_rules
     plan = []
-    for index, track in enumerate(item.audio):
+    for index, track in enumerate(tracks):
         if track.channels is None:
             plan.append({"track": index, "action": "copy", "codec": track.codec, "channels": None, "bitrate": track.bitrate})
             continue
@@ -29,6 +36,10 @@ def audio_plan(item, preset: CompressionPreset, preserve_audio: bool) -> list[di
     return plan
 
 
+def audio_plan(item, preset: CompressionPreset, preserve_audio: bool) -> list[dict]:
+    return plan_audio_tracks(item.audio, preset, preserve_audio)
+
+
 def estimate(item, preset: CompressionPreset, preserve_audio: bool) -> dict:
     plan = audio_plan(item, preset, preserve_audio)
     duration = item.duration_seconds
@@ -43,8 +54,15 @@ def estimate(item, preset: CompressionPreset, preserve_audio: bool) -> dict:
     source_video = item.video_bitrate * duration / 8
     residual = max(0, item.size - source_video - known_audio)
     audio_bytes = sum(t["bitrate"] or 0 for t in plan) * duration / 8
-    low = preset.target_video_bitrate if preset.rate_control == "abr" else preset.planning_video_bitrate_low
-    high = preset.target_video_bitrate if preset.rate_control == "abr" else preset.planning_video_bitrate_high
+    if preset.rate_control == "qvbr" and preset.qvbr_bitrates_by_resolution:
+        nominal = preset.video_bitrate_for(spatial_resolution(item))
+        if nominal is None:
+            low, high = preset.planning_video_bitrate_low, preset.planning_video_bitrate_high
+        else:
+            low, high = nominal // 2, nominal * 3 // 2
+    else:
+        low = preset.target_video_bitrate if preset.rate_control == "abr" else preset.planning_video_bitrate_low
+        high = preset.target_video_bitrate if preset.rate_control == "abr" else preset.planning_video_bitrate_high
     assert low is not None and high is not None  # Validated ABR target or quality planning bounds.
     output_low = int((low * duration / 8 + audio_bytes + residual) * 1.01)
     output_high = int((high * duration / 8 + audio_bytes + residual) * 1.01)

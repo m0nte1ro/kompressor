@@ -9,7 +9,7 @@ from app.services.ffprobe import FFprobeService, parse_ffprobe
 from app.services.estimation import audio_plan
 from app.models.preset import CompressionPreset
 from app.models.media import AudioTrack
-from test_filesystem_discovery import scan
+from tests.test_filesystem_discovery import scan
 
 
 def test_saved_roots_override_environment_and_change_both_next_scan_roots(tmp_path, monkeypatch):

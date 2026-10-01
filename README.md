@@ -27,7 +27,7 @@ writable location. The database is created on first startup, not on import.
 Stop the application before copying the database for a backup. Local databases
 are excluded from Git. Tests use isolated databases in temporary directories.
 
-## Real library and CPU encoding
+## Real library encoding
 
 Set `KOMPRESSOR_MEDIA_BACKEND=filesystem` and configure movie/show roots in Settings
 (or `KOMPRESSOR_MOVIES_ROOT` / `KOMPRESSOR_SHOWS_ROOT` as defaults). Roots default to
@@ -35,16 +35,20 @@ unconfigured. Use **Settings → Scan library** to discover and probe actual fil
 scans run in the background and results update automatically without reloading the
 page. Seed mode still needs no media tools and keeps its deterministic fake queue.
 
-Filesystem mode can also run one real CPU/libx265 encode at a time when ffmpeg,
-ffprobe, libx265 and the dedicated writable workspace are available. The CPU worker
-is a separate process from FastAPI, so restarting or stopping the WebUI does not
-terminate its ffmpeg subprocess. It only accepts confirmed SDR progressive sources,
-copies audio, keeps resolution, and writes a separate MKV output under the workspace.
-Source files remain untouched. QSV execution, HDR, source replacement and audio
-conversion are not enabled.
+Filesystem mode can run independent CPU/libx265 and Intel GPU/hevc_vaapi lanes when
+their runtime prerequisites are available. Each encoder is a separate process from
+FastAPI, so restarting or stopping the WebUI does not terminate its ffmpeg subprocess.
+Both real lanes accept only confirmed SDR progressive sources and keep resolution.
+Each job writes a validated MKV under the workspace, then either keeps it there
+(keep original) or swaps it in place of an MKV source (replace, the WebUI default).
+Replacement happens only after output validation, a bit-exact check of every copied
+audio track and the preset's minimum measured saving; the original stays as a hidden
+backup until the replaced file is verified. Audio is copied untouched unless the
+job explicitly unticks Preserve Audio; CPU always copies audio, and GPU can then
+apply the Efficient Audio rules. HDR is not enabled.
 
 See [read-only discovery](docs/READ_ONLY_DISCOVERY.md) for scan behaviour and
-[real CPU encoding](docs/REAL_ENCODING.md) for the supported encode slice, setup,
+[real encoding](docs/REAL_ENCODING.md) for the supported encode slice, setup,
 validation and recovery details.
 
 ## Deploy discovery in an LXC
@@ -54,7 +58,9 @@ ffprobe (Debian/Ubuntu normally provides both in the `ffmpeg` package). Give the
 application user read/traverse access to media roots, a writable application data
 directory outside those roots, and a separate writable workspace with a `jobs/`
 subdirectory. Settings reports whether the binaries, libx265 and workspace are
-usable at startup.
+usable at startup. Source replacement additionally needs the media mount to be
+read-write for the worker user; on a read-only mount replace jobs are excluded with
+a reason and keep-original jobs still work.
 
 ```sh
 export KOMPRESSOR_MEDIA_BACKEND=filesystem
@@ -63,6 +69,7 @@ export KOMPRESSOR_SHOWS_ROOT=/your/shows
 export KOMPRESSOR_FFPROBE_BINARY=/usr/bin/ffprobe
 export KOMPRESSOR_FFMPEG_BINARY=/usr/bin/ffmpeg
 export KOMPRESSOR_WORKSPACE_ROOT=/mnt/kompressor
+export KOMPRESSOR_QSV_DEVICE=/dev/dri/renderD128
 export KOMPRESSOR_TIMEZONE=Europe/Lisbon
 
 # Terminal/service 1: WebUI + API only
@@ -70,13 +77,17 @@ export KOMPRESSOR_TIMEZONE=Europe/Lisbon
 
 # Terminal/service 2: CPU encoder owner
 .venv/bin/python -m app.worker_main cpu
+
+# Terminal/service 3: GPU encoder owner (after /dev/dri is available)
+.venv/bin/python -m app.worker_main qsv
 ```
 
 For systemd deployments, copy `deploy/systemd/kompressor.env.example` to
-`/etc/kompressor/kompressor.env`, then install and enable
-`kompressor-web.service` and `kompressor-worker-cpu.service`. The services share
-SQLite state but have independent lifecycles. QSV uses the same control model but
-its real worker remains intentionally unavailable until the QSV encoder slice lands.
+`/etc/kompressor/kompressor.env`, then install and enable `kompressor-web.service` and
+`kompressor-worker-cpu.service`. After the render device is passed through and
+visible at `/dev/dri/renderD128`, also install/enable
+`kompressor-worker-qsv.service`. The services share SQLite state but have
+independent lifecycles and lane-scoped recovery.
 
 Open Settings, verify/save the paths, and click **Scan library**. Navigate to
 Movies/Shows while it runs: names appear first, technical details follow. Saved
@@ -84,9 +95,11 @@ paths override environment defaults, including saved empty paths. Missing
 ffprobe leaves files listed with unknown metadata and reported errors.
 
 Series naming currently requires a series directory and `SxxExx` episode names;
-unsupported names are reported, not resolved through external metadata. The scanner never writes to the media roots; validated outputs go only to the
-separate workspace. There is no authentication; use the intended private homelab
-network.
+unsupported names are reported, not resolved through external metadata. The scanner
+never writes to the media roots. Only a replace job's worker writes there, and only
+into the source's own directory (a job-named hidden copy and backup next to the
+source, both removed afterwards). There is no authentication; use the intended
+private homelab network.
 
 See the [full Settings audit](docs/SETTINGS_AUDIT.md) and
 [schema, migration and scale report](docs/INVENTORY_STORAGE.md).
@@ -96,16 +109,21 @@ See the [full Settings audit](docs/SETTINGS_AUDIT.md) and
 - Movies and Shows display the existing JSON inventory. Episode tables are flat,
   with season separators, search, filters and mass selection.
 - Review opens scoped presets and reads `/api/eligibility` for each selected item.
-  Technical settings are read-only. Preserve Audio and container metadata are the
-  only per-job options; the backend applies inherited protection tags.
+  Technical settings are read-only. Preserve Audio (ticked by default), container
+  metadata and output handling (replace by default) are the only per-job options;
+  the backend applies inherited protection tags. Show rows suggest an eligible GPU
+  preset first; movies keep their CPU presets.
 - Queue submissions re-evaluate every item. Blocked, missing or already pending
   items are excluded individually. Encoder settings are copied from the preset,
   never accepted as client overrides.
-- In seed mode, CPU and QSV are independent fake lanes. Each starts its next job
+- In seed mode, CPU and GPU are independent fake lanes. Each starts its next job
   on the next one-second scheduler tick. Encoding takes 180 simulated seconds,
-  followed by five seconds of validation. Filesystem mode uses one real CPU lane;
-  QSV remains unavailable there. Completed/failed/skipped/blocked jobs appear in
-  History.
+  followed by five seconds of validation. Filesystem mode uses independent real CPU and GPU lanes when their runtime
+  prerequisites are available. Completed/failed/skipped/blocked jobs appear in
+  History. A completed keep-original real encode offers **Replace source**, which
+  re-validates the kept output and swaps it in on its worker lane; **Compare**,
+  which writes random side-by-side screenshots to `<workspace>/compare/`; and
+  **Benchmark**, which scores a chosen number of seconds with VMAF.
 - Default order is estimated bytes saved, descending. Manual priority overrides
   this order; Move next overrides priority within the same lane. Changing a job’s
   priority clears its Move next override. Active jobs require Stop & Skip.
@@ -116,16 +134,16 @@ See the [full Settings audit](docs/SETTINGS_AUDIT.md) and
   seed simulations never change media or inventory.
 - Worker pause state and quiet hours are persisted in SQLite. Manual pause prevents
   new claims without killing the current job. At quiet-hours start, known progress
-  below the configured cutoff is stopped; progress at/above the cutoff and unknown
-  progress are allowed to finish. No new job starts until quiet hours end.
+  at or below the configured cutoff is stopped; only progress above the cutoff and
+  unknown progress are allowed to finish. No new job starts until quiet hours end.
 - Settings separates movie/show presets and supports creating, editing,
   duplicating and enabling/disabling every preset. The initial presets are copied
   from the seed JSON once. Subsequent startups do not overwrite user edits.
   Preset details are collapsed by default. The Settings page also persists the
   Movies and Shows library paths in SQLite; these paths are currently stored for
   the filesystem scanner; saving alone does not trigger a scan.
-  Built-in display names are user-owned: Just convert to HEVC, Tone it down a bit
-  - HEVC, and Tone it down a bit + HEVC + Efficient Audio. Intent is stored
+  Built-in display names are user-owned: Just convert to HEVC, Tone it down a bit + HEVC,
+  and Tone it down a bit + HEVC + Efficient Audio. Intent is stored
     separately from those names. All preserve source resolution. Existing jobs keep
     a complete preset snapshot, even if that preset is later edited, moved to
     another scope or disabled. Disable affects new submissions. The catalogue
@@ -155,10 +173,10 @@ or hardlink protections.
 
 ## Quality modes and test output
 
-Presets support CPU CRF, QSV ICQ and explicit ABR, along with encoder effort,
-output bit depth, source applicability and SDR/HDR10 input support. The current
-real worker consumes CPU CRF/ABR, x265 preset and output bit depth; QSV ICQ and
-HDR preset behavior remain planning-only. Filesystem encoding accepts confirmed
+Presets support CPU CRF, GPU ICQ and explicit ABR, along with encoder effort,
+output bit depth, source applicability and SDR/HDR10 input support. Real CPU
+execution consumes CRF/ABR and libx265 settings; real GPU execution consumes ICQ/ABR,
+VA-API profile, output bit depth and explicit rate-control mode. HDR preset behavior remains planning-only. Filesystem encoding accepts confirmed
 SDR only, and tone mapping is unavailable.
 Quality modes carry planning bitrate ranges separately from encoder settings.
 They do not return fake exact output sizes or savings; ranges are labeled as
@@ -167,12 +185,16 @@ must be checked after encoding; pre-encode minimum-saving shortfalls produce a
 warning. The editor fills these ranges from the selected intent; they are optional
 advanced planning metadata, not values that control CRF, ICQ or x265.
 
-Jobs default to `replace_source: false` (keep the original and write a separate
-test output). `true` records replacement intent, but the real worker refuses it.
-Seed mode simulates jobs without touching files. Filesystem mode writes a validated
-keep-output artifact under the workspace and never changes the source. Keeping the
-original reclaims no storage and requires free workspace space; actual output size
-and saving are recorded only after validation.
+The compression modal defaults to replacing the source. The API keeps
+`replace_source: false` as its default, so scripted callers keep the original unless
+they ask. Seed mode simulates either choice without touching files. In filesystem
+mode a replace job swaps the validated output into the source path (MKV sources
+only) when the measured saving meets the preset minimum; otherwise the source is
+kept, the output discarded and the job recorded as skipped. A keep-original job
+leaves its validated MKV under the workspace; it reclaims no storage and needs free
+workspace space. Actual output size and saving are recorded only after validation.
+See [real encoding](docs/REAL_ENCODING.md#source-replacement) for the swap and
+recovery details.
 
 Tag writes and pending-job revalidation share a transaction. Queued jobs get
 updated effective audio policy and savings. Jobs that become ineligible move to
@@ -189,9 +211,9 @@ identity across supported renames. Seed IDs are not automatically migrated.
 
 HTTP and Jinja routes resolve one `MediaProcessor` per application lifespan.
 `app/container.py` assembles its catalog, preset management, queue and seed
-scanner/probe dependencies. In filesystem mode the WebUI and CPU encoder are
-separate processes coordinating through SQLite; only the encoder process performs
-real-job recovery and owns ffmpeg subprocesses. Tests may inject a processor or override the FastAPI
+scanner/probe dependencies. In filesystem mode the WebUI, CPU encoder and GPU encoder are separate processes
+coordinating through SQLite; only each lane's encoder process performs recovery for
+that lane and owns its ffmpeg subprocesses. Tests may inject a processor or override the FastAPI
 dependency. Application exceptions are mapped to HTTP responses centrally.
 
 The existing `PolicyEngine` remains the source of eligibility decisions.
@@ -208,11 +230,13 @@ Repository, scanner, probe and encoder protocols provide the adapter boundaries.
 worker supplies the existing clock and validation simulation in seed mode. The
 filesystem worker uses a separate `FFmpegEncoder` for process details, while
 `FFprobeService` owns probing.
-Real execution must run outside HTTP requests and scheduler transactions. There are no scattered development-mode branches, authentication, hardware checks
-or ffmpeg dependencies. Only the optional filesystem backend invokes ffprobe.
+Real execution must run outside HTTP requests and scheduler transactions. There are
+no scattered development-mode branches or application authentication. Hardware and
+ffmpeg capability checks stay isolated in the optional filesystem/runtime adapters;
+seed mode has no ffmpeg or GPU dependency.
 
 SQLite uses the Python standard library with parameterized statements and
-transactions shared by repositories. Schema version 2 is recorded with
+transactions shared by repositories. Schema version 4 is recorded with
 `PRAGMA user_version`; unknown future versions fail explicitly. `create_app`
 accepts an isolated database path and media repository for tests. The fake queue
 repository remains available for in-memory simulations, but is not the app's

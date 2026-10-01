@@ -1,10 +1,10 @@
-import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js?v=5';
-import './presets.js?v=5';
-import './settings.js?v=5';
-import './discovery.js?v=5';
-import {setupTags} from './tags.js?v=5';
-import {compressionModal} from './compression.js?v=5';
-import {renderHistory, renderQueue} from './queue.js?v=5';
+import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js';
+import './presets.js';
+import './settings.js';
+import './discovery.js';
+import {setupTags} from './tags.js';
+import {compressionModal} from './compression.js';
+import {renderAnalysis, renderHistory, renderQueue} from './queue.js';
 
 let queue = {lanes: [], history: [], pending_count: 0};
 
@@ -76,6 +76,13 @@ function selectionChanged() {
   const checked = visible.filter(row => $('.media-select', row).checked).length;
   $('#select-all').checked = visible.length > 0 && checked === visible.length;
   $('#select-all').indeterminate = checked > 0 && checked < visible.length;
+
+  $$('.season-select', library).forEach(control => {
+    const seasonRows = visible.filter(row => row.dataset.season === control.dataset.season);
+    const seasonChecked = seasonRows.filter(row => $('.media-select', row).checked).length;
+    control.checked = seasonRows.length > 0 && seasonChecked === seasonRows.length;
+    control.indeterminate = seasonChecked > 0 && seasonChecked < seasonRows.length;
+  });
 }
 
 function filterRows() {
@@ -124,13 +131,15 @@ async function refreshQueue() {
   $('#queue-count').textContent = queue.pending_count;
   queue.lanes.forEach(lane => {
     const control = queue.workers?.lanes?.[lane.backend];
-    const state = control?.paused ? 'paused'
+    const state = !lane.available ? 'unavailable'
+      : control?.paused ? 'paused'
       : control?.quiet_active ? 'quiet hours'
       : lane.active?.status ?? 'idle';
-    $(`#${lane.backend}-state`).textContent = `${lane.backend.toUpperCase()} · ${state}`;
+    $(`#${lane.backend}-state`).textContent = `${lane.backend === 'qsv' ? 'GPU' : 'CPU'} · ${state}`;
   });
   renderQueue(queue);
   renderHistory(queue);
+  if ($('#analysis-status')) renderAnalysis(await api('/api/queue/analysis/status'));
   renderLibraryQueue();
 }
 
@@ -166,7 +175,14 @@ if (library) {
     selectionChanged();
   });
   library.addEventListener('change', event => {
-    if (event.target.matches('.media-select')) selectionChanged();
+    if (event.target.matches('.season-select')) {
+      // Like select-all, only the episodes the current search/filter shows.
+      rows.filter(row => !row.hidden && row.dataset.season === event.target.dataset.season)
+        .forEach(row => { $('.media-select', row).checked = event.target.checked; });
+      selectionChanged();
+    } else if (event.target.matches('.media-select')) {
+      selectionChanged();
+    }
   });
   library.addEventListener('click', event => {
     const button = event.target.closest('[data-action]');
@@ -208,6 +224,62 @@ $('#queue-lanes')?.addEventListener('change', event => {
   mutate(() => queueAction(jobId, 'priority', event.target.value));
 });
 
+$('#history-rows')?.addEventListener('click', event => {
+  const button = event.target.closest('[data-history-action]');
+  if (!button) return;
+  const row = button.closest('[data-job]');
+  if (button.dataset.historyAction === 'replace') {
+    const confirmed = window.confirm(`Replace the source of “${row.dataset.name}” with this kept output?\n\n`
+      + 'The output is validated again (including a bit-exact audio check) and the source is re-checked first. '
+      + 'The original is deleted only after the replaced file is verified.');
+    if (!confirmed) return;
+    mutate(async () => {
+      await api(`/api/queue/${encodeURIComponent(row.dataset.job)}/replace-source`, {method: 'POST'});
+      notify('Replacement queued on its worker lane.');
+    });
+  } else if (button.dataset.historyAction === 'delete') {
+    const kept = button.closest('.job-controls')?.querySelector('[data-history-action="replace"]');
+    const confirmed = window.confirm(`Delete “${row.dataset.name}” from History?`
+      + (kept ? '\n\nThis also deletes its kept output file. The source is not touched.' : ''));
+    if (!confirmed) return;
+    mutate(async () => {
+      await api(`/api/queue/history/${encodeURIComponent(row.dataset.job)}`, {method: 'DELETE'});
+    });
+  } else if (button.dataset.historyAction === 'benchmark') {
+    const dialog = $('#benchmark-dialog');
+    dialog.dataset.job = row.dataset.job;
+    $('#benchmark-name').textContent = row.dataset.name;
+    $('#benchmark-error').hidden = true;
+    dialog.showModal();
+  } else if (button.dataset.historyAction === 'compare') {
+    mutate(async () => {
+      renderAnalysis(await api(`/api/queue/${encodeURIComponent(row.dataset.job)}/compare`,
+        {method: 'POST', body: JSON.stringify({count: 6})}));
+    });
+  }
+});
+
+const benchmarkDialog = $('#benchmark-dialog');
+if (benchmarkDialog) {
+  $$('[data-benchmark-close]', benchmarkDialog).forEach(button => button.addEventListener('click', () => benchmarkDialog.close()));
+  $('#benchmark-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const submit = $('button[type="submit"]', event.target);
+    submit.disabled = true;
+    try {
+      renderAnalysis(await api(`/api/queue/${encodeURIComponent(benchmarkDialog.dataset.job)}/benchmark`, {
+        method: 'POST', body: JSON.stringify({seconds: Number($('#benchmark-seconds').value)}),
+      }));
+      benchmarkDialog.close();
+    } catch (error) {
+      $('#benchmark-error').textContent = error.message;
+      $('#benchmark-error').hidden = false;
+    } finally {
+      submit.disabled = false;
+    }
+  });
+}
+
 document.addEventListener('click', event => {
   const button = event.target.closest('[data-worker-action]');
   if (!button) return;
@@ -215,7 +287,9 @@ document.addEventListener('click', event => {
   const action = button.dataset.workerAction;
   const backend = button.dataset.backend;
   const laneControl = backend ? queue.workers?.lanes?.[backend] : null;
-  const allControls = queue.workers?.lanes ? Object.values(queue.workers.lanes) : [];
+  const allControls = queue.workers?.lanes
+    ? Object.values(queue.workers.lanes).filter(control => control.available !== false)
+    : [];
   let path;
   let message;
 
@@ -228,13 +302,13 @@ document.addEventListener('click', event => {
     message = 'Active jobs are stopping and all workers are paused.';
   } else if (action === 'stop-active') {
     path = `/api/queue/workers/${encodeURIComponent(backend)}/stop-active`;
-    message = `${backend.toUpperCase()} active job stop requested.`;
+    message = `${backend === 'qsv' ? 'GPU' : 'CPU'} active job stop requested.`;
   } else if (action === 'toggle-pause') {
     const paused = laneControl?.paused ?? button.dataset.paused === 'true';
     path = `/api/queue/workers/${encodeURIComponent(backend)}/${paused ? 'resume' : 'pause'}`;
     message = paused
-      ? `${backend.toUpperCase()} worker resumed.`
-      : `${backend.toUpperCase()} worker will pause before claiming another job.`;
+      ? `${backend === 'qsv' ? 'GPU' : 'CPU'} worker resumed.`
+      : `${backend === 'qsv' ? 'GPU' : 'CPU'} worker will pause before claiming another job.`;
   } else {
     return;
   }

@@ -19,6 +19,17 @@ from app.routers.preferences import router as preferences_router
 from app.routers.queue import router as queue_router
 from app.routers.web import router as web_router
 from app.services.queue import QueueService
+from app.workers.real import RealEncoderWorker
+
+
+class RevalidatedStaticFiles(StaticFiles):
+    """Static assets must be revalidated (cheap 304s via ETag) instead of
+    being cached heuristically, which previously served stale modules."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 async def run_fake_workers(service: QueueService) -> None:
@@ -42,7 +53,7 @@ def create_app(database_path: Path | None = None, *, media: MediaRepository | No
             process_role="worker" if start_real_worker else "web")
         application.state.media_processor = composed
         queue = composed.queue
-        real_worker = queue.worker if hasattr(queue.worker, "shutdown") and hasattr(queue.worker, "filesystem_mode") else None
+        real_worker = queue.worker if isinstance(queue.worker, RealEncoderWorker) else None
         # Real encoding is a separate process in production. The opt-in embedded
         # mode exists only for focused tests and local development.
         if start_real_worker and real_worker is not None:
@@ -55,6 +66,8 @@ def create_app(database_path: Path | None = None, *, media: MediaRepository | No
                 await asyncio.to_thread(real_worker.shutdown)
             if composed.discovery:
                 await asyncio.to_thread(composed.discovery.close)
+            if composed.analysis:
+                await asyncio.to_thread(composed.analysis.close)
             if task:
                 task.cancel()
                 with suppress(asyncio.CancelledError):
@@ -62,7 +75,7 @@ def create_app(database_path: Path | None = None, *, media: MediaRepository | No
 
     application = FastAPI(title=configuration.app_name, version="0.2.0", lifespan=lifespan)
     register_error_handlers(application)
-    application.mount("/static", StaticFiles(directory=PROJECT_ROOT / "app" / "static"), name="static")
+    application.mount("/static", RevalidatedStaticFiles(directory=PROJECT_ROOT / "app" / "static"), name="static")
     for router in (api_router, preferences_router, queue_router, web_router):
         application.include_router(router)
     return application

@@ -1,6 +1,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, Response
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.dependencies import Processor
 from app.models.queue import EnqueueRequest, PriorityRequest
@@ -60,6 +61,12 @@ def stop_active_worker(processor: Processor, backend: Literal["cpu", "qsv"]) -> 
     return {"stopping": processor.stop_active_worker(backend)}
 
 
+@router.delete("/history/{job_id}", status_code=204)
+def delete_history(processor: Processor, job_id: str) -> Response:
+    processor.delete_history_job(job_id)
+    return Response(status_code=204)
+
+
 @router.delete("/{job_id}", status_code=204)
 def remove(processor: Processor, job_id: str) -> Response:
     processor.remove_queued_job(job_id)
@@ -76,6 +83,36 @@ def priority(processor: Processor, job_id: str, payload: PriorityRequest) -> Res
 def move_next(processor: Processor, job_id: str) -> Response:
     processor.move_job_next(job_id)
     return Response(status_code=204)
+
+
+@router.post("/{job_id}/replace-source", status_code=201)
+def replace_source(processor: Processor, job_id: str) -> dict:
+    return processor.replace_with_kept_output(job_id)
+
+
+class CompareRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    count: int = Field(default=6, ge=1, le=20)
+
+
+@router.post("/{job_id}/compare", status_code=202)
+def compare(processor: Processor, job_id: str, payload: CompareRequest | None = None) -> dict:
+    return processor.compare_output(job_id, (payload or CompareRequest()).count)
+
+
+class BenchmarkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    seconds: float = Field(ge=5, le=600)
+
+
+@router.post("/{job_id}/benchmark", status_code=202)
+def benchmark(processor: Processor, job_id: str, payload: BenchmarkRequest) -> dict:
+    return processor.benchmark_output(job_id, payload.seconds)
+
+
+@router.get("/analysis/status")
+def analysis_status(processor: Processor) -> dict:
+    return processor.get_analysis_status()
 
 
 @router.post("/{job_id}/skip", status_code=204)

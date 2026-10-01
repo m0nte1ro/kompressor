@@ -26,7 +26,7 @@ def test_create_edit_duplicate_and_disable_presets(client, show_payload):
     assert response.status_code == 201
     preset = response.json()
     payload.update(target_video_bitrate=3_000_000, backend="cpu", name="Edited show preset",
-                   rate_control="abr", quality_value=None, planning_video_bitrate_low=None,
+                   rate_control="abr", quality_value=None, qvbr_bitrates_by_resolution={}, planning_video_bitrate_low=None,
                    planning_video_bitrate_high=None)
     assert client.put(f"/api/presets/{preset['id']}", json=payload).status_code == 200
     scoped = client.get("/api/presets?scope=movie").json()
@@ -117,6 +117,7 @@ def test_quality_floor_inheritance_and_removal(client):
     assert detail["effective_quality_floor"] == {"minimum_video_bitrate": 3_000_000, "minimum_height": 1080}
     abr = settings(client, "show-streaming-quality")
     abr.update(name="Quality floor ABR", backend="cpu", rate_control="abr", quality_value=None,
+               qvbr_bitrates_by_resolution={},
                target_video_bitrate=6_000_000, planning_video_bitrate_low=None,
                planning_video_bitrate_high=None)
     abr_id = client.post("/api/presets", json=abr).json()["id"]
@@ -178,7 +179,7 @@ def test_preset_edits_do_not_modify_existing_jobs(client, queue, show_payload):
     original = client.post("/api/queue", json=show_payload).json()["added"][0]
     payload = settings(client)
     payload.update(enabled=False, backend="cpu", target_video_bitrate=5_000_000)
-    payload.update(rate_control="abr", quality_value=None, planning_video_bitrate_low=None,
+    payload.update(rate_control="abr", quality_value=None, qvbr_bitrates_by_resolution={}, planning_video_bitrate_low=None,
                    planning_video_bitrate_high=None)
     client.put("/api/presets/show-streaming-quality", json=payload)
     queue.tick(0)

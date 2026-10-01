@@ -38,18 +38,6 @@ def frame_rate(value: Any) -> str | None:
         return None
 
 
-def resolution_class(width: int | None, height: int | None) -> int | None:
-    if width is None or height is None:
-        return None
-    if height in (480, 576) and width <= 1024:
-        return height
-    # Nominal raster classes include common letterboxed/cropped sources.
-    for w, h in [(3840, 2160), (1920, 1080), (1280, 720), (720, 576), (640, 480)]:
-        if width == w and height <= h or height == h and width <= w:
-            return h
-    return None
-
-
 def bit_depth(raw: dict) -> int | None:
     depth = integer(raw.get('bits_per_raw_sample'))
     if depth is not None:
@@ -73,16 +61,17 @@ def parse_stream(raw: dict, frames: list[dict]) -> StreamFacts:
     index = int(raw['index'])
     sampled = [f for f in frames if f.get('stream_index') == index]
     facts = StreamFacts(index=index, kind=kind, codec=raw.get('codec_name') or 'unknown',
+        profile=raw.get('profile'),
         language=tags.get('language'), title=tags.get('title'), metadata=tags,
         dispositions={k: bool(v) for k, v in (raw.get('disposition') or {}).items()},
         channels=integer(raw.get('channels')), channel_layout=raw.get('channel_layout'),
         sample_rate=integer(raw.get('sample_rate')), bitrate=integer(raw.get('bit_rate')),
         width=integer(raw.get('width')), height=integer(raw.get('height')),
         frame_rate=frame_rate(raw.get('avg_frame_rate')) or frame_rate(raw.get('r_frame_rate')),
-        pixel_format=raw.get('pix_fmt'))
+        pixel_format=raw.get('pix_fmt'),
+        color_range=raw.get('color_range') if raw.get('color_range') in {'tv', 'pc'} else None)
     if kind != 'video':
         return facts
-    facts.resolution_class = resolution_class(facts.width, facts.height)
     order = raw.get('field_order')
     if order == 'progressive':
         facts.scan_type = 'progressive'

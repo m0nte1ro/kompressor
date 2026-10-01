@@ -130,6 +130,39 @@ def test_real_inventory_reaches_ui_api_and_keeps_seed_mode_separate(config, prob
         assert client.get('/api/library').json()['movies'][0]['id'] == movie['id']
 
 
+def test_cached_cropped_hevc_is_2160p_after_restart_without_reprobing(config, monkeypatch):
+    facts = parse_ffprobe(json.loads((PROJECT_ROOT / 'fixtures/ffprobe/progressive.json').read_text()))
+    facts.streams[0] = facts.streams[0].model_copy(update={
+        'width': 3828, 'height': 2068, 'resolution_class': None,
+        'codec': 'hevc', 'scan_type': 'unknown',
+    })
+    probe = Mock(side_effect=lambda path: facts.model_copy(deep=True))
+    monkeypatch.setattr(FFprobeService, 'inspect', probe)
+    with TestClient(create_app(config=config)) as client:
+        scan(client)
+    assert probe.call_count == 2
+
+    with TestClient(create_app(config=config)) as client:
+        movie = client.get('/api/library').json()['movies'][0]
+        assert (movie['width'], movie['height'], movie['resolution']) == (3828, 2068, '2160p')
+        assert movie['interlaced'] is False
+        source = movie['probe']['streams'][0]
+        assert source['resolution_class'] == 2160 and source['scan_type_inferred'] is True
+        html = client.get('/movies').text
+        assert '3828×2068' in html and 'progressive (inferred)' in html
+        result = client.post('/api/eligibility', json={
+            'scope': 'movie', 'media_id': movie['id'], 'preset_id': 'movie-preserve-quality',
+        }).json()
+        assert 'Source scan type is unknown.' not in result['reasons']
+        assert not any('Source resolution' in reason for reason in result['reasons'])
+        assert 'Preset does not allow HEVC recompression.' in result['reasons']
+        assert 'Scan type is not signalled in the file; treated as progressive.' in result['warnings']
+        scan(client)
+        assert probe.call_count == 2
+        refreshed = client.get('/api/library').json()['movies'][0]
+        assert (refreshed['id'], refreshed['revision_id']) == (movie['id'], movie['revision_id'])
+
+
 def test_restart_persistence_rename_and_real_tags(config, probe):
     with TestClient(create_app(config=config)) as client:
         scan(client)
@@ -193,6 +226,31 @@ def test_probe_bridge_preserves_interlace_and_hdr_safety(config, monkeypatch, na
             assert any('uncertain' in r for r in result['reasons'])
         else:
             assert any('Dolby Vision' in r for r in result['reasons'])
+
+
+def test_rescan_reprobes_replaced_file_and_updates_codec_in_ui(config, probe):
+    with TestClient(create_app(config=config)) as client:
+        scan(client)
+        old = client.get('/api/library').json()['movies'][0]
+        assert old['video_codec'] == 'h264'
+
+        path = Path(old['path'])
+        path.write_bytes(b'encoded replacement with a different inode size and codec')
+        hevc = probe.side_effect(path)
+        hevc.streams = [
+            stream.model_copy(update={'codec': 'hevc'}) if stream.kind == 'video' else stream
+            for stream in hevc.streams
+        ]
+        probe.side_effect = lambda _path: hevc.model_copy(deep=True)
+
+        report = scan(client).json()
+        assert report['state'] == 'completed'
+        new = client.get('/api/library').json()['movies'][0]
+        assert new['id'] == old['id']
+        assert new['revision_id'] != old['revision_id']
+        assert new['video_codec'] == 'hevc'
+        html = client.get('/movies').text
+        assert 'HEVC' in html
 
 
 def test_probe_failure_after_change_does_not_reuse_old_metadata(config, probe):
@@ -272,3 +330,19 @@ def test_scanner_does_not_hash_or_probe_unsupported_files(roots):
     assert {item.relative_path for item in report.files} == {'Comedy/Film (1982).mkv', 'nested/another.MP4'}
     assert len({item.media_id for item in report.files}) == 2
     assert all(item.probe is None and item.fingerprints.full is None for item in report.files)
+
+
+def test_movie_without_signalled_scan_type_is_not_blocked(config, monkeypatch):
+    payload = json.loads((PROJECT_ROOT / 'fixtures/ffprobe/progressive.json').read_text())
+    for stream in payload['streams']:
+        stream.pop('field_order', None)
+    facts = parse_ffprobe(payload)
+    monkeypatch.setattr(FFprobeService, 'inspect', lambda self, path: facts.model_copy(deep=True))
+    with TestClient(create_app(config=config)) as client:
+        scan(client)
+        movie = client.get('/api/library').json()['movies'][0]
+        assert movie['interlaced'] is False and movie['resolution'] == '1080p'
+        result = client.post('/api/eligibility', json={'scope': 'movie', 'media_id': movie['id'],
+                                                       'preset_id': 'movie-streaming-quality'}).json()
+        assert not any('scan type' in reason for reason in result['reasons'])
+        assert any('treated as progressive' in warning for warning in result['warnings'])

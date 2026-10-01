@@ -6,6 +6,7 @@ from app.models.media import (
 )
 from app.models.media import spatial_resolution
 from app.models.policy import EligibilityResult
+from app.models.probe import assumed_sdr_colours
 from app.models.preset import CompressionPreset
 from app.models.tags import QualityFloor
 from app.services.estimation import estimate
@@ -34,9 +35,13 @@ class PolicyEngine:
             reasons.append("HDR signalling is unsupported or uncertain; transcoding is blocked.")
         if item.probe:
             for stream in item.probe.streams:
-                if stream.kind == "video" and stream.hdr and stream.hdr.classify().base != "sdr" and stream.hdr.classify().uncertain:
+                if (stream.kind == "video" and stream.hdr and stream.hdr.classify().base != "sdr"
+                        and stream.hdr.classify().uncertain and assumed_sdr_colours(stream) is None):
                     reasons.append("Dynamic HDR metadata is uncertain; transcoding is blocked.")
                     break
+        if item.probe and any(s.kind == "video" and s.scan_type_inferred and s.scan_type == "progressive"
+                              for s in item.probe.streams):
+            warnings.append("Scan type is not signalled in the file; treated as progressive.")
         if item.duration_seconds is None:
             reasons.append("Source duration is unknown.")
         if item.interlaced is None:
@@ -52,7 +57,7 @@ class PolicyEngine:
         if preset.rate_control != "abr":
             warnings.append("Planning range only: quality-based output may fall outside it. Actual savings must be checked after encoding.")
         if preset.backend == "qsv":
-            warnings.append("QSV quality and rate-control support require validation on your Intel hardware.")
+            warnings.append("GPU quality and rate-control support require validation on your Intel hardware.")
 
         if "Quality CPU" in effective_tags and preset.backend != "cpu":
             reasons.append("Quality CPU policy requires a CPU preset.")
@@ -73,7 +78,7 @@ class PolicyEngine:
                 if height < quality_floor.minimum_height:
                     reasons.append("Output resolution is below the inherited Quality Floor.")
                 if preset.rate_control != "abr":
-                    reasons.append("Quality Floor bitrate cannot be guaranteed by CRF/ICQ. Use a bitrate preset or revise the tag.")
+                    reasons.append("Quality Floor bitrate cannot be guaranteed by CRF/ICQ/QVBR. Use a bitrate preset or revise the tag.")
                 else:
                     # Preset validation requires a target bitrate for ABR.
                     assert preset.target_video_bitrate is not None
@@ -154,9 +159,11 @@ class PolicyEngine:
                 "Source bitrate is below preset compression floor."
             )
 
+        # Audio is never converted by default: only an explicit per-job
+        # preserve_audio=False lets a conversion-capable preset touch audio.
+        # The preset's legacy preserve_audio_by_default no longer changes that.
         effective_preserve_audio = (
-            preserve_audio is True
-            or (preserve_audio is not False and preset.preserve_audio_by_default)
+            preserve_audio is not False
             or "Preserve Audio" in effective_tags
             or (preset.audio_policy == "preserve" and preset.audio_conversion_policy == "preserve")
         )

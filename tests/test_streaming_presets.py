@@ -53,7 +53,8 @@ def test_default_catalogue_has_exactly_five_enabled_built_ins(streaming):
         "show-preserve-quality", "show-streaming-quality", "show-streaming-efficient-audio",
     }
     assert all(p["target_resolution"] == "keep" for p in enabled)
-    assert all(p["source_resolutions"] == ["480p", "576p", "720p", "1080p", "2160p"] for p in enabled)
+    assert all(p["source_resolutions"] == ["480p", "576p", "720p", "1080p", "2160p"]
+               for p in enabled)
     assert all(p["hdr_support"] == "hdr10_experimental" and p["hdr_policy"] == "preserve_source" for p in enabled)
     assert all(set(p["hdr_metadata"]) >= {
         "validate_signalling", "preserve_color_primaries", "preserve_transfer_characteristics",
@@ -72,7 +73,7 @@ def test_default_backends_and_shared_show_video_policy(streaming):
 
     video_fields = [
         "intent", "backend", "destination_codec", "rate_control", "quality_value",
-        "encoder_preset", "output_bit_depth", "source_resolutions", "hdr_support",
+        "encoder_preset", "output_bit_depth", "source_resolutions", "qvbr_bitrates_by_resolution", "hdr_support",
         "planning_video_bitrate_low", "planning_video_bitrate_high", "target_resolution",
         "preserve_hdr_metadata", "minimum_source_bitrate", "minimum_expected_saving_percent",
         "allow_hevc_reencode",
@@ -521,3 +522,32 @@ def test_estimates_are_not_clamped_to_source_size(streaming):
         effective_tags=[], preserve_audio=True, preserve_subtitles=True)
     assert eligibility.eligible
     assert any("minimum saving" in warning for warning in eligibility.warnings)
+
+def test_progressive_576p_show_is_eligible_for_builtin_gpu_preset(streaming):
+    from app.services.policy import PolicyEngine
+
+    app, _ = streaming
+    catalog = app.state.media_processor.catalog
+    source = catalog.find('modern-family-s03e04', 'show').item
+    episode = source.model_copy(update={
+        'resolution': '576p', 'width': 1024, 'height': 576,
+        'video_bitrate': 3_000_000, 'size': 600_000_000,
+    })
+    preset = catalog.preset('show-streaming-quality')
+    result = PolicyEngine().evaluate(item=episode, scope='show', preset=preset,
+        effective_tags=[], preserve_audio=True, preserve_subtitles=True)
+    assert result.eligible, result.reasons
+    assert preset.video_bitrate_for('576p') == 1_500_000
+    assert result.estimate_basis == 'planning_range'
+    low, high = result.estimated_output_size_low, result.estimated_output_size_high
+    assert low is not None and high is not None and low < high
+
+
+
+def test_settings_shows_editable_resolution_rates(streaming):
+    _, client = streaming
+    html = client.get('/settings').text
+    assert 'Nominal bitrate by source resolution' in html
+    assert '576p: 1.5 Mbps' in html
+    assert 'name="qvbr_rate_576p"' in html
+    assert 'name="source_resolution"' in html

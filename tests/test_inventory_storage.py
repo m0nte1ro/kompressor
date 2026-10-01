@@ -15,6 +15,7 @@ from app.models.tags import TagTarget
 from app.repositories.database import Database
 from app.repositories.discovery_fixture import read_snapshot
 from app.repositories.inventory import SQLiteInventoryRepository
+from app.repositories.inventory_schema import SCHEMA
 from app.services.filesystem_scanner import root_identity
 from app.services.reconciliation import ReconciliationService
 
@@ -96,12 +97,57 @@ def test_schema_one_migration_preserves_inventory_and_other_state(tmp_path):
         database = Database(path)
         assert SQLiteInventoryRepository(database).load() == state
         with database.read() as connection:
-            assert connection.execute('PRAGMA user_version').fetchone()[0] == 2
+            assert connection.execute('PRAGMA user_version').fetchone()[0] == 4
             assert connection.execute('PRAGMA foreign_key_check').fetchall() == []
             assert connection.execute("SELECT 1 FROM metadata WHERE id='reconciliation_inventory_v1'").fetchone() is None
             for table in ('presets', 'tags', 'jobs', 'metadata'):
                 assert connection.execute(f"SELECT payload FROM {table} WHERE id='untouched'").fetchone()[0] == '{"keep": true}'
             assert connection.execute("SELECT width,scan_type FROM streams WHERE kind='video'").fetchone()[0] == 1920
+
+
+def test_schema_two_migrates_colour_range_column_atomically(tmp_path):
+    path = tmp_path / 'schema-two.sqlite3'
+    with sqlite3.connect(path) as connection:
+        for statement in SCHEMA:
+            legacy = statement.replace(
+                ",\n        color_range TEXT CHECK(color_range IS NULL OR color_range IN ('tv','pc'))",
+                "",
+            )
+            connection.execute(legacy)
+        connection.execute('ALTER TABLE streams DROP COLUMN profile')
+        connection.execute('PRAGMA user_version=2')
+
+    database = Database(path)
+    with database.read() as connection:
+        assert connection.execute('PRAGMA user_version').fetchone()[0] == 4
+        columns = {row['name'] for row in connection.execute('PRAGMA table_info(streams)')}
+        assert 'color_range' in columns
+
+
+def test_stream_colour_range_round_trips_relational_inventory(tmp_path):
+    database = Database(tmp_path / 'colour-range.sqlite3')
+    repository = SQLiteInventoryRepository(database)
+    snapshot = read_snapshot(PROJECT_ROOT / 'fixtures/reconciliation/initial.json')
+    observation = snapshot.files[0]
+    assert observation.probe is not None
+    streams = [
+        stream.model_copy(update={'color_range': 'tv'}) if stream.kind == 'video' else stream
+        for stream in observation.probe.streams
+    ]
+    updated = observation.model_copy(update={
+        'probe': observation.probe.model_copy(update={'streams': streams})
+    })
+    result = ReconciliationService(repository).reconcile(
+        snapshot.model_copy(update={'files': [updated]}))
+    restored = repository.get_file(result.created[0])
+    assert restored is not None and restored.observation.probe is not None
+    video = next(stream for stream in restored.observation.probe.streams if stream.kind == 'video')
+    assert video.color_range == 'tv'
+    with database.read() as connection:
+        assert connection.execute(
+            "SELECT color_range FROM streams WHERE observation_id=? AND kind='video'",
+            ('file:' + restored.file_id,),
+        ).fetchone()['color_range'] == 'tv'
 
 
 @pytest.mark.parametrize('damage', ['malformed', 'missing_revision', 'mismatched_path', 'missing_file'])

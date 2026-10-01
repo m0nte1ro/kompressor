@@ -4,8 +4,17 @@ export const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char 
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
 })[char]);
 export const size = value => value == null ? '—' : `${(value / (1024 ** 3)).toFixed(1)} GiB`;
+// Grows gradually: 42s → 10m 46s → 6h 39m 46s. Hours are the largest unit.
+export const duration = value => {
+  if (value == null || !Number.isFinite(value)) return '—';
+  const total = Math.max(0, Math.round(value));
+  const hours = Math.floor(total / 3600), minutes = Math.floor(total % 3600 / 60), seconds = total % 60;
+  if (hours) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+};
 export const bitrate = value => value == null ? '—' : `${(value / 1e6).toFixed(1)} Mbps`;
-export const label = value => ({cpu: 'CPU · x265', qsv: 'Intel QSV', hevc: 'HEVC', h264: 'H.264',
+export const label = value => ({cpu: 'CPU · x265', qsv: 'Intel GPU (VA-API)', hevc: 'HEVC', h264: 'H.264',
   preserve: 'Preserve source', keep: 'Keep source resolution', efficient: 'Efficient E-AC3 / AAC',
   max_2160p: 'Max 2160p', max_1080p: 'Max 1080p', max_720p: 'Max 720p', max_576p: 'Max 576p', max_480p: 'Max 480p',
   sdr_only: 'SDR sources only', hdr10_experimental: 'SDR + HDR10 · experimental',

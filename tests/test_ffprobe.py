@@ -8,6 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from app.config import PROJECT_ROOT
+from app.models.probe import StreamFacts, resolution_class, with_inferred_scan_type
 from app.services.errors import InvalidOperation
 from app.services.ffprobe import FFprobeService, parse_ffprobe
 
@@ -27,6 +28,7 @@ def test_progressive_streams_chapters_and_metadata():
     assert result.duration_seconds == 120.5 and result.container == 'matroska,webm'
     assert video.resolution_class == 1080 and video.scan_type == 'progressive'
     assert video.frame_rate == '24000/1001' and video.bitrate == 12000000
+    assert video.color_range == 'tv'
     assert video.hdr is not None and video.hdr.classify().base == 'sdr'
     assert video.hdr.bit_depth == 8
     assert result.streams[1].channel_layout == '5.1(side)'
@@ -42,6 +44,46 @@ def test_interlaced_is_spatially_1080():
     video = fixture('interlaced').streams[0]
     assert (video.width, video.height, video.resolution_class) == (1920, 1080, 1080)
     assert video.scan_type == 'interlaced' and video.field_order == 'top_first'
+
+
+@pytest.mark.parametrize('width,height,expected', [
+    (3840, 2160, 2160), (3840, 1600, 2160), (3828, 2068, 2160),
+    (3838, 1600, 2160), (1908, 1034, 1080), (1920, 800, 1080),
+    (1278, 536, 720), (720, 576, 576), (854, 480, 480),
+    (3764, 1600, 2160), (3762, 1600, None),
+    (4096, 2160, None), (2560, 1440, None),
+    (None, 2160, None), (3840, None, None),
+])
+def test_nominal_resolution_accepts_small_crops_without_guessing_arbitrary_rasters(width, height, expected):
+    assert resolution_class(width, height) == expected
+
+
+def test_cropped_hevc_probe_reaches_existing_progressive_inference(probe_payload):
+    raw = probe_payload['streams'][0]
+    raw.update(width=3828, height=2068, codec_name='hevc', pix_fmt='yuv420p10le')
+    raw.pop('field_order', None)
+    facts = parse_ffprobe(probe_payload)
+    assert facts.streams[0].scan_type == 'unknown'
+    projected = with_inferred_scan_type(facts, 'Good.Fortune.2025.2160p.WEB-DL.mkv')
+    video = projected.streams[0]
+    assert (video.width, video.height, video.resolution_class) == (3828, 2068, 2160)
+    assert video.scan_type == 'progressive' and video.scan_type_inferred
+    # The raw scan evidence is still retained in the original probe.
+    assert facts.streams[0].scan_type == 'unknown'
+
+
+def test_cached_probe_with_missing_class_is_derived_from_dimensions_on_load():
+    stream = StreamFacts.model_validate({
+        'index': 0, 'kind': 'video', 'codec': 'hevc',
+        'width': 3828, 'height': 2068, 'resolution_class': None,
+    })
+    assert stream.resolution_class == 2160 and stream.scan_type == 'unknown'
+    assert StreamFacts(index=1, kind='video', codec='hevc').resolution_class is None
+    # Explicit historical classes and non-video streams are unaffected.
+    assert StreamFacts(index=2, kind='video', codec='hevc', width=1920, height=1080,
+                       resolution_class=720).resolution_class == 720
+    assert StreamFacts(index=3, kind='attachment', codec='mjpeg', width=1920,
+                       height=1080).resolution_class is None
 
 
 def test_hdr10_preserves_raw_signalling_and_sample_uncertainty():
@@ -74,6 +116,13 @@ def test_unknown_values_are_not_guessed(probe_payload):
     assert video.scan_type == 'unknown' and video.frame_rate is None and video.bitrate is None
     assert video.hdr is not None and video.hdr.classify().base == 'unknown'
     assert video.codec == 'unknown'
+
+
+def test_legacy_yuvj_probe_infers_full_colour_range(probe_payload):
+    probe_payload["streams"][0]["pix_fmt"] = "yuvj420p"
+    probe_payload["streams"][0].pop("color_range", None)
+    video = parse_ffprobe(probe_payload).streams[0]
+    assert video.color_range == "pc"
 
 
 def test_mixed_frames_override_progressive_stream_flag(probe_payload):
@@ -122,3 +171,30 @@ def test_real_ffprobe_when_installed(tmp_path: Path):
     result = FFprobeService().inspect(path)
     assert result.streams[0].kind == 'audio' and result.streams[0].codec == 'pcm_s16le'
     assert path.read_bytes() == before
+
+
+def unsignalled_scan(probe_payload):
+    for stream in probe_payload['streams']:
+        stream.pop('field_order', None)
+    facts = parse_ffprobe(probe_payload)
+    assert next(s for s in facts.streams if s.kind == 'video').scan_type == 'unknown'
+    return facts
+
+
+@pytest.mark.parametrize('name,scan', [
+    ('Film.2010.1080p.BluRay.x264.mkv', 'progressive'),
+    ('Film (2010).mkv', 'progressive'),
+    ('Film.2010.1080i.HDTV.mkv', 'interlaced'),
+    ('Show.S01E01.576i.mkv', 'interlaced'),
+])
+def test_unsignalled_scan_type_is_resolved_from_name_and_resolution(probe_payload, name, scan):
+    from app.models.probe import with_inferred_scan_type
+    video = next(s for s in with_inferred_scan_type(unsignalled_scan(probe_payload), name).streams
+                 if s.kind == 'video')
+    assert video.scan_type == scan and video.scan_type_inferred
+
+
+def test_signalled_scan_type_is_never_overridden_by_the_name():
+    from app.models.probe import with_inferred_scan_type
+    facts = fixture('interlaced')
+    assert with_inferred_scan_type(facts, 'Film.1080p.mkv') is facts

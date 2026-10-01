@@ -17,6 +17,7 @@ from app.services.library_discovery import LibraryDiscoveryService, configured_r
 from app.services.discovery import MediaScanner, ProbeService
 from app.services.tags import TagService
 from app.services.encoding_runtime import roots_overlap_workspace
+from app.services.analysis import AnalysisService
 
 
 class MediaProcessor:
@@ -24,7 +25,8 @@ class MediaProcessor:
                  queue: QueueService, scanner: MediaScanner | None, probe: ProbeService | None,
                  preferences: SQLitePreferencesRepository | None = None,
                  inventory: ReconciliationService | None = None,
-                 discovery: LibraryDiscoveryService | None = None, runtime_settings: dict | None = None):
+                 discovery: LibraryDiscoveryService | None = None, runtime_settings: dict | None = None,
+                 analysis: AnalysisService | None = None):
         self.catalog = catalog
         self.presets = presets
         self.queue = queue
@@ -33,6 +35,7 @@ class MediaProcessor:
         self.preferences = preferences
         self.inventory = inventory
         self.discovery = discovery
+        self.analysis = analysis
         self.runtime_settings = runtime_settings or {}
 
     def get_library(self):
@@ -91,10 +94,24 @@ class MediaProcessor:
         self.presets.delete(preset_id)
 
     def evaluate_compression(self, media_id: str, scope: MediaScope, preset_id: str,
-                             preserve_audio: bool | None = None, preserve_subtitles: bool = True):
+                             preserve_audio: bool | None = None, preserve_subtitles: bool = True,
+                             replace_source: bool = False):
         preset = self.catalog.preset(preset_id)
         entry = self.catalog.find(media_id, scope)
-        return self.catalog.evaluate(entry, preset, preserve_audio, preserve_subtitles)
+        result = self.catalog.evaluate(entry, preset, preserve_audio, preserve_subtitles)
+        if self.discovery is not None:
+            execution_reasons = self.queue.execution_reasons(
+                entry, preset, result,
+                requested_preserve_audio=preserve_audio,
+                preserve_subtitles=preserve_subtitles,
+                replace_source=replace_source,
+            )
+            if execution_reasons:
+                result = result.model_copy(update={
+                    "eligible": False,
+                    "reasons": list(dict.fromkeys([*result.reasons, *execution_reasons])),
+                })
+        return result
 
     def queue_encode(self, request: EnqueueRequest):
         # QueueService and the configured worker enforce policy and runtime capability.
@@ -106,11 +123,33 @@ class MediaProcessor:
     def remove_queued_job(self, job_id: str):
         self.queue.remove(job_id)
 
+    def delete_history_job(self, job_id: str):
+        self.queue.delete_history(job_id)
+
     def prioritize_job(self, job_id: str, priority: Priority):
         self.queue.prioritize(job_id, priority)
 
     def move_job_next(self, job_id: str):
         self.queue.prioritize(job_id)
+
+    def replace_with_kept_output(self, job_id: str) -> dict:
+        return self.queue.enqueue_replacement(job_id)
+
+    def _analysis(self) -> AnalysisService:
+        if self.analysis is None:
+            raise InvalidOperation("Comparisons and benchmarks need real filesystem encoding.")
+        return self.analysis
+
+    def compare_output(self, job_id: str, count: int = 6) -> dict:
+        return self._analysis().start_compare(job_id, count)
+
+    def benchmark_output(self, job_id: str, seconds: float) -> dict:
+        return self._analysis().start_benchmark(job_id, seconds)
+
+    def get_analysis_status(self) -> dict:
+        if self.analysis is None:
+            return {"state": "unavailable", "vmaf_available": False}
+        return {**self.analysis.status(), "vmaf_available": self.analysis.vmaf_available()}
 
     def stop_job(self, job_id: str):
         self.queue.skip(job_id)

@@ -76,6 +76,7 @@ tbody tr:last-child > * { border-bottom: 0; }
 .violet { border-color: #554473; background: #1c1528; color: #e4d8ff; }
 .hdr { color: #ffe0a8; }
 .saving { color: #bff8c6; }
+.saving.larger { color: var(--red); }
 .job-state { display: block; margin-top: 5px; }
 .season th { background: #151e29; color: #9caec0; font-size: 10px; text-transform: uppercase; letter-spacing: .1em; padding: 8px 14px; }
 .empty { padding: 28px 16px; text-align: center; color: var(--muted); }
@@ -184,3 +185,9 @@ legend { color: var(--muted); padding: 0 5px; }
 .worker-schedule-settings h2 { margin-bottom: 6px; }
 .worker-schedule-lane { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; align-items: end; }
 .worker-schedule-lane > label:first-of-type, .worker-schedule-lane > p { grid-column: 1 / -1; }
+
+.resolution-choices { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.resolution-choices .check { margin: 5px 0; }
+.resolution-rates { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 10px 0; }
+.resolution-rates label { display: grid; gap: 4px; font-size: .85rem; }
+.resolution-rates input { width: 100%; }

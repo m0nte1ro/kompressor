@@ -1,5 +1,8 @@
+import json
+import re
 import pytest
 
+from app.config import PROJECT_ROOT
 from app.routers.web import size
 
 
@@ -104,26 +107,83 @@ def test_size_uses_binary_units():
     assert size(81_093_483_589) == "75.5 GiB"
 
 
-def test_blocked_media_still_shows_saving_estimate(client):
+def test_blocked_media_saves_nothing(client):
     html = client.get("/movies").text
-    start = html.index('data-id="movie-hardlinked-example"')
-    row = html[start:html.index("</tr>", start)]
-    assert "Blocked" in row
-    assert "Planning range" in row
-    assert "Estimate unavailable" not in row
+    for media_id in ("movie-hardlinked-example", "movie-dune-part-two"):
+        start = html.index(f'data-id="{media_id}"')
+        row = html[start:html.index("</tr>", start)]
+        assert "Blocked" in row and 'data-sort-saving="0"' in row
+        assert '<td class="saving numeric"><span class="muted">0.0 GiB</span><small>Blocked</small></td>' in row
 
 
-def test_preserve_av_row_does_not_show_saving_estimate(client):
+def test_eligible_rows_show_one_planning_estimate_not_a_range(client):
     html = client.get("/movies").text
-    start = html.index('data-id="movie-dune-part-two"')
-    row = html[start:html.index("</tr>", start)]
-    assert "Preserve A/V" in row
-    assert "Estimate unavailable" in row
-    assert "Planning range" not in row
+    cells = re.findall(r'<td class="saving numeric">(.*?)</td>', html)
+    eligible = [cell for cell in cells if "Blocked" not in cell]
+    assert eligible and all(cell.startswith("~") and "–" not in cell for cell in eligible)
 
 
-def test_summary_includes_blocked_media_estimates(client):
+def test_summary_counts_only_eligible_media(client, catalog):
     html = client.get("/movies").text
-    assert "Estimated saving" in html
-    assert "Planning midpoint · not measured" in html
-    assert "~" in html
+    expected = sum((row["eligibility"].planning_saving or row["eligibility"].estimated_saving or 0)
+                   for row in catalog.previews("movie") if row["eligibility"].eligible)
+    assert "Eligible items · planning midpoint · not measured" in html
+    assert f"~{size(expected)}" in html
+
+
+def test_rescan_button_is_available_on_filesystem_library_pages(client, monkeypatch):
+    processor = client.app.state.media_processor
+    monkeypatch.setattr(processor, "get_scan_status",
+                        lambda: {"backend": "filesystem", "state": "idle", "roots": []})
+    for url in ["/movies", "/shows", "/shows/show-modern-family", "/settings"]:
+        html = client.get(url).text
+        assert 'data-scan-library' in html
+        assert "Rescan library" in html
+
+
+def test_show_seasons_have_select_all_controls(client, catalog):
+    season = catalog.media.library.shows[0].seasons[0]
+    second_season = season.model_copy(deep=True)
+    second_season.season = 4
+    second_season.episodes = [second_season.episodes[0]]
+    second_season.episodes[0].season = 4
+    second_season.episodes[0].id = "s04e04-select"
+    catalog.media.library.shows[0].seasons.append(second_season)
+
+    html = client.get("/shows/show-modern-family").text
+    assert 'class="season-select" data-season="3"' in html
+    assert 'class="season-select" data-season="4"' in html
+    assert 'aria-label="Select all episodes in season 3"' in html
+
+
+def test_discovery_script_uses_multi_button_selector_and_declares_manual_scan_state(client):
+    script = client.get("/static/discovery.js").text
+    assert "const buttons = $$('[data-scan-library]');" in script
+    assert "let manualScanRequested = false;" in script
+
+
+def test_app_script_uses_multi_season_selector(client):
+    script = client.get("/static/app.js").text
+    assert "$$('.season-select', library).forEach" in script
+    assert not re.search(r"(?<!\$)\$\('\.season-select', library\)\.forEach", script)
+
+
+def test_every_module_gets_a_content_versioned_url(client):
+    page = client.get("/movies").text
+    match = re.search(r'<script type="importmap">(.*?)</script>', page, re.S)
+    assert match is not None
+    imports = json.loads(match.group(1))["imports"]
+    static = PROJECT_ROOT / "app" / "static"
+    for script in static.glob("*.js"):
+        assert re.fullmatch(rf"/static/{script.name}\?v=[0-9a-f]{{12}}", imports[f"/static/{script.name}"])
+        # Version suffixes in imports would bypass the import map and split the module graph.
+        assert not re.search(r"from '[^']+\?v=|import '[^']+\?v=", script.read_text())
+    response = client.get("/static/common.js")
+    assert response.headers["cache-control"] == "no-cache"
+
+
+def test_history_marks_grown_outputs_red_and_offers_delete(client):
+    script = client.get("/static/queue.js").text
+    assert "'saving larger'" in script and 'data-history-action="delete"' in script
+    assert ".saving.larger { color: var(--red); }" in client.get("/static/app.css").text
+    assert "/api/queue/history/" in client.get("/static/app.js").text

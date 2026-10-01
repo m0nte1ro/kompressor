@@ -1,3 +1,5 @@
+from hashlib import sha256
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -8,6 +10,29 @@ from app.dependencies import Processor
 
 router = APIRouter(include_in_schema=False)
 templates = Jinja2Templates(directory=PROJECT_ROOT / "app" / "templates")
+STATIC_ROOT = PROJECT_ROOT / "app" / "static"
+_asset_digests: dict[str, tuple[tuple[int, int], str]] = {}
+
+
+def asset_version(name: str) -> str:
+    """Content hash of a static file, so a changed asset always gets a new URL."""
+    info = (STATIC_ROOT / name).stat()
+    key = (info.st_mtime_ns, info.st_size)
+    cached = _asset_digests.get(name)
+    if cached is None or cached[0] != key:
+        cached = (key, sha256((STATIC_ROOT / name).read_bytes()).hexdigest()[:12])
+        _asset_digests[name] = cached
+    return cached[1]
+
+
+def import_map(request: Request) -> dict:
+    # Modules import each other by bare relative paths; the import map gives
+    # every one of them a content-versioned URL. No manual cache bumps needed.
+    imports = {}
+    for script in sorted(STATIC_ROOT.glob("*.js")):
+        path = request.url_for("static", path=script.name).path
+        imports[path] = f"{path}?v={asset_version(script.name)}"
+    return {"imports": imports}
 
 
 def size(value: int | None) -> str:
@@ -23,7 +48,7 @@ def bitrate(value: int | None) -> str:
 
 
 def label(value: str | None) -> str:
-    labels = {"cpu": "CPU · x265", "qsv": "Intel QSV", "hevc": "HEVC",
+    labels = {"cpu": "CPU · x265", "qsv": "Intel GPU (VA-API)", "hevc": "HEVC",
               "h264": "H.264", "preserve": "Preserve source", "keep": "Keep source resolution",
               "efficient": "Efficient E-AC3 / AAC", "max_2160p": "Max 2160p",
               "max_1080p": "Max 1080p", "max_720p": "Max 720p", "max_576p": "Max 576p",
@@ -35,6 +60,12 @@ def label(value: str | None) -> str:
 
 
 templates.env.filters.update(size=size, bitrate=bitrate, label=label)
+templates.env.globals.update(asset_version=asset_version, import_map=import_map)
+
+
+def media_backend(processor) -> str:
+    status = processor.get_scan_status()
+    return status.get("backend", "seed") if isinstance(status, dict) else "seed"
 
 
 def render(request: Request, template: str, page: str, title: str, **context):
@@ -51,27 +82,30 @@ def index():
 @router.get("/movies", response_class=HTMLResponse)
 def movies(request: Request, processor: Processor):
     return render(request, "library.html", "movies", "Movies", scope="movie",
-                  rows=processor.get_movies(), subtitle="Media inventory and compression policies")
+                  rows=processor.get_movies(), subtitle="Media inventory and compression policies",
+                  media_backend=media_backend(processor))
 
 
 @router.get("/shows", response_class=HTMLResponse)
 def shows(request: Request, processor: Processor):
     cards = processor.get_shows()
     return render(request, "shows.html", "shows", "Shows", cards=cards,
-                  subtitle="Series inventory · inherited series, season and episode tags")
+                  subtitle="Series inventory · inherited series, season and episode tags",
+                  media_backend=media_backend(processor))
 
 
 @router.get("/shows/{show_id}", response_class=HTMLResponse)
 def episodes(request: Request, show_id: str, processor: Processor):
     detail = processor.get_show(show_id)
     return render(request, "library.html", "shows", detail["show"].name, scope="show", **detail,
-                  subtitle="All episodes · series → season → episode policy")
+                  subtitle="All episodes · series → season → episode policy",
+                  media_backend=media_backend(processor))
 
 
 @router.get("/queue", response_class=HTMLResponse)
 def queue(request: Request, processor: Processor):
     return render(request, "queue.html", "queue", "Queue",
-                  subtitle="Independent CPU and Intel QSV workers · estimated saving first",
+                  subtitle="Independent CPU and Intel GPU (VA-API) workers · estimated saving first",
                   scan_status=processor.get_scan_status(), runtime_settings=processor.get_runtime_settings())
 
 
@@ -94,6 +128,7 @@ def settings(request: Request, processor: Processor):
         "media_backend": scan_status.get("backend", "seed"),
         "ffmpeg_binary": "ffmpeg", "ffprobe_binary": "ffprobe",
         "ffmpeg_available": None, "ffprobe_available": None, "libx265_available": None,
+        "hevc_vaapi_available": None, "qsv_available": False, "qsv_device": "/dev/dri/renderD128",
         "workspace_root": "not configured", "workspace_writable": None,
         "encoding_enabled": False, "encoder_mode": "seed fake simulation",
         "supported_backends": ["cpu", "qsv"] if scan_status.get("backend") == "seed" else [],

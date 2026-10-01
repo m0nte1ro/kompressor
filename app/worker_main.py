@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import signal
 import sys
+from typing import Literal
 from threading import Event
 
 from app.config import settings
@@ -15,21 +16,24 @@ from app.workers.real import RealEncoderWorker
 
 
 def run(backend: str = "cpu") -> int:
-    if backend != "cpu":
-        print(f"{backend.upper()} real worker is not implemented yet.", file=sys.stderr)
+    if backend == "cpu":
+        selected_backend: Literal["cpu", "qsv"] = "cpu"
+    elif backend == "qsv":
+        selected_backend = "qsv"
+    else:
+        print(f"Unknown real worker backend: {backend}", file=sys.stderr)
         return 2
 
-    processor = build_media_processor(settings, process_role="worker")
+    processor = build_media_processor(settings, process_role="worker", worker_backend=selected_backend)
     worker = processor.queue.worker
     if not isinstance(worker, RealEncoderWorker):
         print("Real worker requires KOMPRESSOR_MEDIA_BACKEND=filesystem.", file=sys.stderr)
         return 2
-    if backend not in worker.supported_backends:
-        print(f"{backend.upper()} worker is unavailable in this runtime.", file=sys.stderr)
-        return 2
-    if not worker.enabled:
-        print(worker.unavailable_reason or "Real encoding prerequisites are unavailable.", file=sys.stderr)
-        return 2
+    if backend not in worker.supported_backends or not worker.enabled:
+        # Usually transient (the render device or driver is not ready yet after a
+        # host/LXC boot): exit 3 so systemd retries, unlike configuration errors (2).
+        print(worker.unavailable_reason or f"{'GPU' if backend == 'qsv' else 'CPU'} worker is unavailable in this runtime.", file=sys.stderr)
+        return 3
 
     stopping = Event()
 

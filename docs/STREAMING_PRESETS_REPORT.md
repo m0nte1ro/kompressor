@@ -1,3 +1,8 @@
+> Current GPU update: the two built-in Show streaming presets use VA-API QVBR
+> with source-resolution nominal rates of 1/1.5/2.5/4/16 Mbps for
+> 480p/576p/720p/1080p/2160p. Existing ICQ references below describe the
+> earlier preset design; output quality and savings still require real-media tests.
+
 # Default preset catalogue
 
 Kompressor ships with five intentionally simple enabled built-in presets. They
@@ -15,21 +20,22 @@ workflow.
 | Just convert to HEVC                        | Movie | CPU/x265 HEVC, experimental CRF                        | Preserve every track       | KEEP              |
 | Tone it down a bit + HEVC                   | Movie | CPU/x265 HEVC, experimental CRF                        | Preserve every track       | KEEP              |
 | Just convert to HEVC                        | Show  | CPU/x265 HEVC, experimental CRF                        | Preserve every track       | KEEP              |
-| Tone it down a bit + HEVC                   | Show  | Intel QSV HEVC, experimental ICQ                       | Preserve every track       | KEEP              |
+| Tone it down a bit + HEVC                   | Show  | Intel GPU HEVC, experimental QVBR                       | Preserve every track       | KEEP              |
 | Tone it down a bit + HEVC + Efficient Audio | Show  | Same video policy as the Show streaming-quality intent | Efficient rules by default | KEEP              |
 
 The streaming presets aim for a premium-streaming-style visual philosophy and
 significant storage reduction. They do not copy Netflix bitrate settings. CRF and
-ICQ values are not equivalent, and the current QSV values have not been validated
-on Intel UHD 730 hardware.
+ICQ values are not equivalent. The GPU defaults are implemented but still require
+real Intel UHD 730 visual/size/speed validation before being treated as settled.
 
 ## Audio policy
 
 Both Movie presets and the Show preserve-quality and Show streaming-quality
 presets copy every audio track, language, codec, channel layout and lossless
 audio stream untouched. Movie Preserve Audio is forced and locked in the job
-modal. The Efficient Audio Show preset is the only built-in that enables
-conversion by default. Other custom presets may opt into conversion explicitly.
+modal. The Efficient Audio Show preset is the only built-in that can convert, and
+even it copies audio unless the job unticks Preserve Audio: no job converts audio by
+default. Custom presets may allow conversion the same way.
 
 The experimental efficient rules are deterministic:
 
@@ -86,17 +92,22 @@ leaves queued preset snapshots unchanged.
 ## Output handling
 
 Output handling is a job option, separate from presets. Seed mode simulates the
-selected intent without creating files. Filesystem mode's first real CPU slice
-accepts keep-output only and writes validated MKV artifacts to the dedicated
-workspace; it never replaces the source. See [real CPU encoding](REAL_ENCODING.md)
-for its conservative SDR/progressive/HEVC limits.
+selected intent without creating files. Filesystem mode has independent real
+CPU/libx265 and Intel GPU/hevc_vaapi lanes. Both write a validated MKV to the
+dedicated workspace; a replace job (the WebUI default) then swaps it into an MKV
+source's path after the measured-saving and bit-exact audio checks, while a
+keep-original job leaves it in the workspace. The GPU Efficient Audio preset may
+encode AAC/E-AC3 tracks according to its rules when Preserve Audio is unticked.
+See [real encoding](REAL_ENCODING.md) for the conservative SDR/progressive/HEVC
+limits and validation boundary.
 
-Broader real-media validation is still required for perceptual CRF quality,
-QSV ICQ behavior, speed settings, HDR handling, player compatibility, frame and
-grain sensitivity, audio conversion, and output-size expectations.
+Broader real-media validation is still required for GPU ICQ perceptual quality,
+speed settings, player compatibility, frame/grain sensitivity, efficient-audio
+results, and output-size expectations. CPU CRF has already been exercised on real
+media, but it remains a lossy quality mode rather than a size guarantee.
 
 The broader preset model keeps HDR10 intent separate from SDR intent; it does
-not implicitly tone-map. The current real CPU worker accepts confirmed SDR only,
-so HDR10 encode support remains unavailable. A future HDR path must preserve and
+not implicitly tone-map. Both current real lanes accept confirmed SDR only, so
+HDR10 encode support remains unavailable. A future HDR path must preserve and
 validate colour primaries, PQ transfer characteristics, matrix coefficients,
 mastering display metadata, MaxCLL, MaxFALL and related signalling.

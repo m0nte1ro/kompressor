@@ -2,8 +2,9 @@
 
 The reconciliation milestone was closed in `f580cf4`. This milestone keeps that
 identity/revision model and adds read-only discovery/probe adapters. The separate
-[first CPU encoding slice](REAL_ENCODING.md) writes only to the dedicated workspace;
-media roots remain read-only. This document's discovery flow does not encode,
+[real encoding lanes](REAL_ENCODING.md) write to the dedicated workspace and, for
+replace jobs only, swap a verified output into the source's directory; discovery
+itself never writes to media roots. This document's discovery flow does not encode,
 replace sources, hash media, use media servers or external metadata APIs.
 
 ## Enable and use
@@ -59,10 +60,12 @@ It includes present records from the currently configured roots. It exposes
 seed tag keys remain unchanged. Missing records/revisions stay in the reconciled
 inventory even when hidden from the active library views.
 
-Filesystem source mounts remain read-only. When ffmpeg, ffprobe, libx265 and the
-workspace are ready, the filesystem backend can enqueue the separate CPU-only
-real encode slice; otherwise queue submission returns a clear runtime error. It
-never uses the seed fake worker. The original seed workflow, including its fake
+Scanning never writes to source mounts; replace jobs need them read-write (see
+[source replacement](REAL_ENCODING.md#source-replacement)). When ffmpeg/ffprobe/workspace
+prerequisites pass, CPU jobs additionally require libx265 and GPU jobs require
+the configured render device plus hevc_vaapi. Each real lane runs in its own
+standalone worker process; unavailable lanes are reported explicitly and never
+fall back to the seed fake worker. The original seed workflow, including its fake
 workers, still works.
 
 ## Scanner behaviour
@@ -102,9 +105,20 @@ video bitrate, dimensions, channels or colour metadata remain unknown; unavailab
 estimates display a dash. API clients must accept nulls for these fields in real
 inventory mode. Seed fixtures still carry their previous known values.
 
+Resolution classes use measured dimensions, allowing letterboxing and small edge
+crops: one dimension must be within 2% below a nominal raster edge, and neither
+may exceed that raster. For example, 3828×2068 is classified as 2160; its actual
+dimensions remain unchanged and appear in Technical metadata. Missing classes in
+cached probes are derived on load, so this correction needs no rescan or ffprobe
+run. Missing dimensions and rasters outside the supported classes stay unknown;
+a resolution in the filename is not evidence of measured dimensions.
+
 1920×1080 interlaced content stays resolution class 1080 with an `1080i` display
 label. It is blocked with: “Interlaced source requires deinterlacing; no validated
-pipeline is enabled”. Unknown scan type is not assumed progressive.
+pipeline is enabled”. A scan type the file does not signal (common for
+progressive MKVs without a field order) is resolved when the library is built: a
+`1080i`/`576i`-style file name counts as interlaced, otherwise a known resolution
+is treated as progressive with a policy warning. Signalled interlacing always wins.
 
 HDR classification derives from stored facts. Ten-bit alone does not imply HDR.
 SDR signalling remains SDR; PQ/BT.2020 can be represented as HDR10. Mastering
