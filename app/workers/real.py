@@ -190,17 +190,20 @@ class RealEncoderWorker:
                 self._wake.wait(0.5)
                 self._wake.clear()
                 continue
+            job_id = job.id
             with self._lock:
-                self._active.add(job.id)
+                self._active.add(job_id)
             try:
                 self._execute(job)
             except EncodingCancelled:
                 if not self._stop.is_set() and queue:
-                    self._persist("record the stop", lambda: queue.cancelled_real_job(job.id))
+                    owner = queue
+                    self._persist("record the stop", lambda: owner.cancelled_real_job(job_id))
             except Exception as error:
                 if queue:
-                    self._persist("record the failure", lambda: queue.fail_real_job(
-                        job.id, str(error), getattr(error, "exit_code", None)))
+                    owner = queue
+                    self._persist("record the failure", lambda: owner.fail_real_job(
+                        job_id, str(error), getattr(error, "exit_code", None)))
                 self.encoder.cleanup(job.id, remove_final=True)
             finally:
                 self.encoder.cleanup(job.id)

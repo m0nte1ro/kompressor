@@ -170,7 +170,9 @@ def test_app_script_uses_multi_season_selector(client):
 
 def test_every_module_gets_a_content_versioned_url(client):
     page = client.get("/movies").text
-    imports = json.loads(re.search(r'<script type="importmap">(.*?)</script>', page, re.S).group(1))["imports"]
+    match = re.search(r'<script type="importmap">(.*?)</script>', page, re.S)
+    assert match is not None
+    imports = json.loads(match.group(1))["imports"]
     static = PROJECT_ROOT / "app" / "static"
     for script in static.glob("*.js"):
         assert re.fullmatch(rf"/static/{script.name}\?v=[0-9a-f]{{12}}", imports[f"/static/{script.name}"])

@@ -220,7 +220,9 @@ def test_benchmark_runs_a_centred_segment_and_records_the_score(tmp_path):
         if "showinfo" in command:
             return subprocess.CompletedProcess(command, 0, "", "pts_time:0")
         graph = command[command.index("-lavfi") + 1]
-        log = Path(re.search(r"log_path='([^']+)'", graph)[1])
+        match = re.search(r"log_path='([^']+)'", graph)
+        assert match is not None
+        log = Path(match[1])
         log.write_text(json.dumps({"frames": [{"metrics": {"vmaf": 95.0}}, {"metrics": {"vmaf": 91.0}}],
                                    "pooled_metrics": {"vmaf": {"mean": 93.0, "harmonic_mean": 92.9}}}))
         assert progress is not None
@@ -256,7 +258,9 @@ def test_benchmark_endpoint_saves_the_score_on_the_history_job(tmp_path, monkeyp
     def run(self, command, progress=None):
         if "showinfo" in command:
             return subprocess.CompletedProcess(command, 0, "", "pts_time:0")
-        log = Path(re.search(r"log_path='([^']+)'", command[command.index("-lavfi") + 1])[1])
+        match = re.search(r"log_path='([^']+)'", command[command.index("-lavfi") + 1])
+        assert match is not None
+        log = Path(match[1])
         log.write_text(json.dumps({"frames": [{"metrics": {"vmaf": 96.0}}], "pooled_metrics": {"vmaf": {"mean": 96.0}}}))
         return subprocess.CompletedProcess(command, 0, "", "")
 

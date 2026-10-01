@@ -539,7 +539,8 @@ def test_progressive_576p_show_is_eligible_for_builtin_gpu_preset(streaming):
     assert result.eligible, result.reasons
     assert preset.video_bitrate_for('576p') == 1_500_000
     assert result.estimate_basis == 'planning_range'
-    assert result.estimated_output_size_low < result.estimated_output_size_high
+    low, high = result.estimated_output_size_low, result.estimated_output_size_high
+    assert low is not None and high is not None and low < high
 
 
 

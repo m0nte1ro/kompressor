@@ -1,4 +1,4 @@
-import {$, $$, duration, escapeHTML as esc, label, size} from './common.js';
+import {$, duration, escapeHTML as esc, label, size} from './common.js';
 
 function planningSaving(job) {
   return job.planning_saving ?? job.estimated_saving ?? 0;
