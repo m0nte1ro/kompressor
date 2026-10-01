@@ -1,6 +1,8 @@
+import json
 import re
 import pytest
 
+from app.config import PROJECT_ROOT
 from app.routers.web import size
 
 
@@ -165,3 +167,15 @@ def test_app_script_uses_multi_season_selector(client):
     script = client.get("/static/app.js").text
     assert "$$('.season-select', library).forEach" in script
     assert not re.search(r"(?<!\$)\$\('\.season-select', library\)\.forEach", script)
+
+
+def test_every_module_gets_a_content_versioned_url(client):
+    page = client.get("/movies").text
+    imports = json.loads(re.search(r'<script type="importmap">(.*?)</script>', page, re.S).group(1))["imports"]
+    static = PROJECT_ROOT / "app" / "static"
+    for script in static.glob("*.js"):
+        assert re.fullmatch(rf"/static/{script.name}\?v=[0-9a-f]{{12}}", imports[f"/static/{script.name}"])
+        # Version suffixes in imports would bypass the import map and split the module graph.
+        assert not re.search(r"from '[^']+\?v=|import '[^']+\?v=", script.read_text())
+    response = client.get("/static/common.js")
+    assert response.headers["cache-control"] == "no-cache"

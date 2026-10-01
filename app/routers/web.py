@@ -1,3 +1,5 @@
+from hashlib import sha256
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -8,6 +10,29 @@ from app.dependencies import Processor
 
 router = APIRouter(include_in_schema=False)
 templates = Jinja2Templates(directory=PROJECT_ROOT / "app" / "templates")
+STATIC_ROOT = PROJECT_ROOT / "app" / "static"
+_asset_digests: dict[str, tuple[tuple[int, int], str]] = {}
+
+
+def asset_version(name: str) -> str:
+    """Content hash of a static file, so a changed asset always gets a new URL."""
+    info = (STATIC_ROOT / name).stat()
+    key = (info.st_mtime_ns, info.st_size)
+    cached = _asset_digests.get(name)
+    if cached is None or cached[0] != key:
+        cached = (key, sha256((STATIC_ROOT / name).read_bytes()).hexdigest()[:12])
+        _asset_digests[name] = cached
+    return cached[1]
+
+
+def import_map(request: Request) -> dict:
+    # Modules import each other by bare relative paths; the import map gives
+    # every one of them a content-versioned URL. No manual cache bumps needed.
+    imports = {}
+    for script in sorted(STATIC_ROOT.glob("*.js")):
+        path = request.url_for("static", path=script.name).path
+        imports[path] = f"{path}?v={asset_version(script.name)}"
+    return {"imports": imports}
 
 
 def size(value: int | None) -> str:
@@ -35,6 +60,7 @@ def label(value: str | None) -> str:
 
 
 templates.env.filters.update(size=size, bitrate=bitrate, label=label)
+templates.env.globals.update(asset_version=asset_version, import_map=import_map)
 
 
 def media_backend(processor) -> str:

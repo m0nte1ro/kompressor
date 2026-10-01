@@ -1,10 +1,10 @@
-import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js?v=19';
-import './presets.js?v=19';
-import './settings.js?v=19';
-import './discovery.js?v=19';
-import {setupTags} from './tags.js?v=19';
-import {compressionModal} from './compression.js?v=19';
-import {renderAnalysis, renderHistory, renderQueue} from './queue.js?v=19';
+import {$, $$, api, escapeHTML as esc, mapLimit, notify, pendingJobs} from './common.js';
+import './presets.js';
+import './settings.js';
+import './discovery.js';
+import {setupTags} from './tags.js';
+import {compressionModal} from './compression.js';
+import {renderAnalysis, renderHistory, renderQueue} from './queue.js';
 
 let queue = {lanes: [], history: [], pending_count: 0};
 

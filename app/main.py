@@ -22,6 +22,16 @@ from app.services.queue import QueueService
 from app.workers.real import RealEncoderWorker
 
 
+class RevalidatedStaticFiles(StaticFiles):
+    """Static assets must be revalidated (cheap 304s via ETag) instead of
+    being cached heuristically, which previously served stale modules."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 async def run_fake_workers(service: QueueService) -> None:
     previous = monotonic()
     while True:
@@ -65,7 +75,7 @@ def create_app(database_path: Path | None = None, *, media: MediaRepository | No
 
     application = FastAPI(title=configuration.app_name, version="0.2.0", lifespan=lifespan)
     register_error_handlers(application)
-    application.mount("/static", StaticFiles(directory=PROJECT_ROOT / "app" / "static"), name="static")
+    application.mount("/static", RevalidatedStaticFiles(directory=PROJECT_ROOT / "app" / "static"), name="static")
     for router in (api_router, preferences_router, queue_router, web_router):
         application.include_router(router)
     return application
