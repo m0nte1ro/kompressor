@@ -80,13 +80,13 @@ def test_replace_swaps_in_verified_output_with_source_owner_and_mode(tmp_path, m
     assert not workspace_outputs(workspace)
 
 
-def test_replace_does_not_attempt_to_chown(
+def test_replace_skips_chown_when_owner_already_matches(
         tmp_path, monkeypatch, probe_facts):
     application, source, workspace, _ = build_real_app(
         tmp_path, monkeypatch, probe_facts, hevc_output(probe_facts), output_size=1_000_000)
 
     def forbidden(*args, **kwargs):
-        raise AssertionError("replacement must not call chown")
+        raise AssertionError("chown is only needed when the owner differs")
 
     monkeypatch.setattr(replacement.os, "chown", forbidden)
     with TestClient(application):
@@ -97,6 +97,28 @@ def test_replace_does_not_attempt_to_chown(
     assert source.stat().st_size == 1_000_000
     assert not any("owner/group" in reason for reason in saved["reasons"])
     assert not workspace_outputs(workspace)
+
+
+def test_owner_is_restored_after_validation_and_a_refused_chown_is_only_noted(tmp_path, monkeypatch):
+    target = tmp_path / "Film.mkv"
+    target.write_bytes(b"replacement")
+    info = target.lstat()
+    original = os.stat_result((*info[:4], info.st_uid + 1, info.st_gid + 1, *info[6:]))
+    calls = []
+
+    def chown(path, uid, gid, **kwargs):
+        calls.append((Path(path), uid, gid))
+
+    monkeypatch.setattr(replacement.os, "chown", chown)
+    assert replacement._preserve_owner(target, original) == []
+    assert calls == [(target, info.st_uid + 1, info.st_gid + 1)]
+
+    def refused(*args, **kwargs):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(replacement.os, "chown", refused)
+    notes = replacement._preserve_owner(target, original)
+    assert len(notes) == 1 and "owner/group could not be preserved" in notes[0]
 
 
 def test_replace_rolls_back_when_the_file_at_the_source_path_fails_validation(

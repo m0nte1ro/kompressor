@@ -9,6 +9,7 @@ from app.models.media import Episode, Movie
 from app.models.queue import QueueJob
 from app.services.encoding_capability import CPUEncodeCapability, GPUEncodeCapability, MediaItem
 from app.services.analysis import AnalysisTarget
+from app.services.content_sample import sample_digest
 from app.services.errors import Conflict
 from app.services.source_guard import SourceGuard
 from app.services.filesystem_source import FilesystemObservationSource
@@ -246,6 +247,9 @@ class RealEncoderWorker:
             self._replace_with_kept_output(job, reference, item, capability, source_path)
             return
 
+        # Also kept for later History replacements, which may happen days later.
+        job.source_sample = sample_digest(source_path)
+        queue.record_source_sample(job.id, job.source_sample)
         output = self.encoder.encode(
             job, source_path, item.probe,
             lambda percent, elapsed: queue.update_real_progress(job.id, percent, elapsed),
@@ -302,7 +306,18 @@ class RealEncoderWorker:
             queue.record_validation_errors(job.id, errors)
             raise Conflict("Kept output failed validation: " + "; ".join(errors))
         self.guard.before_processing(reference)
+        self._check_source_sample(job, source_path)
         self._replace_source(job, reference, item, capability, source_path, output, output.stat().st_size)
+
+    @staticmethod
+    def _check_source_sample(job: QueueJob, source_path: Path) -> None:
+        """Size, mtime and inode can survive an in-place edit; sampled content cannot.
+
+        Outputs encoded before samples were recorded have nothing to compare and
+        keep relying on the stat checks alone.
+        """
+        if job.source_sample is not None and sample_digest(source_path) != job.source_sample:
+            raise Conflict("The source content changed since it was encoded. It was left unchanged; encode it again.")
 
     def analysis_target(self, job: QueueJob, item: MediaItem) -> AnalysisTarget:
         """Read-only pair for comparisons: only while the source is still the encoded revision."""
@@ -363,7 +378,8 @@ class RealEncoderWorker:
 
         notes = self.replacer.replace(
             journal, output_path,
-            before_swap=lambda: self.guard.before_replacement(reference),
+            before_swap=lambda: (self.guard.before_replacement(reference),
+                                 self._check_source_sample(job, source_path)),
             verify=verify, save=lambda state: queue.update_replacement(job.id, state),
             should_abort=self._stop.is_set)
         if not queue.complete_real_job(job.id, str(source_path), size, source_replaced=True, notes=notes):

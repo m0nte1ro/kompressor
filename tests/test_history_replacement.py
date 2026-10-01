@@ -135,3 +135,24 @@ def test_seed_mode_refuses_history_replacement(client):
     added = client.post("/api/queue", json={"scope": "movie", "preset_id": "movie-streaming-quality",
                                            "media_ids": ["movie-king-of-comedy"]}).json()["added"][0]
     assert client.post(f"/api/queue/{added['id']}/replace-source").status_code == 422
+
+
+def test_history_replace_refuses_a_source_edited_in_place_with_size_and_mtime_restored(
+        tmp_path, monkeypatch, probe_facts):
+    application, source, _ = kept(tmp_path, monkeypatch, probe_facts, output_size=1_000_000)
+    with TestClient(application):
+        processor = application.state.media_processor
+        original = run_one(processor, replace_source=False)
+        assert processor.queue._find(original["id"]).source_sample
+        before = source.stat()
+        # e.g. a tag editor writing into header padding, then `touch -r`.
+        with source.open("r+b") as handle:
+            handle.write(b"edited tags")
+        os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+        assert (source.stat().st_size, source.stat().st_mtime_ns) == (before.st_size, before.st_mtime_ns)
+        replacement = processor.replace_with_kept_output(original["id"])
+        done = execute(processor, replacement["id"])
+        assert done.status == "failed" and not done.source_replaced
+        assert "content changed" in done.error_message
+        assert source.read_bytes()[:11] == b"edited tags" and source.stat().st_size == before.st_size
+        assert Path(original["output_path"]).is_file()

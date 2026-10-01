@@ -65,6 +65,9 @@ class QueueJob(BaseModel):
     source_file_id: str | None = None
     source_revision_id: str | None = None
     source_reference: SourceReference | None = None
+    # Sampled content digest taken when encoding started; the source must still
+    # match it before a replacement swap (see services/content_sample.py).
+    source_sample: str | None = None
     replace_source: bool = False
     replacement: ReplacementJournal | None = None
     source_replaced: bool = False
