@@ -78,7 +78,7 @@ function selectionChanged() {
   $('#select-all').indeterminate = checked > 0 && checked < visible.length;
 
   $$('.season-select', library).forEach(control => {
-    const seasonRows = rows.filter(row => row.dataset.season === control.dataset.season);
+    const seasonRows = visible.filter(row => row.dataset.season === control.dataset.season);
     const seasonChecked = seasonRows.filter(row => $('.media-select', row).checked).length;
     control.checked = seasonRows.length > 0 && seasonChecked === seasonRows.length;
     control.indeterminate = seasonChecked > 0 && seasonChecked < seasonRows.length;
@@ -176,7 +176,8 @@ if (library) {
   });
   library.addEventListener('change', event => {
     if (event.target.matches('.season-select')) {
-      rows.filter(row => row.dataset.season === event.target.dataset.season)
+      // Like select-all, only the episodes the current search/filter shows.
+      rows.filter(row => !row.hidden && row.dataset.season === event.target.dataset.season)
         .forEach(row => { $('.media-select', row).checked = event.target.checked; });
       selectionChanged();
     } else if (event.target.matches('.media-select')) {
