@@ -1,8 +1,10 @@
 """Standalone real encoder worker with one owned backend lane per process."""
 import logging
+import time
+from collections.abc import Callable
 from pathlib import Path
 from threading import Event, Lock, Thread
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, TypeVar
 
 from app.models.inventory import SourceReference
 from app.models.media import Episode, Movie
@@ -13,7 +15,7 @@ from app.services.errors import Conflict
 from app.services.source_guard import SourceGuard
 from app.services.filesystem_source import FilesystemObservationSource
 from app.workers.ffmpeg import EncodingCancelled, FFmpegEncoder, FFmpegError
-from app.workers.replacement import SourceReplacer, replacement_reasons
+from app.workers.replacement import ReplacementError, SourceReplacer, replacement_reasons
 
 if TYPE_CHECKING:
     from app.services.queue import QueueService
@@ -22,6 +24,8 @@ if TYPE_CHECKING:
 
 
 Backend = Literal["cpu", "qsv"]
+T = TypeVar("T")
+PERSIST_ATTEMPTS = 5
 
 
 def _primary_video(item: MediaItem):
@@ -192,10 +196,11 @@ class RealEncoderWorker:
                 self._execute(job)
             except EncodingCancelled:
                 if not self._stop.is_set() and queue:
-                    queue.cancelled_real_job(job.id)
+                    self._persist("record the stop", lambda: queue.cancelled_real_job(job.id))
             except Exception as error:
                 if queue:
-                    queue.fail_real_job(job.id, str(error), getattr(error, "exit_code", None))
+                    self._persist("record the failure", lambda: queue.fail_real_job(
+                        job.id, str(error), getattr(error, "exit_code", None)))
                 self.encoder.cleanup(job.id, remove_final=True)
             finally:
                 self.encoder.cleanup(job.id)
@@ -203,6 +208,24 @@ class RealEncoderWorker:
                     self._active.discard(job.id)
                     self._cancelled.discard(job.id)
                 self._wake.set()
+
+    @staticmethod
+    def _persist(what: str, action: Callable[[], T]) -> T | None:
+        """Retry a job-state write (e.g. SQLite briefly locked by the web process).
+
+        Never raises: an escaped error here would end the lane thread and leave
+        the job active until a restart, which then recovers it.
+        """
+        for attempt in range(1, PERSIST_ATTEMPTS + 1):
+            try:
+                return action()
+            except Exception:
+                if attempt == PERSIST_ATTEMPTS:
+                    log.exception("Could not %s after %d attempts; restart recovery will resolve the job.",
+                                  what, attempt)
+                    return None
+                time.sleep(attempt)
+        return None
 
     def _execute(self, job: QueueJob) -> None:
         queue = self.queue
@@ -361,12 +384,24 @@ class RealEncoderWorker:
         def verify(path: Path) -> list[str]:
             return capability.validate_output(item, job, self.probe.inspect(path), path)
 
-        notes = self.replacer.replace(
-            journal, output_path,
-            before_swap=lambda: self.guard.before_replacement(reference),
-            verify=verify, save=lambda state: queue.update_replacement(job.id, state),
-            should_abort=self._stop.is_set)
-        if not queue.complete_real_job(job.id, str(source_path), size, source_replaced=True, notes=notes):
+        try:
+            notes = self.replacer.replace(
+                journal, output_path,
+                before_swap=lambda: self.guard.before_replacement(reference),
+                verify=verify, save=lambda state: queue.update_replacement(job.id, state),
+                should_abort=self._stop.is_set)
+        except ReplacementError:
+            if self._stop.is_set():
+                # The original is untouched or restored. Leave the job "replacing"
+                # so restart recovery keeps the validated output (see QueueService).
+                raise EncodingCancelled("Worker stopped during source replacement.")
+            raise
+        # The source is replaced now; failing the job would misreport it.
+        completed = self._persist("record the completed replacement", lambda: queue.complete_real_job(
+            job.id, str(source_path), size, source_replaced=True, notes=notes))
+        if completed is None:
+            return
+        if not completed:
             raise RuntimeError("The source was replaced, but completion could not be recorded.")
         if reused:
             assert job.replaces_job_id is not None

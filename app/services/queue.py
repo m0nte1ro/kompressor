@@ -1,4 +1,5 @@
 """Dual-lane scheduler. Policy decisions remain in the existing PolicyEngine."""
+from pathlib import Path
 from datetime import datetime, timezone
 from threading import RLock
 from typing import Literal
@@ -374,6 +375,7 @@ class QueueService:
         resolve = getattr(self.worker, "recover_replacement", None)
         if resolve is None:
             return
+        keep_outputs: set[str] = set()
         for job in self.repository.get_all():
             if job.status != "replacing" or (backends is not None and job.backend not in backends):
                 continue
@@ -394,6 +396,17 @@ class QueueService:
                     current.measured_saving = (current.source_size - current.output_size
                                                if current.output_size is not None else None)
                     current.reasons = [*current.reasons, "Completed after a worker restart. " + detail]
+                elif outcome != "manual" and self._keepable_output(current):
+                    # A stop during the copy must not throw away a validated encode:
+                    # keep it as a keep-original result that History can swap in.
+                    assert current.output_path is not None
+                    current.status = "completed"
+                    current.replace_source = False
+                    current.output_size = Path(current.output_path).stat().st_size
+                    current.measured_saving = current.source_size - current.output_size
+                    current.reasons = [*current.reasons, "Worker stopped during source replacement. " + detail
+                                       + " The validated output was kept; use Replace source in History."]
+                    keep_outputs.add(current.id)
                 else:
                     current.status = "failed"
                     current.output_path = None
@@ -407,10 +420,16 @@ class QueueService:
                 if discard:
                     discard(job)
                 self.mark_output_used(job.replaces_job_id, job.id)
-            if outcome != "manual":
+            if outcome != "manual" and job.id not in keep_outputs:
                 cleanup = getattr(self.worker, "cleanup_interrupted", None)
                 if cleanup:
                     cleanup(job.id)
+
+    @staticmethod
+    def _keepable_output(job: QueueJob) -> bool:
+        # History replacements reuse another job's kept output, which stays with that job.
+        return (job.reuse_output_path is None and job.output_path is not None
+                and Path(job.output_path).is_file())
 
     def recover(self, backends: set[str] | frozenset[str] | None = None) -> None:
         """Recover only lanes owned by this process; seed recovery still covers all lanes."""

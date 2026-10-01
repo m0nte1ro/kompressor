@@ -258,6 +258,53 @@ def test_worker_restart_completes_a_verified_swap_and_restores_an_unverified_one
         assert source.read_bytes() == b"new" and sorted(source.parent.iterdir()) == [source]
 
 
+
+def test_restart_after_a_stop_before_the_swap_keeps_the_validated_output(
+        tmp_path, monkeypatch, probe_facts):
+    application, source, workspace, _ = build_real_app(tmp_path, monkeypatch, probe_facts, hevc_output(probe_facts))
+    with TestClient(application):
+        processor = application.state.media_processor
+        processor.scan_library()
+        movie = processor.get_library().movies[0]
+        processor.queue_encode(EnqueueRequest(media_ids=[movie.id], scope="movie",
+                                              preset_id="movie-streaming-quality", replace_source=True))
+        job = processor.queue.claim_next("cpu")
+        output = workspace / "jobs" / job.id / "Fixture.kompressor.mkv"
+        output.parent.mkdir(parents=True)
+        output.write_bytes(b"validated encode")
+        assert processor.queue.set_real_validating(job.id, str(output))
+        # Stopped while copying: the original was never touched.
+        assert processor.queue.set_real_replacing(job.id, SourceReplacer().plan(job.id, source, 16))
+        before = source.stat()
+
+        processor.queue.recover(backends={"cpu"})
+        saved = processor.queue._find(job.id)
+        assert saved.status == "completed" and not saved.source_replaced and not saved.replace_source
+        assert saved.output_path == str(output) and output.read_bytes() == b"validated encode"
+        assert "use Replace source in History" in saved.reasons[-1]
+        assert source.stat().st_ino == before.st_ino and source.stat().st_size == before.st_size
+        # And it can be swapped in from History like any kept output.
+        assert processor.replace_with_kept_output(job.id)["replaces_job_id"] == job.id
+
+
+def test_lane_survives_a_briefly_locked_database_when_recording_a_failure(monkeypatch):
+    from app.workers import real
+    monkeypatch.setattr(real.time, "sleep", lambda seconds: None)
+    attempts = []
+
+    def flaky():
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise RuntimeError("database is locked")
+        return True
+
+    assert real.RealEncoderWorker._persist("record", flaky) is True and len(attempts) == 3
+
+    def broken():
+        raise RuntimeError("database is locked")
+
+    assert real.RealEncoderWorker._persist("record", broken) is None
+
 # --- SourceReplacer: failure paths and crash recovery on real files ----------------------
 
 
