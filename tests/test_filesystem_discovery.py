@@ -203,7 +203,7 @@ def test_rescan_reprobes_replaced_file_and_updates_codec_in_ui(config, probe):
 
         path = Path(old['path'])
         path.write_bytes(b'encoded replacement with a different inode size and codec')
-        hevc = probe.return_value.model_copy(deep=True)
+        hevc = probe.side_effect(path)
         hevc.streams = [
             stream.model_copy(update={'codec': 'hevc'}) if stream.kind == 'video' else stream
             for stream in hevc.streams

@@ -1,3 +1,4 @@
+import re
 import pytest
 
 from app.routers.web import size
@@ -163,4 +164,4 @@ def test_discovery_script_uses_multi_button_selector_and_declares_manual_scan_st
 def test_app_script_uses_multi_season_selector(client):
     script = client.get("/static/app.js").text
     assert "$$('.season-select', library).forEach" in script
-    assert "$('.season-select', library).forEach" not in script
+    assert not re.search(r"(?<!\$)\$\('\.season-select', library\)\.forEach", script)

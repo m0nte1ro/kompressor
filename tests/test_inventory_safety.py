@@ -48,7 +48,6 @@ def test_both_boundaries_require_fresh_revision_and_hardlinks(scenario, boundary
 
 
 @pytest.mark.parametrize('boundary', ['before_processing', 'before_replacement'])
-@pytest.mark.parametrize('boundary', ['before_processing', 'before_replacement'])
 def test_ctime_only_change_is_allowed(scenario, boundary):
     snapshot, service, source, guard, reference = scenario
     # Permission/ownership/ACL maintenance changes ctime without changing content.
@@ -67,6 +66,7 @@ def test_ctime_only_reconcile_keeps_captured_reference_valid(scenario, boundary)
     getattr(guard, boundary)(reference)
 
 
+@pytest.mark.parametrize('boundary', ['before_processing', 'before_replacement'])
 def test_changed_persisted_revision_invalidates_captured_reference(scenario, boundary):
     snapshot, service, source, guard, reference = scenario
     changed = replace_observation(snapshot, size=1)
