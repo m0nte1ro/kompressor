@@ -107,29 +107,28 @@ def test_size_uses_binary_units():
     assert size(81_093_483_589) == "75.5 GiB"
 
 
-def test_blocked_media_still_shows_saving_estimate(client):
+def test_blocked_media_saves_nothing(client):
     html = client.get("/movies").text
-    start = html.index('data-id="movie-hardlinked-example"')
-    row = html[start:html.index("</tr>", start)]
-    assert "Blocked" in row
-    assert "Planning range" in row
-    assert "Estimate unavailable" not in row
+    for media_id in ("movie-hardlinked-example", "movie-dune-part-two"):
+        start = html.index(f'data-id="{media_id}"')
+        row = html[start:html.index("</tr>", start)]
+        assert "Blocked" in row and 'data-sort-saving="0"' in row
+        assert '<td class="saving numeric"><span class="muted">0.0 GiB</span><small>Blocked</small></td>' in row
 
 
-def test_preserve_av_row_does_not_show_saving_estimate(client):
+def test_eligible_rows_show_one_planning_estimate_not_a_range(client):
     html = client.get("/movies").text
-    start = html.index('data-id="movie-dune-part-two"')
-    row = html[start:html.index("</tr>", start)]
-    assert "Preserve A/V" in row
-    assert "Estimate unavailable" in row
-    assert "Planning range" not in row
+    cells = re.findall(r'<td class="saving numeric">(.*?)</td>', html)
+    eligible = [cell for cell in cells if "Blocked" not in cell]
+    assert eligible and all(cell.startswith("~") and "–" not in cell for cell in eligible)
 
 
-def test_summary_includes_blocked_media_estimates(client):
+def test_summary_counts_only_eligible_media(client, catalog):
     html = client.get("/movies").text
-    assert "Estimated saving" in html
-    assert "Planning midpoint · not measured" in html
-    assert "~" in html
+    expected = sum((row["eligibility"].planning_saving or row["eligibility"].estimated_saving or 0)
+                   for row in catalog.previews("movie") if row["eligibility"].eligible)
+    assert "Eligible items · planning midpoint · not measured" in html
+    assert f"~{size(expected)}" in html
 
 
 def test_rescan_button_is_available_on_filesystem_library_pages(client, monkeypatch):
