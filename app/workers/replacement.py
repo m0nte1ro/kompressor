@@ -19,11 +19,14 @@ from collections.abc import Callable
 from hashlib import sha256
 from pathlib import Path
 from typing import Literal
+import logging
 import os
 import shutil
 import stat
 
 from app.models.queue import ReplacementJournal
+
+log = logging.getLogger(__name__)
 
 CHUNK_SIZE = 8 * 1024 * 1024
 # Keep headroom on the media filesystem beyond the copy itself.
@@ -80,21 +83,22 @@ def _fsync_directory(directory: Path) -> None:
         os.close(descriptor)
 
 
-def _preserve_owner(target: Path, source: os.stat_result) -> list[str]:
+def _preserve_owner(target: Path, source: os.stat_result) -> None:
     """Best effort: give the replacement the original's owner/group.
 
-    On unprivileged LXC bind mounts Kompressor may create, rename and delete
-    files via ACLs while chown is forbidden; that is reported, never fatal.
+    On unprivileged LXC bind mounts and FUSE pools such as mergerfs, Kompressor
+    may create, rename and delete files via ACLs while chown is forbidden. Access
+    then follows the folder's permissions/ACLs, so a refusal is only logged for
+    diagnosis, never shown on the job.
     """
     current = target.lstat()
     if (current.st_uid, current.st_gid) == (source.st_uid, source.st_gid):
-        return []
+        return
     try:
         os.chown(target, source.st_uid, source.st_gid, follow_symlinks=False)
     except OSError as error:
-        return [f"Source replaced, but its owner/group could not be preserved: it is now "
-                f"{current.st_uid}:{current.st_gid} instead of {source.st_uid}:{source.st_gid} ({error.strerror})."]
-    return []
+        log.warning("Replaced %s, but its owner/group could not be preserved: it is now %d:%d instead of %d:%d (%s).",
+                    target, current.st_uid, current.st_gid, source.st_uid, source.st_gid, error.strerror)
 
 
 class SourceReplacer:
@@ -202,7 +206,8 @@ class SourceReplacer:
         save(journal)
 
         # 4. The replacement is verified; the backup can go.
-        notes = _preserve_owner(target, source)
+        _preserve_owner(target, source)
+        notes: list[str] = []
         if _identity(backup) == (journal.source_device, journal.source_inode):
             try:
                 backup.unlink()
