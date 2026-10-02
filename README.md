@@ -60,7 +60,9 @@ directory outside those roots, and a separate writable workspace with a `jobs/`
 subdirectory. Settings reports whether the binaries, libx265 and workspace are
 usable at startup. Source replacement additionally needs the media mount to be
 read-write for the worker user; on a read-only mount replace jobs are excluded with
-a reason and keep-original jobs still work.
+a reason and keep-original jobs still work. Replaced files belong to the worker's
+user (Kompressor restores the original owner only where chown is permitted), so the
+folder's permissions or ACLs must give your media apps access.
 
 ```sh
 export KOMPRESSOR_MEDIA_BACKEND=filesystem

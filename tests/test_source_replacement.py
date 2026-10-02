@@ -99,7 +99,7 @@ def test_replace_skips_chown_when_owner_already_matches(
     assert not workspace_outputs(workspace)
 
 
-def test_owner_is_restored_after_validation_and_a_refused_chown_is_only_noted(tmp_path, monkeypatch):
+def test_owner_is_restored_after_validation_and_a_refused_chown_is_only_logged(tmp_path, monkeypatch, caplog):
     target = tmp_path / "Film.mkv"
     target.write_bytes(b"replacement")
     info = target.lstat()
@@ -110,15 +110,16 @@ def test_owner_is_restored_after_validation_and_a_refused_chown_is_only_noted(tm
         calls.append((Path(path), uid, gid))
 
     monkeypatch.setattr(replacement.os, "chown", chown)
-    assert replacement._preserve_owner(target, original) == []
+    replacement._preserve_owner(target, original)
     assert calls == [(target, info.st_uid + 1, info.st_gid + 1)]
 
     def refused(*args, **kwargs):
         raise PermissionError(1, "Operation not permitted")
 
     monkeypatch.setattr(replacement.os, "chown", refused)
-    notes = replacement._preserve_owner(target, original)
-    assert len(notes) == 1 and "owner/group could not be preserved" in notes[0]
+    with caplog.at_level("WARNING", logger=replacement.__name__):
+        replacement._preserve_owner(target, original)
+    assert "owner/group could not be preserved" in caplog.text and str(target) in caplog.text
 
 
 def test_replace_rolls_back_when_the_file_at_the_source_path_fails_validation(

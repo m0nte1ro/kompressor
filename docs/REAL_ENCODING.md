@@ -121,8 +121,9 @@ A replace job (the WebUI default) runs the full encode and validation above, the
    (same inode and size) and pass the same ffprobe output validation. On failure the
    copy is removed and the backup renamed back: the original is restored.
 5. **Cleanup.** Only after that is the replacement given the source's owner and
-   group (best effort: where chown is not permitted, e.g. unprivileged LXC, the job
-   notes the new owner instead of failing), the backup deleted and the workspace
+   group (best effort: where chown is not permitted, e.g. unprivileged LXC or a
+   mergerfs pool, the worker log records the new owner and the job is not marked;
+   access then follows the folder's permissions/ACLs), the backup deleted and the workspace
    output removed. History shows the job as completed with `Source replaced` and the
    measured saving.
 
