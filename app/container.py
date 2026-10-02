@@ -40,7 +40,7 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
                           media: MediaRepository | None = None,
                           initial_presets: list[CompressionPreset] | None = None,
                           process_role: Literal["web", "worker"] = "web",
-                          worker_backend: Literal["cpu", "qsv"] = "cpu") -> MediaProcessor:
+                          worker_backend: Literal["cpu", "gpu"] = "cpu") -> MediaProcessor:
     db_path = database_path if database_path is not None else config.database_path
     defaults = LibraryPaths(movies_path=str(config.movies_root) if config.movies_root else "",
                             shows_path=str(config.shows_root) if config.shows_root else "")
@@ -57,10 +57,10 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
         def roots() -> dict[str, Path]:
             return configured_roots(preferences.get_library_paths(), db_path)
         roots()
-        runtime_backends = frozenset({"cpu", "qsv"}) if process_role == "web" else frozenset({worker_backend})
+        runtime_backends = frozenset({"cpu", "gpu"}) if process_role == "web" else frozenset({worker_backend})
         runtime = capability_status(
             config.ffmpeg_binary, config.ffprobe_binary, config.workspace_root,
-            roots(), config.qsv_device, runtime_backends)
+            roots(), config.gpu_device, runtime_backends)
         ffprobe = FFprobeService(config.ffprobe_binary, config.ffprobe_timeout)
         source = FilesystemObservationSource(inventory_repository, roots)
         supported = frozenset(runtime.get("supported_backends") or (["cpu"] if runtime.get("available") else []))
@@ -73,10 +73,10 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
             backend=owned_backend,
             supported_backends=supported,
             unavailable_reason=unavailable_reason,
-            encoder=FFmpegEncoder(config.ffmpeg_binary, config.workspace_root, qsv_device=config.qsv_device),
+            encoder=FFmpegEncoder(config.ffmpeg_binary, config.workspace_root, gpu_device=config.gpu_device),
             source=source,
             guard=SourceGuard(inventory_repository, source),
-            capabilities={"cpu": CPUEncodeCapability(), "qsv": GPUEncodeCapability()},
+            capabilities={"cpu": CPUEncodeCapability(), "gpu": GPUEncodeCapability()},
             probe=ffprobe,
         )
         media_repository = FilesystemMediaRepository(
@@ -109,11 +109,11 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
     else:
         diagnostics = {"ffmpeg_binary": config.ffmpeg_binary, "ffprobe_binary": config.ffprobe_binary,
                        "ffmpeg_available": None, "ffprobe_available": None, "libx265_available": None,
-                       "hevc_vaapi_available": None, "qsv_device": str(config.qsv_device),
-                       "qsv_available": False, "cpu_available": False,
+                       "hevc_vaapi_available": None, "gpu_device": str(config.gpu_device),
+                       "gpu_available": False, "cpu_available": False,
                        "workspace_root": str(config.workspace_root), "encoding_enabled": False,
                        "encoder_mode": "seed fake simulation" if discovery is None else "disabled",
-                       "supported_backends": ["cpu", "qsv"] if discovery is None else [],
+                       "supported_backends": ["cpu", "gpu"] if discovery is None else [],
                        "workspace_writable": bool(runtime and runtime["workspace_writable"]),
                        "unavailable_reason": runtime["unavailable_reason"] if runtime else None}
     # The web process must never reinterpret an active real job as interrupted:

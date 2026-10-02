@@ -36,7 +36,7 @@ def movie_preset() -> CompressionPreset:
     return next(preset for preset in presets if preset.id == "movie-streaming-quality")
 
 
-def qsv_preset(efficient_audio: bool = False) -> CompressionPreset:
+def gpu_preset(efficient_audio: bool = False) -> CompressionPreset:
     presets = SeedPresetRepository(PROJECT_ROOT / "fixtures/presets.json").get_all()
     preset_id = "show-streaming-efficient-audio" if efficient_audio else "show-streaming-quality"
     return next(preset for preset in presets if preset.id == preset_id)
@@ -83,11 +83,11 @@ def test_runtime_capability_checks_ffmpeg_ffprobe_workspace_and_x265(tmp_path, m
     monkeypatch.setattr(encoding_runtime.FFmpegEncoder, "vaapi_runtime_check", lambda binary, device, ffprobe, workspace: (True, None))
     status = encoding_runtime.capability_status("ffmpeg", "ffprobe", workspace, {"movie": movie_root})
     assert status["available"] and status["ffprobe_available"] and status["libx265_available"]
-    assert status["hevc_vaapi_available"] and status["supported_backends"] == ["cpu", "qsv"]
+    assert status["hevc_vaapi_available"] and status["supported_backends"] == ["cpu", "gpu"]
     assert status["workspace_writable"]
 
 
-def test_cpu_worker_runtime_probe_does_not_touch_qsv_device(tmp_path, monkeypatch):
+def test_cpu_worker_runtime_probe_does_not_touch_gpu_device(tmp_path, monkeypatch):
     from app.services import encoding_runtime
     workspace = tmp_path / "workspace"
     (workspace / "jobs").mkdir(parents=True)
@@ -97,10 +97,10 @@ def test_cpu_worker_runtime_probe_does_not_touch_qsv_device(tmp_path, monkeypatc
     monkeypatch.setattr(encoding_runtime.FFprobeService, "runtime_check", lambda binary: (True, None))
     monkeypatch.setattr(encoding_runtime.FFmpegEncoder, "runtime_check", lambda binary: (True, None))
 
-    def unexpected_qsv(*args):
+    def unexpected_gpu(*args):
         raise AssertionError("CPU worker must not probe GPU hardware")
 
-    monkeypatch.setattr(encoding_runtime.FFmpegEncoder, "vaapi_runtime_check", unexpected_qsv)
+    monkeypatch.setattr(encoding_runtime.FFmpegEncoder, "vaapi_runtime_check", unexpected_gpu)
     status = encoding_runtime.capability_status(
         "ffmpeg", "ffprobe", workspace, {"movie": movie_root},
         Path("/dev/dri/renderD128"), frozenset({"cpu"}),
@@ -175,14 +175,14 @@ def test_command_maps_streams_and_applies_only_supported_crf_settings(probe_fact
     assert command[-1] == str(partial)
 
 
-def test_qsv_command_uses_render_device_qvbr_and_10bit_output(probe_facts, tmp_path):
-    preset = qsv_preset()
-    job = queue_job(preset=preset, backend="qsv", scope="show")
+def test_gpu_command_uses_render_device_qvbr_and_10bit_output(probe_facts, tmp_path):
+    preset = gpu_preset()
+    job = queue_job(preset=preset, backend="gpu", scope="show")
     partial = tmp_path / "Fixture.kompressor.partial.mkv"
     device = Path("/dev/dri/renderD128")
     command = FFmpegEncoder.build_command(
         "/usr/bin/ffmpeg", job, Path("/read-only/Episode.mkv"), partial, probe_facts,
-        qsv_device=device,
+        gpu_device=device,
     )
     assert command[command.index("-init_hw_device") + 1] == f"vaapi=va:{device}"
     assert command[command.index("-c:v:0") + 1] == "hevc_vaapi"
@@ -200,14 +200,14 @@ def test_qsv_command_uses_render_device_qvbr_and_10bit_output(probe_facts, tmp_p
     assert command[-1] == str(partial)
 
 
-def test_qsv_efficient_audio_converts_only_tracks_that_need_it(probe_facts, tmp_path):
-    preset = qsv_preset(efficient_audio=True)
-    job = queue_job(preset=preset, backend="qsv", scope="show", preserve_audio=False,
+def test_gpu_efficient_audio_converts_only_tracks_that_need_it(probe_facts, tmp_path):
+    preset = gpu_preset(efficient_audio=True)
+    job = queue_job(preset=preset, backend="gpu", scope="show", preserve_audio=False,
                     requested_preserve_audio=False)
     partial = tmp_path / "Fixture.kompressor.partial.mkv"
     command = FFmpegEncoder.build_command(
         "/usr/bin/ffmpeg", job, Path("/read-only/Episode.mkv"), partial, probe_facts,
-        qsv_device=Path("/dev/dri/renderD128"),
+        gpu_device=Path("/dev/dri/renderD128"),
     )
     assert command[command.index("-c:a:0") + 1] == "eac3"
     assert command[command.index("-b:a:0") + 1] == str(preset.target_audio_bitrate)
@@ -234,11 +234,11 @@ def with_statistics(probe):
         if stream.kind in {"video", "audio"} else stream for stream in probe.streams]})
 
 
-@pytest.mark.parametrize("backend", ["cpu", "qsv"])
+@pytest.mark.parametrize("backend", ["cpu", "gpu"])
 def test_reencoded_video_drops_stale_mkvmerge_statistics(probe_facts, tmp_path, backend):
-    job = queue_job(qsv_preset(), backend="qsv") if backend == "qsv" else queue_job()
+    job = queue_job(gpu_preset(), backend="gpu") if backend == "gpu" else queue_job()
     command = FFmpegEncoder.build_command("/usr/bin/ffmpeg", job, Path("/read-only/Film.mkv"),
-        tmp_path / "out.mkv", with_statistics(probe_facts), qsv_device=Path("/dev/dri/renderD128"))
+        tmp_path / "out.mkv", with_statistics(probe_facts), gpu_device=Path("/dev/dri/renderD128"))
     assert metadata_args(command, "v:0") == {f"{key}=" for key in MKVMERGE_STATS} | {"BPS="}
     # Copied audio keeps its statistics; they still describe the copied bitstream.
     assert not metadata_args(command, "a:0") and not metadata_args(command, "a:1")
@@ -247,10 +247,10 @@ def test_reencoded_video_drops_stale_mkvmerge_statistics(probe_facts, tmp_path, 
 
 
 def test_converted_audio_drops_statistics_but_copied_audio_keeps_them(probe_facts, tmp_path):
-    job = queue_job(preset=qsv_preset(efficient_audio=True), backend="qsv", scope="show",
+    job = queue_job(preset=gpu_preset(efficient_audio=True), backend="gpu", scope="show",
                     preserve_audio=False, requested_preserve_audio=False)
     command = FFmpegEncoder.build_command("/usr/bin/ffmpeg", job, Path("/read-only/Episode.mkv"),
-        tmp_path / "out.mkv", with_statistics(probe_facts), qsv_device=Path("/dev/dri/renderD128"))
+        tmp_path / "out.mkv", with_statistics(probe_facts), gpu_device=Path("/dev/dri/renderD128"))
     assert command[command.index("-c:a:0") + 1] == "eac3"
     assert "BPS-eng=" in metadata_args(command, "a:0")
     assert "-c:a:1" not in command and not metadata_args(command, "a:1")
@@ -282,7 +282,7 @@ def test_execution_capability_rejects_unsupported_modes(probe_facts):
     job = queue_job()
     assert not guard.reasons(item, job)
     variants = [
-        (item, job.model_copy(update={"backend": "qsv"}), "CPU backend only"),
+        (item, job.model_copy(update={"backend": "gpu"}), "CPU backend only"),
         (item.model_copy(update={"audio": [AudioTrack(codec="dts", channels=6, bitrate=1_500_000)]}),
             job.model_copy(update={"preserve_audio": False}), "audio conversion safely"),
         (item, job.model_copy(update={"preset": job.preset.model_copy(update={"target_resolution": "max_720p"})}), "source resolution only"),
@@ -330,7 +330,7 @@ def test_output_validation_rejects_changed_sdr_colour_signalling(probe_facts, tm
     assert any("matrix coefficients" in error for error in errors)
 
 
-def test_qsv_efficient_audio_output_validation_accepts_planned_codecs(
+def test_gpu_efficient_audio_output_validation_accepts_planned_codecs(
         probe_facts, tmp_path):
     guard = GPUEncodeCapability()
     source_audio = [
@@ -341,7 +341,7 @@ def test_qsv_efficient_audio_output_validation_accepts_planned_codecs(
     ]
     item = movie_item(probe_facts, audio=source_audio)
     job = queue_job(
-        preset=qsv_preset(efficient_audio=True), backend="qsv", scope="show",
+        preset=gpu_preset(efficient_audio=True), backend="gpu", scope="show",
         preserve_audio=False, requested_preserve_audio=False,
     )
     output_streams = []
@@ -361,12 +361,12 @@ def test_qsv_efficient_audio_output_validation_accepts_planned_codecs(
         else:
             output_streams.append(stream)
     output_probe = probe_facts.model_copy(update={"streams": output_streams})
-    output_file = tmp_path / "qsv-output.mkv"
+    output_file = tmp_path / "gpu-output.mkv"
     output_file.write_bytes(b"validated")
     assert guard.validate_output(item, job, output_probe, output_file) == []
 
 
-def test_qsv_capability_accepts_icq_and_efficient_audio(probe_facts):
+def test_gpu_capability_accepts_icq_and_efficient_audio(probe_facts):
     guard = GPUEncodeCapability()
     audio = [
         AudioTrack(codec=stream.codec, channels=stream.channels, bitrate=stream.bitrate,
@@ -375,7 +375,7 @@ def test_qsv_capability_accepts_icq_and_efficient_audio(probe_facts):
         for stream in probe_facts.streams if stream.kind == "audio"
     ]
     item = movie_item(probe_facts, audio=audio)
-    job = queue_job(preset=qsv_preset(efficient_audio=True), backend="qsv", scope="show",
+    job = queue_job(preset=gpu_preset(efficient_audio=True), backend="gpu", scope="show",
                     preserve_audio=False, requested_preserve_audio=False)
     assert not guard.reasons(item, job)
     wrong_backend = job.model_copy(update={"backend": "cpu"})
@@ -636,7 +636,7 @@ def test_real_quiet_start_uses_strict_progress_cutoff(tmp_path, monkeypatch, pro
             timezone="UTC",
             cpu=WorkerLaneSettings(quiet_hours_enabled=True, quiet_start="00:00",
                                    quiet_end="00:00", quiet_cutoff_percent=50),
-            qsv=WorkerLaneSettings(),
+            gpu=WorkerLaneSettings(),
         ))
         assert processor.queue.enforce_quiet_start("cpu") == expected
         saved = processor.queue._find(added["id"])
@@ -730,7 +730,7 @@ def test_web_restart_does_not_recover_or_stop_active_real_job(tmp_path, monkeypa
         assert active["status"] == "encoding"
 
 
-def test_qsv_worker_claims_validates_and_completes_show_job(tmp_path, monkeypatch, probe_facts):
+def test_gpu_worker_claims_validates_and_completes_show_job(tmp_path, monkeypatch, probe_facts):
     shows_root = tmp_path / "shows"
     series = shows_root / "Fixture Show"
     series.mkdir(parents=True)
@@ -744,7 +744,7 @@ def test_qsv_worker_claims_validates_and_completes_show_job(tmp_path, monkeypatc
         shows_root=shows_root,
         database_path=tmp_path / "state.sqlite3",
         workspace_root=workspace,
-        qsv_device=Path("/dev/dri/renderD128"),
+        gpu_device=Path("/dev/dri/renderD128"),
         ffmpeg_binary="/fake/ffmpeg",
         ffprobe_binary="/fake/ffprobe",
     )
@@ -753,19 +753,19 @@ def test_qsv_worker_claims_validates_and_completes_show_job(tmp_path, monkeypatc
     monkeypatch.setattr(container, "capability_status", lambda *args: {
         "available": True,
         "cpu_available": True,
-        "qsv_available": True,
-        "supported_backends": ["cpu", "qsv"],
+        "gpu_available": True,
+        "supported_backends": ["cpu", "gpu"],
         "ffmpeg_available": True,
         "ffprobe_available": True,
         "libx265_available": True,
         "hevc_vaapi_available": True,
-        "qsv_device": "/dev/dri/renderD128",
+        "gpu_device": "/dev/dri/renderD128",
         "ffmpeg_binary": "/fake/ffmpeg",
         "ffprobe_binary": "/fake/ffprobe",
         "workspace_root": str(workspace),
         "workspace_writable": True,
         "cpu_unavailable_reason": None,
-        "qsv_unavailable_reason": None,
+        "gpu_unavailable_reason": None,
         "unavailable_reason": None,
     })
     output_probe = probe_facts.model_copy(update={"streams": [
@@ -792,23 +792,23 @@ def test_qsv_worker_claims_validates_and_completes_show_job(tmp_path, monkeypatc
 
     monkeypatch.setattr("app.workers.ffmpeg.subprocess.Popen", popen)
 
-    processor = build_media_processor(config, process_role="worker", worker_backend="qsv")
-    assert processor.queue.supported_backends == frozenset({"qsv"})
+    processor = build_media_processor(config, process_role="worker", worker_backend="gpu")
+    assert processor.queue.supported_backends == frozenset({"gpu"})
     assert isinstance(processor.queue.worker, RealEncoderWorker)
-    assert processor.queue.worker.supported_backends == frozenset({"qsv"})
+    assert processor.queue.worker.supported_backends == frozenset({"gpu"})
     processor.scan_library()
     library = processor.get_library()
     episode = library.shows[0].seasons[0].episodes[0]
     added = processor.queue_encode(EnqueueRequest(
         media_ids=[episode.id], scope="show", preset_id="show-streaming-quality"))["added"][0]
 
-    job = processor.queue.claim_next("qsv")
-    assert job is not None and job.backend == "qsv"
+    job = processor.queue.claim_next("gpu")
+    assert job is not None and job.backend == "gpu"
     processor.queue.worker._execute(job)
 
     saved = next(item for item in processor.get_queue()["history"] if item["id"] == added["id"])
     assert saved["status"] == "completed"
-    assert saved["backend"] == "qsv"
+    assert saved["backend"] == "gpu"
     assert saved["output_size"] == 100_000_000
     assert spawned
     command = spawned[0].command
@@ -856,19 +856,19 @@ def test_worker_recovery_requeues_active_job_during_full_runtime_outage(
     monkeypatch.setattr(container, "capability_status", lambda *args: {
         "available": False,
         "cpu_available": False,
-        "qsv_available": False,
+        "gpu_available": False,
         "supported_backends": [],
         "ffmpeg_available": False,
         "ffprobe_available": False,
         "libx265_available": False,
         "hevc_vaapi_available": False,
-        "qsv_device": "/dev/dri/renderD128",
+        "gpu_device": "/dev/dri/renderD128",
         "ffmpeg_binary": "/fake/ffmpeg",
         "ffprobe_binary": "/fake/ffprobe",
         "workspace_root": str(workspace),
         "workspace_writable": False,
         "cpu_unavailable_reason": "runtime unavailable",
-        "qsv_unavailable_reason": "runtime unavailable",
+        "gpu_unavailable_reason": "runtime unavailable",
         "unavailable_reason": "runtime unavailable",
     })
     config = Settings(
@@ -963,7 +963,7 @@ def test_filesystem_enqueue_returns_runtime_error_when_encoder_prerequisites_fai
         assert diagnostics["workspace_root"] == str(tmp_path / "workspace")
         lanes = {lane["backend"]: lane for lane in client.get("/api/queue").json()["lanes"]}
         assert lanes["cpu"]["available"] is False
-        assert lanes["qsv"]["available"] is False
+        assert lanes["gpu"]["available"] is False
 
 
 def test_modal_eligibility_includes_real_execution_capability_blockers(
@@ -1004,13 +1004,13 @@ def test_modal_eligibility_reports_unavailable_real_lane(tmp_path, monkeypatch, 
         assert any("CPU real encoding is not available" in reason for reason in result.reasons)
 
 
-def test_queue_snapshot_marks_qsv_unavailable_when_only_cpu_runtime_exists(
+def test_queue_snapshot_marks_gpu_unavailable_when_only_cpu_runtime_exists(
         tmp_path, monkeypatch, probe_facts):
     application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
     with TestClient(application) as client:
         lanes = {lane["backend"]: lane for lane in client.get("/api/queue").json()["lanes"]}
         assert lanes["cpu"]["available"] is True
-        assert lanes["qsv"]["available"] is False
+        assert lanes["gpu"]["available"] is False
 
 
 def test_worker_controls_mark_unavailable_lane_as_not_accepting_jobs(
@@ -1020,8 +1020,8 @@ def test_worker_controls_mark_unavailable_lane_as_not_accepting_jobs(
         controls = client.get("/api/queue/workers").json()["lanes"]
         assert controls["cpu"]["available"] is True
         assert controls["cpu"]["accepting_jobs"] is True
-        assert controls["qsv"]["available"] is False
-        assert controls["qsv"]["accepting_jobs"] is False
+        assert controls["gpu"]["available"] is False
+        assert controls["gpu"]["accepting_jobs"] is False
 
 
 def test_preserve_audio_tag_overrides_modal_and_keeps_all_tracks_copied(tmp_path, monkeypatch, probe_facts):

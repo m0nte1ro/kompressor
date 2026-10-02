@@ -24,7 +24,7 @@ if (dialog) {
     const preserve = intent === 'preserve_quality';
     const planning = planningDefaults(scope, intent);
     return {
-      backend: preserve || scope === 'movie' ? 'cpu' : 'qsv',
+      backend: preserve || scope === 'movie' ? 'cpu' : 'gpu',
       destination_codec: 'hevc',
       rate_control: preserve || scope === 'movie' ? 'crf' : 'qvbr',
       quality_value: preserve ? 18 : scope === 'movie' ? 22 : 23,
@@ -71,18 +71,18 @@ if (dialog) {
     $('#audio-conversion-options').hidden = !efficient;
   }
   function backendFields() {
-    const qsv = field('backend').value === 'qsv';
-    $('#encoder-effort-field').hidden = qsv;
-    $('#qsv-validation-field').hidden = !qsv;
+    const gpu = field('backend').value === 'gpu';
+    $('#encoder-effort-field').hidden = gpu;
+    $('#gpu-validation-field').hidden = !gpu;
     const rateControl = field('rate_control');
     const crf = rateControl.querySelector('option[value="crf"]');
     const icq = rateControl.querySelector('option[value="icq"]');
     const qvbr = rateControl.querySelector('option[value="qvbr"]');
-    crf.disabled = qsv;
-    icq.disabled = !qsv;
-    qvbr.disabled = !qsv;
-    if (qsv && rateControl.value === 'crf') {rateControl.value = 'qvbr'; field('qvbr_rate_mode').value = 'map';}
-    if (!qsv && ['icq', 'qvbr'].includes(rateControl.value)) rateControl.value = 'crf';
+    crf.disabled = gpu;
+    icq.disabled = !gpu;
+    qvbr.disabled = !gpu;
+    if (gpu && rateControl.value === 'crf') {rateControl.value = 'qvbr'; field('qvbr_rate_mode').value = 'map';}
+    if (!gpu && ['icq', 'qvbr'].includes(rateControl.value)) rateControl.value = 'crf';
     rateFields();
   }
   function hdrPolicyFields() {

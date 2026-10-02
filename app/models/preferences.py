@@ -1,6 +1,6 @@
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class LibraryPaths(BaseModel):
@@ -50,7 +50,15 @@ class WorkerSettings(BaseModel):
 
     timezone: str = Field(default="UTC", min_length=1, max_length=100)
     cpu: WorkerLaneSettings = Field(default_factory=WorkerLaneSettings)
-    qsv: WorkerLaneSettings = Field(default_factory=WorkerLaneSettings)
+    gpu: WorkerLaneSettings = Field(default_factory=WorkerLaneSettings)
+
+    @model_validator(mode="before")
+    @classmethod
+    def rename_legacy_gpu_lane(cls, value):
+        # Settings saved before the rename keep the GPU lane under "qsv".
+        if isinstance(value, dict) and "qsv" in value and "gpu" not in value:
+            value = {("gpu" if key == "qsv" else key): lane for key, lane in value.items()}
+        return value
 
     @field_validator("timezone")
     @classmethod

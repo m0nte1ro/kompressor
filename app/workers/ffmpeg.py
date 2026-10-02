@@ -99,11 +99,11 @@ class FFmpegEncoder:
         return vaapi.smoke_check(binary, device, ffprobe, workspace)
 
     def __init__(self, binary: str, workspace_root: Path, stop_grace_seconds: float = 5.0,
-                 qsv_device: Path | None = None):
+                 gpu_device: Path | None = None):
         self.binary = binary
         self.workspace_root = workspace_root.expanduser().absolute()
         self.stop_grace_seconds = stop_grace_seconds
-        self.qsv_device = qsv_device.expanduser().absolute() if qsv_device else None
+        self.gpu_device = gpu_device.expanduser().absolute() if gpu_device else None
         self._lock = Lock()
         self._processes: dict[str, subprocess.Popen[str]] = {}
         self._cancelled: set[str] = set()
@@ -157,7 +157,7 @@ class FFmpegEncoder:
     @staticmethod
     def build_command(binary: str, job: QueueJob, source_path: Path,
                       partial_path: Path, probe: MediaProbeResult,
-                      qsv_device: Path | None = None) -> list[str]:
+                      gpu_device: Path | None = None) -> list[str]:
         primary = next((s for s in probe.streams if s.kind == "video" and not s.dispositions.get("attached_pic")), None)
         if primary is None:
             raise FFmpegError("Source has no primary video stream.")
@@ -169,10 +169,10 @@ class FFmpegEncoder:
 
         command = [binary, "-hide_banner", "-nostdin", "-y", "-v", "error",
                    "-progress", "pipe:1", "-nostats", "-protocol_whitelist", "file,pipe"]
-        if job.backend == "qsv":
-            if qsv_device is None:
+        if job.backend == "gpu":
+            if gpu_device is None:
                 raise FFmpegError("GPU job has no configured render device.")
-            command.extend(vaapi.device_args(qsv_device))
+            command.extend(vaapi.device_args(gpu_device))
             if vaapi.hardware_decode(primary):
                 # Input options target the primary's actual index, not cover art.
                 command.extend([f"-hwaccel:{primary.index}", "vaapi",
@@ -210,7 +210,7 @@ class FFmpegEncoder:
                 raise FFmpegError(f"Unsupported CPU video rate control: {job.preset.rate_control}.")
             command.extend(["-preset:v:0", job.preset.encoder_preset,
                             "-pix_fmt:v:0", "yuv420p10le" if job.preset.output_bit_depth == 10 else "yuv420p"])
-        elif job.backend == "qsv":
+        elif job.backend == "gpu":
             source_resolution = f"{primary.resolution_class}p" if primary.resolution_class else "unknown"
             try:
                 nominal_bitrate = job.preset.video_bitrate_for(source_resolution)
@@ -329,7 +329,7 @@ class FFmpegEncoder:
         final.unlink(missing_ok=True)
         command = self.build_command(
             self.binary, job, source_path, partial, probe,
-            qsv_device=self.qsv_device if job.backend == "qsv" else None,
+            gpu_device=self.gpu_device if job.backend == "gpu" else None,
         )
         started = monotonic()
         output_us = 0

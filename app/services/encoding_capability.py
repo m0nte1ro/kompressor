@@ -236,12 +236,12 @@ class CPUEncodeCapability(_HEVCEncodeCapability):
 class GPUEncodeCapability(_HEVCEncodeCapability):
     """Intel GPU (VA-API) HEVC slice for confirmed-SDR progressive sources."""
 
-    backend = "qsv"
+    backend = "gpu"
     allow_audio_conversion = True
 
     def _backend_reasons(self, job: QueueJob) -> list[str]:
         reasons = []
-        if job.backend != "qsv":
+        if job.backend != "gpu":
             reasons.append("Real GPU encoding supports the GPU backend only.")
             return reasons
         if job.preset.rate_control in {"icq", "qvbr"}:

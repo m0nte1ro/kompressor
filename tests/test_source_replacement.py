@@ -18,7 +18,7 @@ from app.services.policy import PolicyEngine
 from app.workers import replacement
 from app.workers.ffmpeg import FFmpegEncoder, FFmpegError
 from app.workers.replacement import ReplacementError, SourceReplacer, replacement_reasons
-from tests.test_real_encoding import (build_real_app, movie_item, probe_facts, qsv_preset,  # noqa: F401
+from tests.test_real_encoding import (build_real_app, movie_item, probe_facts, gpu_preset,  # noqa: F401
                                       queue_job)
 from fastapi.testclient import TestClient
 
@@ -430,7 +430,7 @@ def test_replacement_reasons_require_mkv_and_a_writable_directory(tmp_path, monk
 
 
 def test_audio_is_preserved_unless_the_job_explicitly_opts_out(probe_facts):
-    preset = qsv_preset(efficient_audio=True)
+    preset = gpu_preset(efficient_audio=True)
     assert preset.preserve_audio_by_default is False  # The preset default no longer matters.
     item = movie_item(probe_facts, audio=audio_tracks(probe_facts))
 
@@ -452,11 +452,11 @@ def test_queued_job_without_an_audio_choice_preserves_audio(client):
     assert job["preserve_audio"] is True and job["requested_preserve_audio"] is None
 
 
-@pytest.mark.parametrize("backend", ["cpu", "qsv"])
+@pytest.mark.parametrize("backend", ["cpu", "gpu"])
 def test_default_command_never_touches_any_audio_track(probe_facts, tmp_path, backend):
-    job = queue_job(qsv_preset(efficient_audio=True), backend="qsv", scope="show") if backend == "qsv" else queue_job()
+    job = queue_job(gpu_preset(efficient_audio=True), backend="gpu", scope="show") if backend == "gpu" else queue_job()
     command = FFmpegEncoder.build_command("/usr/bin/ffmpeg", job, Path("/media/Film.mkv"), tmp_path / "out.mkv",
-                                          probe_facts, qsv_device=Path("/dev/dri/renderD128"))
+                                          probe_facts, gpu_device=Path("/dev/dri/renderD128"))
     mapped = [command[i + 1] for i, value in enumerate(command) if value == "-map"]
     assert {f"0:{s.index}" for s in probe_facts.streams if s.kind == "audio"} <= set(mapped)
     assert command[command.index("-c") + 1] == "copy"
@@ -464,10 +464,10 @@ def test_default_command_never_touches_any_audio_track(probe_facts, tmp_path, ba
 
 
 def test_command_audio_options_come_from_the_shared_plan(probe_facts, tmp_path):
-    job = queue_job(qsv_preset(efficient_audio=True), backend="qsv", scope="show",
+    job = queue_job(gpu_preset(efficient_audio=True), backend="gpu", scope="show",
                     preserve_audio=False, requested_preserve_audio=False)
     command = FFmpegEncoder.build_command("/usr/bin/ffmpeg", job, Path("/media/Episode.mkv"), tmp_path / "out.mkv",
-                                          probe_facts, qsv_device=Path("/dev/dri/renderD128"))
+                                          probe_facts, gpu_device=Path("/dev/dri/renderD128"))
     plan = plan_audio_tracks([s for s in probe_facts.streams if s.kind == "audio"], job.preset, False)
     for ordinal, track in enumerate(plan):
         if track["action"] == "encode":
@@ -495,7 +495,7 @@ def test_only_copied_tracks_are_hashed_and_mismatches_are_reported(probe_facts, 
 
     monkeypatch.setattr(FFmpegEncoder, "packet_hashes", packet_hashes)
     encoder = FFmpegEncoder("ffmpeg", tmp_path)
-    job = queue_job(qsv_preset(efficient_audio=True), backend="qsv", scope="show",
+    job = queue_job(gpu_preset(efficient_audio=True), backend="gpu", scope="show",
                     preserve_audio=False, requested_preserve_audio=False)
     errors = encoder.copied_audio_mismatches(job, Path("/media/source.mkv"), probe_facts,
                                              tmp_path / "out.mkv", hevc_output(probe_facts))
@@ -547,7 +547,7 @@ def test_cpu_validation_checks_every_audio_track(probe_facts, tmp_path, change, 
 def test_show_rows_suggest_an_eligible_gpu_preset_and_movies_keep_cpu(client, catalog):
     episode = catalog.find("modern-family-s03e04", "show")
     preset, result = catalog.preview(episode)
-    assert preset is not None and preset.backend == "qsv" and result.eligible
+    assert preset is not None and preset.backend == "gpu" and result.eligible
     assert preset.id == "show-streaming-quality"  # Audio-preserving GPU preset before Efficient Audio.
     movie_preset, _ = catalog.preview(catalog.find("movie-king-of-comedy", "movie"))
     assert movie_preset is not None and movie_preset.backend == "cpu"

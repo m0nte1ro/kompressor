@@ -185,4 +185,4 @@ def test_preset_edits_do_not_modify_existing_jobs(client, queue, show_payload):
     queue.tick(0)
     job = queue.snapshot()["lanes"][1]["active"]
     assert job["preset"] == original["preset"]
-    assert job["backend"] == "qsv"
+    assert job["backend"] == "gpu"

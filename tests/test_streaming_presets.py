@@ -68,8 +68,8 @@ def test_default_backends_and_shared_show_video_policy(streaming):
     assert presets["movie-preserve-quality"]["backend"] == "cpu"
     assert presets["movie-streaming-quality"]["backend"] == "cpu"
     assert presets["show-preserve-quality"]["backend"] == "cpu"
-    assert presets["show-streaming-quality"]["backend"] == "qsv"
-    assert presets["show-streaming-efficient-audio"]["backend"] == "qsv"
+    assert presets["show-streaming-quality"]["backend"] == "gpu"
+    assert presets["show-streaming-efficient-audio"]["backend"] == "gpu"
 
     video_fields = [
         "intent", "backend", "destination_codec", "rate_control", "quality_value",
@@ -317,7 +317,7 @@ def test_quality_modes_return_planning_ranges_not_exact_predictions(streaming):
 
 
 @pytest.mark.parametrize("changes", [
-    {"backend": "qsv"}, {"quality_value": None}, {"target_video_bitrate": 4000000},
+    {"backend": "gpu"}, {"quality_value": None}, {"target_video_bitrate": 4000000},
     {"planning_video_bitrate_low": 9000000}, {"planning_video_bitrate_high": None},
     {"source_resolutions": []}, {"output_bit_depth": 12},
     {"hdr_support": "hdr10_experimental", "output_bit_depth": 8},
@@ -331,7 +331,7 @@ def test_invalid_quality_presets_rejected(streaming, changes):
     assert response.status_code == 422
 
 
-def test_qsv_quality_validation_and_warning(streaming):
+def test_gpu_quality_validation_and_warning(streaming):
     _, client = streaming
     source = payload(client, "show-streaming-quality")
     for quality in (0, 17, 23.5, 31, 52):

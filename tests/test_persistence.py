@@ -36,8 +36,8 @@ def test_restart_preserves_preferences_queue_order_and_history(tmp_path, legacy_
         client.post("/api/queue", json=show_payload)
         app.state.media_processor.queue.tick(0)
         app.state.media_processor.queue.tick(30)
-        active_qsv = app.state.media_processor.queue.snapshot()["lanes"][1]["active"]
-        client.post(f"/api/queue/{active_qsv['id']}/skip")
+        active_gpu = app.state.media_processor.queue.snapshot()["lanes"][1]["active"]
+        client.post(f"/api/queue/{active_gpu['id']}/skip")
         client.post("/api/queue", json=show_payload)
     second = create_app(path, start_workers=False, initial_presets=legacy_defaults)
     with TestClient(second) as client:

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 
 PresetScope = Literal[
@@ -20,11 +20,22 @@ PresetOrigin = Literal[
     "custom",
 ]
 
-# Persisted "qsv" identifies the GPU lane; its encoder is now VA-API.
-EncoderBackend = Literal[
+# Where the video encode runs: "cpu" is libx265, "gpu" is the Intel GPU through
+# VA-API (hevc_vaapi).
+BackendName = Literal[
     "cpu",
-    "qsv",
+    "gpu",
 ]
+
+# Presets, job snapshots and worker settings saved before the rename say "qsv".
+LEGACY_BACKEND_NAMES = {"qsv": "gpu"}
+
+
+def normalize_backend(value):
+    return LEGACY_BACKEND_NAMES.get(value, value) if isinstance(value, str) else value
+
+
+EncoderBackend = Annotated[BackendName, BeforeValidator(normalize_backend)]
 
 DestinationCodec = Literal[
     "hevc",
@@ -206,9 +217,9 @@ class PresetSettings(BaseModel):
             if self.target_video_bitrate is None or self.quality_value is not None:
                 raise ValueError("ABR requires a target bitrate and no quality value.")
         else:
-            expected = "cpu" if self.rate_control == "crf" else "qsv"
+            expected = "cpu" if self.rate_control == "crf" else "gpu"
             if self.backend != expected:
-                raise ValueError(f"{self.rate_control.upper()} requires backend {'GPU' if expected == 'qsv' else 'CPU'}.")
+                raise ValueError(f"{self.rate_control.upper()} requires backend {expected.upper()}.")
             if self.quality_value is None:
                 raise ValueError("Quality mode requires a quality value.")
             if self.rate_control == "qvbr":

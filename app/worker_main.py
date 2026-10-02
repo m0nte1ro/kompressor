@@ -12,14 +12,19 @@ from threading import Event
 
 from app.config import settings
 from app.container import build_media_processor
+from app.models.preset import normalize_backend
 from app.workers.real import RealEncoderWorker
 
 
 def run(backend: str = "cpu") -> int:
+    # "qsv" is the GPU worker's name before the rename; old service units still pass it.
+    if backend == "qsv":
+        print("Worker argument 'qsv' is deprecated; use 'gpu' (kompressor-worker-gpu.service).", file=sys.stderr)
+    backend = normalize_backend(backend)
     if backend == "cpu":
-        selected_backend: Literal["cpu", "qsv"] = "cpu"
-    elif backend == "qsv":
-        selected_backend = "qsv"
+        selected_backend: Literal["cpu", "gpu"] = "cpu"
+    elif backend == "gpu":
+        selected_backend = "gpu"
     else:
         print(f"Unknown real worker backend: {backend}", file=sys.stderr)
         return 2
@@ -32,7 +37,7 @@ def run(backend: str = "cpu") -> int:
     if backend not in worker.supported_backends or not worker.enabled:
         # Usually transient (the render device or driver is not ready yet after a
         # host/LXC boot): exit 3 so systemd retries, unlike configuration errors (2).
-        print(worker.unavailable_reason or f"{'GPU' if backend == 'qsv' else 'CPU'} worker is unavailable in this runtime.", file=sys.stderr)
+        print(worker.unavailable_reason or f"{backend.upper()} worker is unavailable in this runtime.", file=sys.stderr)
         return 3
 
     stopping = Event()

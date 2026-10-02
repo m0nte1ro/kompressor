@@ -1,5 +1,5 @@
 [Unit]
-Description=Kompressor Intel GPU encoder worker
+Description=Kompressor GPU encoder worker (Intel VA-API)
 After=network-online.target
 Wants=network-online.target
 
@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/root/kompressor
 EnvironmentFile=/etc/kompressor/kompressor.env
-ExecStart=/root/kompressor/.venv/bin/python -m app.worker_main qsv
+ExecStart=/root/kompressor/.venv/bin/python -m app.worker_main gpu
 Restart=on-failure
 # 2 = configuration error. An unavailable GPU (exit 3, e.g. /dev/dri not ready
 # yet after boot) is retried.

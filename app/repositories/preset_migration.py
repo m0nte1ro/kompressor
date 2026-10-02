@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 from app.config import PROJECT_ROOT
-from app.models.preset import CompressionPreset
+from app.models.preset import CompressionPreset, normalize_backend
 
 
 CATALOGUE_MARKER = "preset_catalog_v8"
@@ -31,6 +31,7 @@ def _load_legacy_presets() -> list[dict]:
 
 def _was_untouched(stored: dict, original: dict) -> bool:
     normalized = CompressionPreset.model_validate(original).model_dump(mode="json")
+    stored = {**stored, "backend": normalize_backend(stored.get("backend"))}
     return all(stored.get(key) == value for key, value in normalized.items())
 
 

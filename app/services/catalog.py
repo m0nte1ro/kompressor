@@ -88,7 +88,7 @@ class CatalogService:
         # tag, for example, falls through to CPU). Movies keep catalogue order.
         presets.sort(key=lambda p: (spatial_resolution(entry.item) not in p.source_resolutions,
                                     bool(entry.item.hdr) and p.hdr_support == "sdr_only",
-                                    entry.scope == "show" and p.backend != "qsv"))
+                                    entry.scope == "show" and p.backend != "gpu"))
         fallback = None
         for preset in presets:
             result = self.evaluate(entry, preset)

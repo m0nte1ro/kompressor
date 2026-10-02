@@ -12,7 +12,7 @@ from app.services.ffprobe import parse_ffprobe
 from app.services.policy import PolicyEngine
 from app.workers import vaapi
 from app.workers.ffmpeg import FFmpegEncoder
-from tests.test_real_encoding import build_real_app, movie_item, movie_preset, qsv_preset, queue_job
+from tests.test_real_encoding import build_real_app, movie_item, movie_preset, gpu_preset, queue_job
 
 COLOUR_KEYS = ('color_primaries', 'color_transfer', 'color_space')
 HDR_REASONS = ('HDR signalling is unsupported', 'Dynamic HDR metadata', 'confirmed SDR')
@@ -122,7 +122,7 @@ def test_untagged_other_codecs_remain_blocked_by_policy_and_capability(codec, pr
     assert facts.streams[0].hdr is not None and facts.streams[0].hdr.classify().uncertain
     assert hdr_reasons(policy_reasons(facts))
     item = movie_item(facts, video_codec=codec)
-    job = queue_job(qsv_preset(), backend='qsv')
+    job = queue_job(gpu_preset(), backend='gpu')
     assert any('confirmed SDR' in reason for reason in GPUEncodeCapability().reasons(item, job))
     assert any('confirmed SDR' in reason for reason in CPUEncodeCapability().reasons(item, queue_job()))
 
@@ -133,7 +133,7 @@ def test_accepted_source_passes_policy_and_both_execution_capabilities(codec):
     assert not hdr_reasons(policy_reasons(facts))
     item = movie_item(facts, video_codec=codec['codec_name'])
     assert CPUEncodeCapability().reasons(item, queue_job()) == []
-    assert GPUEncodeCapability().reasons(item, queue_job(qsv_preset(), backend='qsv')) == []
+    assert GPUEncodeCapability().reasons(item, queue_job(gpu_preset(), backend='gpu')) == []
 
 
 @pytest.mark.parametrize('codec', [pytest.param(VC1, id='vc1'), pytest.param(H264, id='h264'),
@@ -169,7 +169,7 @@ def test_vc1_advanced_is_not_selected_for_vaapi_decode(profile, hardware):
 
 def test_vc1_advanced_gpu_command_uses_software_decode_upload_and_hevc_vaapi(tmp_path):
     facts = probe()
-    command = FFmpegEncoder.build_command('ffmpeg', queue_job(qsv_preset(), backend='qsv'),
+    command = FFmpegEncoder.build_command('ffmpeg', queue_job(gpu_preset(), backend='gpu'),
         Path('/source.mkv'), tmp_path / 'out.mkv', facts, Path('/dev/dri/renderD128'))
     assert command[command.index('-init_hw_device') + 1] == 'vaapi=va:/dev/dri/renderD128'
     assert command[command.index('-filter_hw_device') + 1] == 'va'
@@ -206,7 +206,7 @@ def test_cpu_command_stamps_assumed_sdr_on_frames(tmp_path, codec, width, height
 @pytest.mark.parametrize('codec', [pytest.param({**VC1, 'profile': 'Main'}, id='vc1-main'),
                                    pytest.param(H264, id='h264-high')])
 def test_hardware_decode_path_stamps_after_scale_vaapi(tmp_path, codec):
-    command = FFmpegEncoder.build_command('ffmpeg', queue_job(qsv_preset(), backend='qsv'),
+    command = FFmpegEncoder.build_command('ffmpeg', queue_job(gpu_preset(), backend='gpu'),
         Path('/source.mkv'), tmp_path / 'out.mkv', probe(codec), Path('/dev/dri/renderD128'))
     assert '-hwaccel:0' in command
     assert command[command.index('-c:v:0') + 1] == 'hevc_vaapi'
@@ -216,24 +216,24 @@ def test_hardware_decode_path_stamps_after_scale_vaapi(tmp_path, codec):
 
 
 @UNTAGGED_OTHER_CODECS
-@pytest.mark.parametrize('backend', ['cpu', 'qsv'])
+@pytest.mark.parametrize('backend', ['cpu', 'gpu'])
 def test_untagged_other_codecs_command_writes_no_invented_colour_tags(tmp_path, codec, profile, backend):
     facts = probe({'codec_name': codec, 'profile': profile})
-    job = queue_job(qsv_preset(), backend='qsv') if backend == 'qsv' else queue_job()
+    job = queue_job(gpu_preset(), backend='gpu') if backend == 'gpu' else queue_job()
     command = FFmpegEncoder.build_command('ffmpeg', job, Path('/source.mkv'), tmp_path / 'out.mkv',
                                           facts, Path('/dev/dri/renderD128'))
     assert not {'-color_primaries:v:0', '-color_trc:v:0', '-colorspace:v:0'} & set(command)
     assert not any('setparams' in argument for argument in command)
 
 
-@pytest.mark.parametrize('backend', ['cpu', 'qsv'])
+@pytest.mark.parametrize('backend', ['cpu', 'gpu'])
 def test_tagged_source_command_is_unchanged_by_frame_stamping(tmp_path, backend):
     facts = parse_ffprobe(json.loads((PROJECT_ROOT / 'fixtures/ffprobe/progressive.json').read_text()))
-    job = queue_job(qsv_preset(), backend='qsv') if backend == 'qsv' else queue_job()
+    job = queue_job(gpu_preset(), backend='gpu') if backend == 'gpu' else queue_job()
     command = FFmpegEncoder.build_command('ffmpeg', job, Path('/source.mkv'), tmp_path / 'out.mkv',
                                           facts, Path('/dev/dri/renderD128'))
     assert not any('setparams' in argument for argument in command)
-    assert ('-filter:v:0' in command) is (backend == 'qsv')
+    assert ('-filter:v:0' in command) is (backend == 'gpu')
     assert command[command.index('-color_primaries:v:0') + 1] == 'bt709'
 
 
@@ -241,7 +241,7 @@ def test_tagged_source_command_is_unchanged_by_frame_stamping(tmp_path, backend)
 def test_output_validates_only_with_written_sdr_tags(tmp_path, codec):
     source = probe(codec)
     item = movie_item(source, video_codec=codec['codec_name'])
-    job = queue_job(qsv_preset(), backend='qsv')
+    job = queue_job(gpu_preset(), backend='gpu')
     output = source.model_copy(deep=True)
     video = output.streams[0]
     video.codec, video.profile, video.pixel_format = 'hevc', 'Main 10', 'yuv420p10le'

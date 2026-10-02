@@ -43,20 +43,20 @@ def test_preservation_and_preset_snapshot(client, catalog, show_payload):
     assert job["preset"]["rate_control"] == "qvbr"
     assert job["preset"]["qvbr_bitrates_by_resolution"]["1080p"] == 4_000_000
     assert job["preset"]["quality_value"] == 23
-    assert job["backend"] == "qsv"
+    assert job["backend"] == "gpu"
     assert client.post("/api/queue", json={**show_payload, "target_video_bitrate": 1}).status_code == 422
     assert client.post("/api/queue", json={**show_payload, "backend": "cpu"}).status_code == 422
 
 
 def test_dual_lane_progress_and_active_delete_protection(client, queue, movie_payload, show_payload):
     cpu = add(client, movie_payload)["added"][0]
-    qsv = add(client, show_payload)["added"][0]
+    gpu = add(client, show_payload)["added"][0]
     queue.tick(0)
     queue.tick(90)
     lanes = client.get("/api/queue").json()["lanes"]
-    assert {lane["active"]["id"] for lane in lanes} == {cpu["id"], qsv["id"]}
+    assert {lane["active"]["id"] for lane in lanes} == {cpu["id"], gpu["id"]}
     assert all(lane["active"]["progress"] == 50 for lane in lanes)
-    for job in (cpu, qsv):
+    for job in (cpu, gpu):
         assert client.delete(f"/api/queue/{job['id']}").status_code == 409
         assert client.post(f"/api/queue/{job['id']}/move-next").status_code == 409
         assert client.patch(f"/api/queue/{job['id']}/priority", json={"priority": "urgent"}).status_code == 409
@@ -180,7 +180,7 @@ def test_saving_quiet_hours_does_not_clear_manual_pause(client):
             "quiet_end": "01:00",
             "quiet_cutoff_percent": 50,
         },
-        "qsv": {
+        "gpu": {
             "paused": False,
             "quiet_hours_enabled": False,
             "quiet_start": "18:00",
@@ -231,7 +231,7 @@ def test_stop_all_pauses_workers_and_skips_active_fake_jobs(client, queue, movie
     assert response.status_code == 200
     controls = response.json()["lanes"]
     assert controls["cpu"]["paused"] is True
-    assert controls["qsv"]["paused"] is True
+    assert controls["gpu"]["paused"] is True
     state = client.get("/api/queue").json()
     assert all(lane["active"] is None for lane in state["lanes"])
     assert sum(job["status"] == "skipped" for job in state["history"]) == 2
@@ -245,7 +245,7 @@ def test_recovery_keeps_owned_job_queued_when_lane_is_temporarily_unavailable(
     assert active.status == "encoding"
 
     queue.supported_backends = frozenset({"cpu"})
-    queue.recover(backends={"qsv"})
+    queue.recover(backends={"gpu"})
 
     recovered = queue._find(job["id"])
     assert recovered.status == "queued"
@@ -259,14 +259,14 @@ def test_lane_scoped_recovery_does_not_touch_other_active_lane(client, queue, mo
     queue.tick(0)
     before = client.get("/api/queue").json()
     assert next(l for l in before["lanes"] if l["backend"] == "cpu")["active"]["id"] == movie["id"]
-    assert next(l for l in before["lanes"] if l["backend"] == "qsv")["active"]["id"] == show["id"]
+    assert next(l for l in before["lanes"] if l["backend"] == "gpu")["active"]["id"] == show["id"]
 
     queue.recover(backends={"cpu"})
 
     after = client.get("/api/queue").json()
-    qsv = next(l for l in after["lanes"] if l["backend"] == "qsv")
-    assert qsv["active"]["id"] == show["id"]
-    assert qsv["active"]["status"] == "encoding"
+    gpu = next(l for l in after["lanes"] if l["backend"] == "gpu")
+    assert gpu["active"]["id"] == show["id"]
+    assert gpu["active"]["status"] == "encoding"
 
 
 def test_quiet_hours_cross_midnight_and_apply_progress_cutoff(queue, movie_payload):
@@ -275,7 +275,7 @@ def test_quiet_hours_cross_midnight_and_apply_progress_cutoff(queue, movie_paylo
         timezone="Europe/Lisbon",
         cpu=WorkerLaneSettings(quiet_hours_enabled=True, quiet_start="18:00",
             quiet_end="01:00", quiet_cutoff_percent=50),
-        qsv=WorkerLaneSettings(),
+        gpu=WorkerLaneSettings(),
     ))
     # 20:00 UTC is 21:00 in Lisbon on this date; 02:00 UTC is 03:00 local.
     assert controls.quiet_active("cpu", datetime(2026, 9, 25, 20, 0, tzinfo=timezone.utc))

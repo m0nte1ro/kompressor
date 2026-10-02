@@ -20,7 +20,7 @@ from app.services.ffprobe import parse_ffprobe
 from app.services.reconciliation import ReconciliationService
 from app.workers import vaapi
 from app.workers.ffmpeg import FFmpegEncoder
-from tests.test_real_encoding import build_real_app, movie_item, qsv_preset, queue_job
+from tests.test_real_encoding import build_real_app, movie_item, gpu_preset, queue_job
 
 
 @pytest.fixture
@@ -54,12 +54,12 @@ def test_decode_selection(codec, profile, pixel, expected):
 @pytest.mark.parametrize('mode', ['icq', 'qvbr', 'abr'])
 def test_gpu_command_pipeline(facts, tmp_path, hardware, depth, mode):
     facts.streams[0].profile = 'High' if hardware else None
-    preset = qsv_preset().model_copy(update={
+    preset = gpu_preset().model_copy(update={
         'output_bit_depth': depth, 'rate_control': mode, 'hdr_support': 'sdr_only',
         'quality_value': 23 if mode in {'icq', 'qvbr'} else None,
         'target_video_bitrate': 4_000_000 if mode == 'abr' else None,
-        'qvbr_bitrates_by_resolution': qsv_preset().qvbr_bitrates_by_resolution if mode == 'qvbr' else {}})
-    command = FFmpegEncoder.build_command('ffmpeg', queue_job(preset, backend='qsv'),
+        'qvbr_bitrates_by_resolution': gpu_preset().qvbr_bitrates_by_resolution if mode == 'qvbr' else {}})
+    command = FFmpegEncoder.build_command('ffmpeg', queue_job(preset, backend='gpu'),
         Path('/source.mkv'), tmp_path / 'out.mkv', facts, Path('/dev/dri/renderD128'))
     assert command[command.index('-init_hw_device') + 1] == 'vaapi=va:/dev/dri/renderD128'
     assert ('-hwaccel:0' in command) is hardware
@@ -82,7 +82,7 @@ def test_gpu_cover_art_mapping_subtitles_and_unknown_colour(facts, tmp_path):
     cover = StreamFacts(index=0, kind='video', codec='mjpeg', dispositions={'attached_pic': True})
     facts.streams.insert(0, cover)
     facts.streams[4].codec = 'mov_text'
-    command = FFmpegEncoder.build_command('ffmpeg', queue_job(qsv_preset(), backend='qsv'),
+    command = FFmpegEncoder.build_command('ffmpeg', queue_job(gpu_preset(), backend='gpu'),
         Path('/source.mkv'), tmp_path / 'out.mkv', facts, Path('/dev/dri/renderD128'))
     mapped = [command[i + 1] for i, flag in enumerate(command) if flag == '-map']
     assert mapped == ['0:8', '0:0', '0:1', '0:2', '0:3', '0:4', '0:5']
@@ -145,7 +145,7 @@ def test_gpu_output_rejects_mismatch(facts, tmp_path, mutation, reason):
     audio = [AudioTrack(codec=s.codec, channels=s.channels, bitrate=s.bitrate, language=s.language)
              for s in facts.streams if s.kind == 'audio']
     item = movie_item(facts, audio=audio)
-    job = queue_job(qsv_preset(), backend='qsv')
+    job = queue_job(gpu_preset(), backend='gpu')
     output = facts.model_copy(deep=True)
     video = output.streams[0]
     video.codec = 'hevc'
@@ -178,18 +178,18 @@ def test_unavailable_gpu_retains_legacy_job_and_cpu_keeps_working(tmp_path, monk
             preset_id='movie-streaming-quality'))['added'][0]
         queue = processor.queue
         job = queue.repository.get_all()[0]
-        job.backend = 'qsv'
-        job.preset = qsv_preset().model_copy(update={'scope': 'movie', 'name': 'My personal preset'})
+        job.backend = 'gpu'
+        job.preset = gpu_preset().model_copy(update={'scope': 'movie', 'name': 'My personal preset'})
         queue.repository.save(job)
-        queue.recover(backends={'qsv'})
+        queue.recover(backends={'gpu'})
         queue.revalidate()
-        assert queue.claim_next('qsv') is None
+        assert queue.claim_next('gpu') is None
         persisted = next(j for j in queue.repository.get_all() if j.id == added['id'])
         assert persisted.status == 'queued' and persisted.preset.name == 'My personal preset'
         assert queue.snapshot()['lanes'][0]['available'] is True
         # The same persisted job can be picked up when the GPU returns.
-        queue.supported_backends = frozenset({'cpu', 'qsv'})
-        assert queue.claim_next('qsv') is not None
+        queue.supported_backends = frozenset({'cpu', 'gpu'})
+        assert queue.claim_next('gpu') is not None
 
 
 class VisibleText(HTMLParser):
@@ -201,13 +201,61 @@ class VisibleText(HTMLParser):
 
 
 @pytest.mark.parametrize('url', ['/movies', '/shows', '/queue', '/history', '/settings'])
-def test_ui_uses_gpu_labels_with_legacy_lane_keys(client, url):
+def test_ui_names_the_gpu_lane_and_never_qsv(client, url):
     response = client.get(url)
     assert response.status_code == 200
     visible = VisibleText()
     visible.feed(response.text)
-    assert 'QSV' not in visible.text and 'GPU' in visible.text
-    assert 'id="qsv-state"' in response.text
+    assert 'GPU' in visible.text
+    assert 'id="gpu-state"' in response.text and 'qsv' not in response.text.lower()
+
+
+def test_payloads_saved_with_the_legacy_qsv_name_load_as_gpu(tmp_path):
+    from app.models.preferences import WorkerLaneSettings, WorkerSettings
+    from app.repositories.preferences import SQLitePreferencesRepository
+    from app.repositories.sqlite import SQLitePresetRepository, SQLiteQueueRepository
+    database = Database(tmp_path / 'legacy.sqlite3')
+    preset = json.loads(gpu_preset().model_dump_json()) | {'backend': 'qsv'}
+    job = json.loads(queue_job(gpu_preset(), backend='gpu').model_dump_json())
+    job.update(backend='qsv', preset=preset)
+    lanes = {'timezone': 'UTC', 'cpu': {}, 'qsv': {'paused': True}}
+    with database.transaction() as connection:
+        connection.execute('INSERT INTO metadata VALUES (?, ?)', ('presets_initialized', 'true'))
+        connection.execute('INSERT INTO presets VALUES (?, ?)', (preset['id'], json.dumps(preset)))
+        connection.execute('INSERT INTO jobs VALUES (?, ?)', (job['id'], json.dumps(job)))
+        connection.execute('INSERT INTO metadata VALUES (?, ?)', ('worker_settings', json.dumps(lanes)))
+    assert SQLitePresetRepository(database, []).get_all()[0].backend == 'gpu'
+    loaded = SQLiteQueueRepository(database).get_all()[0]
+    assert loaded.backend == 'gpu' and loaded.preset.backend == 'gpu'
+    settings = SQLitePreferencesRepository(database).get_worker_settings()
+    assert settings.gpu == WorkerLaneSettings(paused=True) and settings.cpu == WorkerLaneSettings()
+    # Saving again writes only the new name.
+    assert 'qsv' not in SQLitePreferencesRepository(database).save_worker_settings(settings).model_dump_json()
+    assert WorkerSettings.model_validate({'gpu': {'paused': True}}).gpu.paused
+
+
+def test_legacy_gpu_device_variable_is_read_only_when_the_new_one_is_unset(tmp_path, monkeypatch):
+    from app.config import Settings
+    monkeypatch.chdir(tmp_path)  # no .env file here
+    monkeypatch.delenv('KOMPRESSOR_GPU_DEVICE', raising=False)
+    monkeypatch.setenv('KOMPRESSOR_QSV_DEVICE', '/dev/dri/renderD129')
+    assert Settings().gpu_device == Path('/dev/dri/renderD129')
+    monkeypatch.setenv('KOMPRESSOR_GPU_DEVICE', '/dev/dri/renderD130')
+    assert Settings().gpu_device == Path('/dev/dri/renderD130')
+
+
+def test_gpu_worker_accepts_the_legacy_qsv_argument(monkeypatch):
+    from types import SimpleNamespace
+    from app import worker_main
+    requested = []
+    def fake_processor(settings, *, process_role, worker_backend):
+        requested.append(worker_backend)
+        return SimpleNamespace(queue=SimpleNamespace(worker=None))
+    monkeypatch.setattr(worker_main, 'build_media_processor', fake_processor)
+    # Not a real worker in this runtime, so run() stops after selecting the lane.
+    assert worker_main.run('qsv') == 2 and worker_main.run('gpu') == 2
+    assert requested == ['gpu', 'gpu']
+    assert worker_main.run('nvenc') == 2 and requested == ['gpu', 'gpu']
 
 
 def test_no_legacy_encoder_implementation():
@@ -236,8 +284,8 @@ def test_device_failure_prevents_smoke_and_keeps_cpu_available(tmp_path, monkeyp
     monkeypatch.setattr(vaapi.subprocess, 'run', unexpected_run)
     status = encoding_runtime.capability_status('ffmpeg', 'ffprobe', tmp_path, {}, device)
     assert status['supported_backends'] == ['cpu']
-    assert status['qsv_available'] is False and status['hevc_vaapi_available'] is False
-    assert 'GPU' in status['qsv_unavailable_reason']
+    assert status['gpu_available'] is False and status['hevc_vaapi_available'] is False
+    assert 'GPU' in status['gpu_unavailable_reason']
 
 
 def test_smoke_report_preserves_first_driver_error_when_ffmpeg_shutdown_is_noisy(
@@ -261,7 +309,7 @@ def test_qvbr_preset_requires_both_quality_and_nominal_bitrate():
     from pydantic import ValidationError
     from app.models.preset import CompressionPreset
 
-    preset = qsv_preset()
+    preset = gpu_preset()
     assert preset.rate_control == 'qvbr' and preset.qvbr_bitrates_by_resolution['1080p'] == 4_000_000
     for changes in ({'quality_value': None}, {'target_video_bitrate': 4_000_000},
                     {'qvbr_bitrates_by_resolution': {}},
@@ -276,7 +324,7 @@ def test_qvbr_migration_only_updates_untouched_built_ins(tmp_path):
     from app.models.preset import SUPPORTED_SOURCE_RESOLUTIONS
 
     path = tmp_path / 'state.sqlite3'
-    seeds = [qsv_preset(), qsv_preset(efficient_audio=True)]
+    seeds = [gpu_preset(), gpu_preset(efficient_audio=True)]
     old = [p.model_copy(update={'rate_control': 'icq', 'target_video_bitrate': None,
                                 'qvbr_bitrates_by_resolution': {}, 'minimum_source_bitrate': 4_000_000,
                                 'source_resolutions': list(SUPPORTED_SOURCE_RESOLUTIONS)}) for p in seeds]
@@ -305,7 +353,7 @@ def test_qvbr_migration_only_updates_untouched_built_ins(tmp_path):
 ])
 def test_qvbr_command_uses_source_resolution_nominal(facts, tmp_path, resolution, nominal):
     facts.streams[0].resolution_class = resolution
-    command = FFmpegEncoder.build_command('ffmpeg', queue_job(qsv_preset(), backend='qsv'),
+    command = FFmpegEncoder.build_command('ffmpeg', queue_job(gpu_preset(), backend='gpu'),
         Path('/source.mkv'), tmp_path / 'out.mkv', facts, Path('/dev/dri/renderD128'))
     assert command[command.index('-b:v:0') + 1] == str(nominal)
     assert command[command.index('-global_quality:v:0') + 1] == '23'
@@ -315,7 +363,7 @@ def test_v1_qvbr_builtin_migrates_but_edited_preset_remains(tmp_path):
     from app.main import create_app
 
     path = tmp_path / 'state.sqlite3'
-    seeds = [qsv_preset(), qsv_preset(efficient_audio=True)]
+    seeds = [gpu_preset(), gpu_preset(efficient_audio=True)]
     old = [p.model_copy(update={'target_video_bitrate': 4_000_000,
                                 'qvbr_bitrates_by_resolution': {},
                                 'source_resolutions': ['1080p'],

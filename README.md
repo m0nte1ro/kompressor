@@ -69,7 +69,7 @@ export KOMPRESSOR_SHOWS_ROOT=/your/shows
 export KOMPRESSOR_FFPROBE_BINARY=/usr/bin/ffprobe
 export KOMPRESSOR_FFMPEG_BINARY=/usr/bin/ffmpeg
 export KOMPRESSOR_WORKSPACE_ROOT=/mnt/kompressor
-export KOMPRESSOR_QSV_DEVICE=/dev/dri/renderD128
+export KOMPRESSOR_GPU_DEVICE=/dev/dri/renderD128
 export KOMPRESSOR_TIMEZONE=Europe/Lisbon
 
 # Terminal/service 1: WebUI + API only
@@ -79,14 +79,14 @@ export KOMPRESSOR_TIMEZONE=Europe/Lisbon
 .venv/bin/python -m app.worker_main cpu
 
 # Terminal/service 3: GPU encoder owner (after /dev/dri is available)
-.venv/bin/python -m app.worker_main qsv
+.venv/bin/python -m app.worker_main gpu
 ```
 
 For systemd deployments, copy `deploy/systemd/kompressor.env.example` to
 `/etc/kompressor/kompressor.env`, then install and enable `kompressor-web.service` and
 `kompressor-worker-cpu.service`. After the render device is passed through and
 visible at `/dev/dri/renderD128`, also install/enable
-`kompressor-worker-qsv.service`. The services share SQLite state but have
+`kompressor-worker-gpu.service`. The services share SQLite state but have
 independent lifecycles and lane-scoped recovery.
 
 Open Settings, verify/save the paths, and click **Scan library**. Navigate to

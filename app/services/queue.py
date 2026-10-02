@@ -39,7 +39,7 @@ class QueueService:
             "real" if getattr(worker, "filesystem_mode", False) else "fake"
         )
         self.external_backends = frozenset(getattr(worker, "external_backends", ()))
-        self.supported_backends = frozenset(getattr(worker, "supported_backends", ("cpu", "qsv")))
+        self.supported_backends = frozenset(getattr(worker, "supported_backends", ("cpu", "gpu")))
         self.lock = RLock()
         self.move_sequence = max((j.move_next_order for j in repository.get_all()), default=0)
 
@@ -78,7 +78,7 @@ class QueueService:
         with self.lock:
             jobs = self.repository.get_all()
             lanes = []
-            for backend in ("cpu", "qsv"):
+            for backend in ("cpu", "gpu"):
                 active = next((j for j in jobs if j.backend == backend and j.status in ACTIVE), None)
                 lanes.append({
                     "backend": backend,
@@ -126,7 +126,7 @@ class QueueService:
                           preserve_subtitles: bool, replace_source: bool = False) -> list[str]:
         reasons = []
         if preset.backend not in self.supported_backends:
-            reasons.append(f"{'GPU' if preset.backend == 'qsv' else 'CPU'} real encoding is not available in this runtime.")
+            reasons.append(f"{preset.backend.upper()} real encoding is not available in this runtime.")
         if preset.destination_codec != "hevc":
             reasons.append("AV1 is not available in this workflow.")
         if result.reasons or reasons:
@@ -160,7 +160,7 @@ class QueueService:
                                                request.preserve_subtitles)
                 reasons = list(result.reasons)
                 if preset.backend not in self.supported_backends:
-                    reasons.append(f"{'GPU' if preset.backend == 'qsv' else 'CPU'} real encoding is not available in this runtime.")
+                    reasons.append(f"{preset.backend.upper()} real encoding is not available in this runtime.")
                 if any(j.media_id == media_id and j.scope == request.scope and j.status in PENDING
                        for j in self.repository.get_all()):
                     reasons.append("Already queued or active.")
@@ -210,7 +210,7 @@ class QueueService:
             if any(j.media_id == kept.media_id and j.scope == kept.scope and j.status in PENDING for j in jobs):
                 raise QueueConflict("This item already has a queued or active job.")
             if kept.backend not in self.supported_backends:
-                raise QueueConflict(f"The {'GPU' if kept.backend == 'qsv' else 'CPU'} worker lane is not available.")
+                raise QueueConflict(f"The {kept.backend.upper()} worker lane is not available.")
             job = kept.model_copy(deep=True, update={
                 "id": str(uuid4()), "status": "queued", "created_at": now(), "started_at": None,
                 "finished_at": None, "progress": 0, "progress_known": False, "elapsed_seconds": 0,
@@ -350,7 +350,7 @@ class QueueService:
             return job.backend in self.external_backends and job.status in ACTIVE
 
     def _start_idle_lanes(self) -> None:
-        for backend in ("cpu", "qsv"):
+        for backend in ("cpu", "gpu"):
             if backend in self.external_backends:
                 continue
             if self.controls and not self.controls.can_claim(backend):
@@ -705,7 +705,7 @@ class QueueService:
                           "quiet_start": "18:00", "quiet_end": "01:00",
                           "quiet_cutoff_percent": 50.0, "quiet_active": False,
                           "available": True, "accepting_jobs": True}
-                for backend in ("cpu", "qsv")
+                for backend in ("cpu", "gpu")
             }}
 
     def update_worker_settings(self, settings: WorkerSettings) -> dict:
@@ -715,7 +715,7 @@ class QueueService:
             current = self.controls.get()
             settings = settings.model_copy(update={
                 "cpu": settings.cpu.model_copy(update={"paused": current.cpu.paused}),
-                "qsv": settings.qsv.model_copy(update={"paused": current.qsv.paused}),
+                "gpu": settings.gpu.model_copy(update={"paused": current.gpu.paused}),
             })
             self.controls.save(settings)
             snapshot = self._worker_snapshot()
@@ -728,7 +728,7 @@ class QueueService:
     def set_worker_paused(self, backend: str, paused: bool) -> dict:
         if self.controls is None:
             raise InvalidOperation("Worker controls are unavailable.")
-        if backend not in {"cpu", "qsv"}:
+        if backend not in {"cpu", "gpu"}:
             raise InvalidOperation("Unknown worker backend.")
         with self.lock:
             self.controls.set_paused(backend, paused)
@@ -745,7 +745,7 @@ class QueueService:
         with self.lock:
             self.controls.pause_all()
             if stop_active:
-                for backend in ("cpu", "qsv"):
+                for backend in ("cpu", "gpu"):
                     self.stop_active_backend(backend, reason="user_stop")
             snapshot = self._worker_snapshot()
             assert snapshot is not None
