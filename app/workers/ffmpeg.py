@@ -53,6 +53,55 @@ def source_frame_count(stream: StreamFacts | None) -> int | None:
     return None
 
 
+class _StallWatch:
+    """Reads ffmpeg's -progress output and kills the process once it stops advancing.
+
+    ffmpeg keeps printing progress blocks while hung (a wedged GPU, a stalled
+    mount), so only an advancing output position or frame count counts.
+    """
+
+    def __init__(self, terminate: Callable[[], None], seconds: float, name: str):
+        self.seconds = seconds
+        self.output_us = 0
+        self.frames: int | None = None
+        self.stalled = Event()
+        self._terminate = terminate
+        self._finished = Event()
+        self._advanced = monotonic()
+        Thread(target=self._watch, name=name, daemon=True).start()
+
+    def _watch(self) -> None:
+        while not self._finished.wait(min(5.0, self.seconds)):
+            if monotonic() - self._advanced > self.seconds:
+                self.stalled.set()
+                self._terminate()
+                return
+
+    def feed(self, line: str) -> str | None:
+        """Take one stdout line; returns its progress key, None if it has none."""
+        key, separator, value = line.strip().partition("=")
+        if not separator:
+            return None
+        if key in {"out_time_us", "out_time_ms"}:
+            try:
+                position = int(value)
+            except ValueError:
+                return key
+            if position > self.output_us:
+                self.output_us, self._advanced = position, monotonic()
+        elif key == "frame":
+            try:
+                count = int(value)
+            except ValueError:
+                return key
+            if self.frames is None or count > self.frames:
+                self.frames, self._advanced = count, monotonic()
+        return key
+
+    def finish(self) -> None:
+        self._finished.set()
+
+
 class FFmpegError(RuntimeError):
     def __init__(self, message: str, exit_code: int | None = None):
         super().__init__(message)
@@ -124,8 +173,8 @@ class FFmpegEncoder:
         self.binary = binary
         self.workspace_root = workspace_root.expanduser().absolute()
         self.stop_grace_seconds = stop_grace_seconds
-        # An encode whose output position does not advance for this long is hung
-        # (e.g. a wedged GPU) and is killed, so the lane can move on.
+        # An encode or verification run whose progress does not advance for this
+        # long is hung (e.g. a wedged GPU) and is killed, so the lane can move on.
         self.stall_seconds = stall_seconds
         self.gpu_device = gpu_device.expanduser().absolute() if gpu_device else None
         self._lock = Lock()
@@ -288,7 +337,9 @@ class FFmpegEncoder:
                    "-protocol_whitelist", "file,pipe", "-i", str(path)]
         for selector in selectors:
             command.extend(["-map", selector])
-        command.extend(["-c", "copy", "-f", "streamhash", "-hash", "sha256", "-"])
+        # Progress shares stdout with the hash report; the parser below skips it.
+        command.extend(["-c", "copy", "-progress", "pipe:1", "-nostats",
+                        "-f", "streamhash", "-hash", "sha256", "-"])
         stdout, stderr, returncode = self._run_owned(
             job_id, command, "verify audio", "Audio verification was stopped.")
         if returncode:
@@ -304,7 +355,8 @@ class FFmpegEncoder:
 
     def _run_owned(self, job_id: str, command: list[str], what: str,
                    stopped: str) -> tuple[str, str, int]:
-        """Run a helper ffmpeg owned like an encode, so Stop & Skip and shutdown end it."""
+        """Run a helper ffmpeg owned like an encode: Stop & Skip, shutdown and the
+        stall watchdog end it. The command must write -progress to stdout."""
         try:
             process = subprocess.Popen(command, shell=False, stdin=subprocess.DEVNULL,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -314,12 +366,24 @@ class FFmpegEncoder:
             cancelled = job_id in self._cancelled
             if not cancelled:
                 self._processes[job_id] = process
+        if cancelled:
+            self._terminate(process)
+            raise EncodingCancelled(stopped)
+        assert process.stdout is not None and process.stderr is not None
+        stdout: list[str] = []
+        stderr: list[str] = []
+        errors = process.stderr
+        reader = Thread(target=lambda: stderr.extend(errors), name=f"ffmpeg-stderr-{job_id}", daemon=True)
+        reader.start()
+        watch = _StallWatch(lambda: self._terminate(process), self.stall_seconds, f"ffmpeg-watchdog-{job_id}")
         try:
-            if cancelled:
-                self._terminate(process)
-                raise EncodingCancelled(stopped)
-            stdout, stderr = process.communicate()
+            for line in process.stdout:
+                stdout.append(line)
+                watch.feed(line)
+            process.wait()
+            reader.join()
         finally:
+            watch.finish()
             if process.poll() is None:
                 self._terminate(process)
             with self._lock:
@@ -327,7 +391,10 @@ class FFmpegEncoder:
                 cancelled = job_id in self._cancelled
         if cancelled:
             raise EncodingCancelled(stopped)
-        return stdout or "", stderr or "", process.returncode
+        if watch.stalled.is_set():
+            raise FFmpegError(f"ffmpeg made no progress for {self.stall_seconds / 60:g} minutes "
+                              f"while trying to {what}, and was stopped.", process.returncode)
+        return "".join(stdout), "".join(stderr), process.returncode
 
     def decode_errors(self, job_id: str, path: Path, *, encoded_frames: int | None = None,
                       source_frames: int | None = None) -> list[str]:
@@ -404,13 +471,10 @@ class FFmpegEncoder:
             gpu_device=self.gpu_device if job.backend == "gpu" else None,
         )
         started = monotonic()
-        output_us = 0
-        frames: int | None = None
         stderr_tail: deque[str] = deque()
         stderr_lock = Lock()
         process: subprocess.Popen[str] | None = None
-        finished, stalled = Event(), Event()
-        advanced = monotonic()
+        watch: _StallWatch | None = None
         try:
             if before_start is not None:
                 before_start()
@@ -433,39 +497,14 @@ class FFmpegEncoder:
                             stderr_tail.popleft()
             stderr_thread = Thread(target=read_stderr, name=f"ffmpeg-stderr-{job.id}", daemon=True)
             stderr_thread.start()
-
-            def watchdog():
-                # ffmpeg keeps printing progress blocks while the encoder is hung,
-                # so only an advancing output position or frame count counts.
-                assert process is not None
-                while not finished.wait(min(5.0, self.stall_seconds)):
-                    if monotonic() - advanced > self.stall_seconds:
-                        stalled.set()
-                        self._terminate(process)
-                        return
-            Thread(target=watchdog, name=f"ffmpeg-watchdog-{job.id}", daemon=True).start()
+            owned = process
+            watch = _StallWatch(lambda: self._terminate(owned), self.stall_seconds, f"ffmpeg-watchdog-{job.id}")
             assert process.stdout is not None
             for line in process.stdout:
-                key, separator, value = line.strip().partition("=")
-                if not separator:
-                    continue
-                if key in {"out_time_us", "out_time_ms"}:
-                    try:
-                        position = int(value)
-                    except ValueError:
-                        continue
-                    if position > output_us:
-                        output_us, advanced = position, monotonic()
-                elif key == "frame":
-                    try:
-                        count = int(value)
-                    except ValueError:
-                        continue
-                    if frames is None or count > frames:
-                        frames, advanced = count, monotonic()
-                elif key == "progress":
+                if watch.feed(line) == "progress":
                     duration = probe.duration_seconds
-                    percent = min(99.0, output_us / (duration * 1_000_000) * 100) if duration and duration > 0 else None
+                    percent = (min(99.0, watch.output_us / (duration * 1_000_000) * 100)
+                               if duration and duration > 0 else None)
                     progress_callback(percent, monotonic() - started)
             exit_code = process.wait()
             stderr_thread.join(timeout=1)
@@ -473,14 +512,14 @@ class FFmpegEncoder:
                 cancelled = job.id in self._cancelled
             if cancelled:
                 raise EncodingCancelled("Encoding was stopped.")
-            if stalled.is_set():
+            if watch.stalled.is_set():
                 raise FFmpegError(f"ffmpeg made no progress for {self.stall_seconds / 60:g} minutes "
                                   "and was stopped.", exit_code)
             with stderr_lock:
                 error_text = "\n".join(stderr_tail)[-16_384:]
             if exit_code != 0:
                 raise FFmpegError(error_text or f"ffmpeg exited with status {exit_code}.", exit_code)
-            return FFmpegOutput(partial, final, exit_code, error_text, frames)
+            return FFmpegOutput(partial, final, exit_code, error_text, watch.frames)
         except FileNotFoundError as error:
             partial.unlink(missing_ok=True)
             raise FFmpegError(f"ffmpeg executable not found: {self.binary}") from error
@@ -488,7 +527,8 @@ class FFmpegEncoder:
             partial.unlink(missing_ok=True)
             raise FFmpegError(f"Could not run ffmpeg: {error}") from error
         finally:
-            finished.set()
+            if watch is not None:
+                watch.finish()
             if process is not None and process.poll() is None:
                 self._terminate(process)
             with self._lock:

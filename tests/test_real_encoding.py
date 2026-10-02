@@ -961,7 +961,7 @@ def test_stop_terminates_only_owned_process_and_removes_partial(tmp_path):
 
 
 class HungProcess:
-    """ffmpeg whose encoder is wedged: progress blocks keep coming, the position never moves."""
+    """ffmpeg that is wedged: progress blocks keep coming, the position never moves."""
     pid = 4242
 
     def __init__(self, command):
@@ -969,7 +969,8 @@ class HungProcess:
         self.terminated = threading.Event()
         self.stdout = self._progress()
         self.stderr = io.StringIO("")
-        Path(command[-1]).touch()
+        if command[-1] != "-":  # Verification runs write to stdout, encodes to a file.
+            Path(command[-1]).touch()
 
     def _progress(self):
         yield "frame=10\n"

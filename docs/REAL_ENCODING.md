@@ -81,9 +81,15 @@ which requeues the lane's active job and clears its workspace; a second worker f
 same lane (for example an old `qsv` unit next to the `gpu` unit) exits with status 4,
 which the units do not restart, instead of destroying the running encode.
 
-A lane never waits forever on its active job. An encode whose output position and
-frame count stop advancing for 15 minutes (a wedged GPU, a hung mount) is killed and
-failed; ffmpeg keeps printing progress while hung, so only real advancement counts.
+A lane does not wait forever on a hung ffmpeg. An encode or verification run (audio
+hashing, the full decode) whose output position and frame count stop advancing for
+15 minutes (a wedged GPU, a stalled mount) is killed and its job failed; ffmpeg keeps
+printing progress while hung, so only real advancement counts. Two waits remain by
+design. The source replacement copy runs in the worker itself and is never
+interrupted (the swap always ends in a verified replacement or a restored original),
+so a mount that hangs during it holds the lane until it answers. And a process stuck
+in uninterruptible I/O (a hard NFS mount) exits only when the kernel lets it, whatever
+signal it is sent.
 A job's state changes (completed, failed, stopped) are retried for as long as SQLite
 reports the database locked by another connection (`SQLITE_BUSY`/`SQLITE_LOCKED`),
 because the lane cannot claim its next job until that write lands; any other write

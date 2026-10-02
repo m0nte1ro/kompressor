@@ -1,4 +1,5 @@
 """Source replacement, bit-exact audio verification and safe audio/lane defaults."""
+import io
 import os
 import re
 import shutil
@@ -19,8 +20,8 @@ from app.services.policy import PolicyEngine
 from app.workers import replacement
 from app.workers.ffmpeg import FFmpegEncoder, FFmpegError, source_frame_count
 from app.workers.replacement import ReplacementError, SourceReplacer, replacement_reasons
-from tests.test_real_encoding import (build_real_app, movie_item, probe_facts, gpu_preset,  # noqa: F401
-                                      queue_job)
+from tests.test_real_encoding import (HungProcess, build_real_app, movie_item, probe_facts,  # noqa: F401
+                                      gpu_preset, queue_job)
 from fastapi.testclient import TestClient
 
 
@@ -613,34 +614,55 @@ def test_only_copied_tracks_are_hashed_and_mismatches_are_reported(probe_facts, 
     assert errors == ["Copied audio track 2 (aac, por) is not bit-identical to the source."]
 
 
+class HelperProcess:
+    """A finished verification ffmpeg: its stdout and stderr, then its exit status."""
+
+    def __init__(self, stdout="", stderr="", returncode=0):
+        self.stdout, self.stderr, self.returncode = io.StringIO(stdout), io.StringIO(stderr), returncode
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
 def test_packet_hash_report_is_parsed_strictly(tmp_path, monkeypatch):
-    class Process:
-        def __init__(self, stdout, returncode=0):
-            self.stdout, self.returncode = stdout, returncode
+    progress = "out_time_us=1000000\nprogress=continue\n"  # Shares stdout with the report.
+    reports = iter([f"{progress}0,a,SHA256={'a' * 64}\n1,a,SHA256={'b' * 64}\nprogress=end\n",
+                    f"{progress}0,a,SHA256={'a' * 64}\nprogress=end\n"])
+    commands = []
 
-        def communicate(self):
-            return self.stdout, ""
+    def popen(command, **options):
+        commands.append(command)
+        return HelperProcess(next(reports))
 
-        def poll(self):
-            return self.returncode
-
-    reports = iter([f"0,a,SHA256={'a' * 64}\n1,a,SHA256={'b' * 64}\n", f"0,a,SHA256={'a' * 64}\n"])
-    monkeypatch.setattr("app.workers.ffmpeg.subprocess.Popen", lambda *a, **k: Process(next(reports)))
+    monkeypatch.setattr("app.workers.ffmpeg.subprocess.Popen", popen)
     encoder = FFmpegEncoder("ffmpeg", tmp_path)
     assert encoder.packet_hashes("job", tmp_path / "x.mkv", ["0:1", "0:2"]) == ["a" * 64, "b" * 64]
+    assert commands[0][commands[0].index("-progress") + 1] == "pipe:1"
     with pytest.raises(FFmpegError, match="unexpected hash report"):
         encoder.packet_hashes("job", tmp_path / "x.mkv", ["0:1", "0:2"])
 
 
-class DecodeProcess:
-    def __init__(self, stdout="", stderr="", returncode=0):
-        self.stdout, self.stderr, self.returncode = stdout, stderr, returncode
+@pytest.mark.parametrize("run, what", [
+    (lambda encoder, path: encoder.packet_hashes("job", path, ["0:1"]), "verify audio"),
+    (lambda encoder, path: encoder.decode_errors("job", path), "decode the output"),
+])
+def test_a_hung_verification_run_is_killed_so_the_lane_moves_on(tmp_path, monkeypatch, run, what):
+    spawned = []
 
-    def communicate(self):
-        return self.stdout, self.stderr
+    def popen(command, **options):
+        spawned.append(HungProcess(command))
+        return spawned[-1]
 
-    def poll(self):
-        return self.returncode
+    monkeypatch.setattr("app.workers.ffmpeg.subprocess.Popen", popen)
+    encoder = FFmpegEncoder("ffmpeg", tmp_path, stall_seconds=0.1)
+    with pytest.raises(FFmpegError, match=f"made no progress .* while trying to {what}"):
+        run(encoder, tmp_path / "out.mkv")
+    assert spawned[0].terminated.is_set()
+    assert not encoder._processes
+
 
 
 def decode_progress(frames):
@@ -648,17 +670,17 @@ def decode_progress(frames):
 
 
 @pytest.mark.parametrize("process, kwargs, expected", [
-    (DecodeProcess(decode_progress(2892)), {"encoded_frames": 2892, "source_frames": 2892}, []),
+    (HelperProcess(decode_progress(2892)), {"encoded_frames": 2892, "source_frames": 2892}, []),
     # mkvmerge statistics may be a little off; within 0.1% (at least two frames) passes.
-    (DecodeProcess(decode_progress(2890)), {"source_frames": 2892}, []),
-    (DecodeProcess(decode_progress(2892), stderr="[hevc @ 0x1] Could not find ref with POC 12\n"), {},
+    (HelperProcess(decode_progress(2890)), {"source_frames": 2892}, []),
+    (HelperProcess(decode_progress(2892), stderr="[hevc @ 0x1] Could not find ref with POC 12\n"), {},
      ["Decoding the output reported errors: [hevc @ 0x1] Could not find ref with POC 12"]),
-    (DecodeProcess(decode_progress(10), stderr="Invalid data found\n", returncode=1), {},
+    (HelperProcess(decode_progress(10), stderr="Invalid data found\n", returncode=1), {},
      ["The output could not be decoded in full: Invalid data found"]),
-    (DecodeProcess("progress=end\n"), {}, ["Decoding the output produced no video frames."]),
-    (DecodeProcess(decode_progress(2880)), {"encoded_frames": 2892},
+    (HelperProcess("progress=end\n"), {}, ["Decoding the output produced no video frames."]),
+    (HelperProcess(decode_progress(2880)), {"encoded_frames": 2892},
      ["The output decodes to 2880 video frames; the encoder wrote 2892."]),
-    (DecodeProcess(decode_progress(2600)), {"source_frames": 2892},
+    (HelperProcess(decode_progress(2600)), {"source_frames": 2892},
      ["The output has 2600 video frames; the source's track statistics list 2892."]),
 ])
 def test_output_is_decoded_in_full_and_frame_counts_must_match(tmp_path, monkeypatch, process, kwargs, expected):
