@@ -117,8 +117,9 @@ a resolution in the filename is not evidence of measured dimensions.
 label. It is blocked with: “Interlaced source requires deinterlacing; no validated
 pipeline is enabled”. A scan type the file does not signal (common for
 progressive MKVs without a field order) is resolved when the library is built: a
-`1080i`/`576i`-style file name counts as interlaced, otherwise a known resolution
-is treated as progressive with a policy warning. Signalled interlacing always wins.
+`1080i`/`576i`-style file name counts as interlaced, otherwise a stream with known
+dimensions is treated as progressive with a policy warning. Signalled interlacing
+always wins.
 
 HDR classification derives from stored facts. Ten-bit alone does not imply HDR.
 SDR signalling remains SDR; PQ/BT.2020 can be represented as HDR10. Mastering

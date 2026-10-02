@@ -215,14 +215,14 @@ def with_inferred_scan_type(probe: MediaProbeResult, name: str) -> MediaProbeRes
     Many progressive MKVs carry no field order and ffprobe's frame sample cannot
     prove a whole stream progressive. Interlacing that is signalled, or a
     "1080i"-style name, still counts as interlaced; otherwise a video stream with
-    a known resolution is treated as progressive.
+    known dimensions is treated as progressive.
     """
     def resolve(stream: StreamFacts) -> StreamFacts:
         if stream.kind != "video" or stream.scan_type != "unknown":
             return stream
         if INTERLACED_NAME.search(name):
             return stream.model_copy(update={"scan_type": "interlaced", "scan_type_inferred": True})
-        if stream.resolution_class is None:
+        if stream.width is None or stream.height is None:
             return stream
         return stream.model_copy(update={"scan_type": "progressive", "scan_type_inferred": True})
 
