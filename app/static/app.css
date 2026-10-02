@@ -107,6 +107,7 @@ progress::-moz-progress-bar { background: var(--green); }
 .queued-list { padding: 0; margin: 10px 0 0; list-style: none; }
 .queued-job { padding: 14px 0; border-bottom: 1px solid var(--line); }
 .queued-job:last-child { border: 0; }
+.queued-job .reason { display: block; margin: 5px 0; }
 .preset-section { margin: 25px 0 16px; }
 .preset-section > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; list-style: none; padding: 4px 0 13px; }
 .preset-section > summary::-webkit-details-marker { display: none; }

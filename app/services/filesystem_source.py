@@ -43,19 +43,24 @@ class FilesystemObservationSource:
             return None
 
     def root_available(self, root_id: str) -> bool | None:
-        """Whether a configured root can be listed and is not an empty mount point.
+        """Whether a configured root can be listed and is not an unmounted mount point.
 
-        None when no configured root has this ID: removing a root is a setting,
-        not an outage.
+        An unmounted mount point is an empty directory. As in the scanner, an empty
+        root is unavailable only while the inventory still lists files on it; once
+        the scans have recorded them missing it is simply empty, and jobs on it are
+        judged normally. None when no configured root has this ID: removing a root
+        is a setting, not an outage.
         """
         root = self._root(root_id)
         if root is None:
             return None
         try:
             with os.scandir(root) as entries:
-                return next(entries, None) is not None
+                if next(entries, None) is not None:
+                    return True
         except OSError:
             return False
+        return not self.inventory.has_present_files(root_id)
 
     def reference_for(self, file_id: str, revision_id: str) -> SourceReference | None:
         record = self.inventory.get_file(file_id)

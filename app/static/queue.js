@@ -98,7 +98,8 @@ export function renderQueue(queue) {
     if (list.dataset.rendered === key) continue;
     list.dataset.rendered = key;
     list.innerHTML = lane.queued.map(job => `<li class="queued-job" data-job="${esc(job.id)}">
-      ${jobDetails(job)}${job.move_next_order ? '<span class="badge blue">Move next override</span>' : ''}
+      ${jobDetails(job)}${(job.reasons ?? []).map(reason => `<small class="reason">${esc(reason)}</small>`).join('')}
+      ${job.move_next_order ? '<span class="badge blue">Move next override</span>' : ''}
       <div class="job-controls"><label>Priority <select data-priority aria-label="Priority for ${esc(job.name)}">
         ${['urgent', 'high', 'normal', 'low'].map(p => `<option value="${p}" ${p === job.priority ? 'selected' : ''}>${p[0].toUpperCase() + p.slice(1)}</option>`).join('')}
       </select></label><button data-queue-action="move-next">↑ Move next</button>

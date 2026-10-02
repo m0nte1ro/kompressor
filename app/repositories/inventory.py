@@ -20,6 +20,7 @@ class InventoryRepository(Protocol):
     def files(self, *, root_id: str | None = None, roots: list[str] | None = None,
               present: bool = False, scope: str | None = None, show_id: str | None = None,
               file_id: str | None = None, path: str | None = None) -> list[LibraryFile]: ...
+    def has_present_files(self, root_id: str) -> bool: ...
     def root_state(self, root_id: str, candidates=None) -> InventoryState: ...
     def apply(self, state: InventoryState, snapshot: ScanSnapshot, result: ReconciliationResult) -> None: ...
     def get_artifact(self, artifact_id: str) -> OutputArtifact | None: ...
@@ -83,6 +84,12 @@ class SQLiteInventoryRepository:
     def get_file(self, file_id: str) -> LibraryFile | None:
         rows = self.files(file_id=file_id)
         return rows[0] if rows else None
+
+    def has_present_files(self, root_id: str) -> bool:
+        with self.database.read() as connection:
+            return connection.execute(
+                "SELECT 1 FROM library_files WHERE root_id=? AND presence='present' LIMIT 1", (root_id,)
+            ).fetchone() is not None
 
     def get_revision(self, revision_id: str) -> FileRevision | None:
         with self.database.read() as connection:

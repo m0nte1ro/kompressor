@@ -91,12 +91,15 @@ error, including a read-only or failing database, is logged after five attempts 
 left to restart recovery. A failed progress write is only logged and never ends a
 healthy encode.
 
-A library root that cannot be listed, or is empty (unmounted), is an outage, not a
-verdict on its jobs. Queued jobs on it stay queued: revalidation skips them instead of
-blocking them, and the lane claims jobs on other roots or waits, re-checking every
-10 seconds. An encode that fails while its root is unavailable is requeued from zero
-with a note instead of failing. A file that is missing while its root is reachable
-still blocks its job, as before.
+A library root that cannot be listed is an outage, not a verdict on its jobs, and so is
+an empty root while the inventory still lists files on it (an unmounted mount point is
+an empty directory; scans apply the same rule). Queued jobs on it stay queued with a
+"Waiting: …" note in the queue: revalidation skips them instead of blocking them, and
+the lane claims jobs on other roots or waits, re-checking every 10 seconds. The worker
+log records when a lane starts and stops waiting, not every check. An encode that fails
+while its root is unavailable is requeued from zero with a note instead of failing. A
+file that is missing while its root is reachable still blocks its job, as before, and
+so does a root emptied after scans recorded its files missing.
 
 Roots are listed before any database transaction opens, so a hung network mount
 never holds SQLite's write lock (which would stall the WebUI and the other lane). A

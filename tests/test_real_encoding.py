@@ -1049,9 +1049,11 @@ def test_an_empty_mount_point_is_not_scanned_as_a_library_with_every_file_gone(t
         assert [m.id for m in processor.get_library().movies] == [movie.id]
 
 
-def test_queued_jobs_wait_out_an_unreachable_library_root(tmp_path, monkeypatch, probe_facts, no_outage_caching):
+def test_queued_jobs_wait_out_an_unreachable_library_root(
+        tmp_path, monkeypatch, probe_facts, no_outage_caching, caplog):
+    from app.services.queue import WAITING_FOR_ROOT
     application, source, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
-    with TestClient(application):
+    with TestClient(application), caplog.at_level("INFO", logger="app.services.queue"):
         processor = application.state.media_processor
         processor.scan_library()
         movie = processor.get_library().movies[0]
@@ -1059,13 +1061,36 @@ def test_queued_jobs_wait_out_an_unreachable_library_root(tmp_path, monkeypatch,
             media_ids=[movie.id], scope="movie", preset_id="movie-streaming-quality", replace_source=True))["added"]
         root = source.parent
         root.rename(tmp_path / "unmounted")
-        # Neither claimed (it would fail) nor blocked (that is final): it waits.
+        # Neither claimed (it would fail) nor blocked (that is final): it waits, and says why.
+        assert processor.queue.claim_next("cpu") is None
         assert processor.queue.claim_next("cpu") is None
         processor.queue.revalidate()
-        assert processor.queue._find(added[0]["id"]).status == "queued"
+        waiting = processor.queue._find(added[0]["id"])
+        assert waiting.status == "queued" and waiting.reasons == [WAITING_FOR_ROOT]
         (tmp_path / "unmounted").rename(root)
         job = processor.queue.claim_next("cpu")
-        assert job is not None and job.id == added[0]["id"]
+        assert job is not None and job.id == added[0]["id"] and job.reasons == []
+    # One line when the lane starts waiting and one when it resumes, not one per poll.
+    messages = [record.getMessage() for record in caplog.records if record.name == "app.services.queue"]
+    assert sum("waiting" in message for message in messages) == 1
+    assert sum("reachable again" in message for message in messages) == 1
+
+
+def test_an_emptied_root_whose_files_were_recorded_missing_blocks_its_jobs(
+        tmp_path, monkeypatch, probe_facts, no_outage_caching):
+    from app.services.queue import WAITING_FOR_ROOT
+    application, source, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        notes = source.parent / "notes.txt"  # Not media, but keeps the root non-empty.
+        notes.write_text("")
+        _, job_id = queue_movie(processor)
+        source.unlink()
+        processor.scan_library()  # The root is reachable, so the file is recorded missing.
+        notes.unlink()  # Empty now, yet the inventory expects nothing there: not an outage.
+        assert processor.queue.claim_next("cpu") is None
+        blocked = processor.queue._find(job_id)
+    assert blocked.status == "blocked" and blocked.reasons and WAITING_FOR_ROOT not in blocked.reasons
 
 
 def queue_movie(processor, **request):

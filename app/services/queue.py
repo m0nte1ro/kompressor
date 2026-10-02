@@ -22,6 +22,8 @@ PENDING = {"queued", *ACTIVE}
 PRIORITIES = {"urgent": 3, "high": 2, "normal": 1, "low": 0}
 # How long a lane whose queued sources are all unreachable waits before looking again.
 OUTAGE_BACKOFF_SECONDS = 10.0
+# Shown on a queued job while its library root is down; removed once it is back.
+WAITING_FOR_ROOT = "Waiting: the library root holding this source is unavailable (unmounted or unreachable)."
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +50,7 @@ class QueueService:
         self.supported_backends = frozenset(getattr(worker, "supported_backends", ("cpu", "gpu")))
         self.lock = RLock()
         self._claim_backoff: dict[str, float] = {}
+        self._lanes_waiting: set[str] = set()
         self.move_sequence = max((j.move_next_order for j in repository.get_all()), default=0)
 
     @staticmethod
@@ -584,10 +587,18 @@ class QueueService:
                 return None
             # Jobs whose library root is unreachable wait; the rest of the lane runs.
             claimable = [j for j in queued if not self._awaits_root(j, unavailable)]
-            if not claimable:
+            waiting = not claimable
+            if waiting != (backend in self._lanes_waiting):
+                # Log the change, not every poll: an outage can last for hours.
+                if waiting:
+                    self._lanes_waiting.add(backend)
+                    log.warning("%s lane: all %d queued sources are on unavailable library roots; waiting.",
+                                backend.upper(), len(queued))
+                else:
+                    self._lanes_waiting.discard(backend)
+                    log.info("%s lane: queued sources are reachable again; claiming.", backend.upper())
+            if waiting:
                 self._claim_backoff[backend] = monotonic() + OUTAGE_BACKOFF_SECONDS
-                log.warning("%s lane: all %d queued sources are on unavailable library roots; waiting.",
-                            backend.upper(), len(queued))
                 return None
             job = claimable[0]
             job.status = "encoding"
@@ -888,6 +899,9 @@ class QueueService:
                     continue  # A source swap is never interrupted by policy changes.
                 if self._awaits_root(job, unavailable_roots):
                     # A dropped mount is not a verdict: re-check once the root is back.
+                    if WAITING_FOR_ROOT not in job.reasons:
+                        job.reasons = [*job.reasons, WAITING_FOR_ROOT]
+                        self.repository.save(job)
                     continue
                 before = job.model_dump()
                 result = None
@@ -937,6 +951,7 @@ class QueueService:
                     job.finished_at = now()
                 elif job.status == "queued":
                     assert result is not None
+                    job.reasons = [reason for reason in job.reasons if reason != WAITING_FOR_ROOT]
                     job.preserve_audio = result.preserve_audio
                     job.source_size = result.source_size
                     job.estimated_output_size = result.estimated_output_size
