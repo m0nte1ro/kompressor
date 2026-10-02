@@ -80,22 +80,6 @@ def _fsync_directory(directory: Path) -> None:
         os.close(descriptor)
 
 
-def _preserve_owner(target: Path, source: os.stat_result) -> list[str]:
-    """Best effort: give the replacement the original's owner/group.
-
-    On unprivileged LXC bind mounts Kompressor may create, rename and delete
-    files via ACLs while chown is forbidden; that is reported, never fatal.
-    """
-    current = target.lstat()
-    if (current.st_uid, current.st_gid) == (source.st_uid, source.st_gid):
-        return []
-    try:
-        os.chown(target, source.st_uid, source.st_gid, follow_symlinks=False)
-    except OSError as error:
-        return [f"Source replaced, but its owner/group could not be preserved: it is now "
-                f"{current.st_uid}:{current.st_gid} instead of {source.st_uid}:{source.st_gid} ({error.strerror})."]
-    return []
-
 
 class SourceReplacer:
     def plan(self, job_id: str, target: Path, output_size: int) -> ReplacementJournal:
@@ -159,8 +143,9 @@ class SourceReplacer:
                 destination.write(chunk)
             destination.flush()
             os.fsync(destination.fileno())
-        # Preserve the original mode now; owner/group only after final validation
-        # (step 4), because a chown can remove Kompressor's own read access.
+        # Preserve the original mode. Do not attempt to preserve owner/group:
+        # on unprivileged LXC bind mounts the worker can create/rename/delete via
+        # ACLs, but chown to the host file owner is intentionally unavailable.
         try:
             os.chmod(incoming, stat.S_IMODE(source.st_mode))
         except OSError as error:
@@ -202,7 +187,7 @@ class SourceReplacer:
         save(journal)
 
         # 4. The replacement is verified; the backup can go.
-        notes = _preserve_owner(target, source)
+        notes = []
         if _identity(backup) == (journal.source_device, journal.source_inode):
             try:
                 backup.unlink()
