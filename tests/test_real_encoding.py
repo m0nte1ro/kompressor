@@ -405,7 +405,8 @@ def test_output_validation_reports_codec_resolution_duration_and_stream_loss(pro
 class FakeProcess:
     def __init__(self, command, *, exit_code=0, output_size=100_000_000, stderr=""):
         self.command = command
-        self.stdout = io.StringIO("out_time_us=60000000\nprogress=continue\nout_time_us=120500000\nprogress=end\n")
+        self.stdout = io.StringIO("frame=1440\nout_time_us=60000000\nprogress=continue\n"
+                                  "frame=2892\nout_time_us=120500000\nprogress=end\n")
         self.stderr = io.StringIO(stderr)
         self.returncode = exit_code
         # Output to stdout ("-") means an unpatched helper such as audio hashing.
@@ -468,6 +469,8 @@ def build_real_app(tmp_path, monkeypatch, source_probe, output_probe=None, *, ex
         hashed.append((Path(path), list(selectors)))
         return [f"track-{ordinal}" for ordinal in range(len(selectors))]
     monkeypatch.setattr(FFmpegEncoder, "packet_hashes", packet_hashes)
+    # Outputs decode cleanly unless a test says otherwise.
+    monkeypatch.setattr(FFmpegEncoder, "decode_errors", lambda self, job_id, path, **frames: [])
     spawned = []
     def popen(command, **kwargs):
         assert isinstance(command, list)
@@ -786,6 +789,7 @@ def build_gpu_show_processor(tmp_path, monkeypatch, probe_facts):
     monkeypatch.setattr(FFprobeService, "inspect", inspect)
     monkeypatch.setattr(FFmpegEncoder, "packet_hashes",
                         lambda self, job_id, path, selectors: [f"track-{i}" for i in range(len(selectors))])
+    monkeypatch.setattr(FFmpegEncoder, "decode_errors", lambda self, job_id, path, **frames: [])
     spawned = []
 
     def popen(command, **kwargs):

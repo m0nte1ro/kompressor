@@ -16,7 +16,7 @@ from app.services.errors import Conflict
 from app.services.estimation import plan_audio_tracks
 from app.services.policy import PolicyEngine
 from app.workers import replacement
-from app.workers.ffmpeg import FFmpegEncoder, FFmpegError
+from app.workers.ffmpeg import FFmpegEncoder, FFmpegError, source_frame_count
 from app.workers.replacement import ReplacementError, SourceReplacer, replacement_reasons
 from tests.test_real_encoding import (build_real_app, movie_item, probe_facts, gpu_preset,  # noqa: F401
                                       queue_job)
@@ -522,6 +522,80 @@ def test_packet_hash_report_is_parsed_strictly(tmp_path, monkeypatch):
     assert encoder.packet_hashes("job", tmp_path / "x.mkv", ["0:1", "0:2"]) == ["a" * 64, "b" * 64]
     with pytest.raises(FFmpegError, match="unexpected hash report"):
         encoder.packet_hashes("job", tmp_path / "x.mkv", ["0:1", "0:2"])
+
+
+class DecodeProcess:
+    def __init__(self, stdout="", stderr="", returncode=0):
+        self.stdout, self.stderr, self.returncode = stdout, stderr, returncode
+
+    def communicate(self):
+        return self.stdout, self.stderr
+
+    def poll(self):
+        return self.returncode
+
+
+def decode_progress(frames):
+    return f"frame=100\nprogress=continue\nframe={frames}\nprogress=end\n"
+
+
+@pytest.mark.parametrize("process, kwargs, expected", [
+    (DecodeProcess(decode_progress(2892)), {"encoded_frames": 2892, "source_frames": 2892}, []),
+    # mkvmerge statistics may be a little off; within 0.1% (at least two frames) passes.
+    (DecodeProcess(decode_progress(2890)), {"source_frames": 2892}, []),
+    (DecodeProcess(decode_progress(2892), stderr="[hevc @ 0x1] Could not find ref with POC 12\n"), {},
+     ["Decoding the output reported errors: [hevc @ 0x1] Could not find ref with POC 12"]),
+    (DecodeProcess(decode_progress(10), stderr="Invalid data found\n", returncode=1), {},
+     ["The output could not be decoded in full: Invalid data found"]),
+    (DecodeProcess("progress=end\n"), {}, ["Decoding the output produced no video frames."]),
+    (DecodeProcess(decode_progress(2880)), {"encoded_frames": 2892},
+     ["The output decodes to 2880 video frames; the encoder wrote 2892."]),
+    (DecodeProcess(decode_progress(2600)), {"source_frames": 2892},
+     ["The output has 2600 video frames; the source's track statistics list 2892."]),
+])
+def test_output_is_decoded_in_full_and_frame_counts_must_match(tmp_path, monkeypatch, process, kwargs, expected):
+    commands = []
+
+    def popen(command, **options):
+        commands.append(command)
+        return process
+
+    monkeypatch.setattr("app.workers.ffmpeg.subprocess.Popen", popen)
+    encoder = FFmpegEncoder("ffmpeg", tmp_path)
+    assert encoder.decode_errors("job", tmp_path / "out.mkv", **kwargs) == expected
+    command = commands[0]
+    assert command[command.index("-map") + 1] == "0:v:0"
+    assert command[-3:] == ["-f", "null", "-"]
+
+
+def test_source_frame_count_reads_mkvmerge_statistics_with_a_language_suffix(probe_facts):
+    video = next(stream for stream in probe_facts.streams if stream.kind == "video")
+    assert source_frame_count(video.model_copy(update={"metadata": {}})) is None
+    assert source_frame_count(video.model_copy(update={"metadata": {"NUMBER_OF_FRAMES-eng": "2892"}})) == 2892
+    assert source_frame_count(video.model_copy(update={"metadata": {"NUMBER_OF_FRAMES": "n/a"}})) is None
+
+
+def test_output_that_does_not_decode_cleanly_never_replaces_the_source(tmp_path, monkeypatch, probe_facts):
+    application, source, workspace, _ = build_real_app(
+        tmp_path, monkeypatch, probe_facts, hevc_output(probe_facts), output_size=1_000_000)
+    calls = []
+
+    def decode_errors(self, job_id, path, **frames):
+        calls.append((Path(path).name, frames))
+        return ["Decoding the output reported errors: corrupt frame"]
+
+    monkeypatch.setattr(FFmpegEncoder, "decode_errors", decode_errors)
+    before = source.stat()
+    with TestClient(application):
+        saved = run_one(application.state.media_processor, replace_source=True)
+    assert saved["status"] == "failed" and saved["source_replaced"] is False
+    assert saved["validation_errors"] == ["Decoding the output reported errors: corrupt frame"]
+    # The partial is decoded before promotion, with the frame count ffmpeg reported writing.
+    assert calls == [("Fixture.kompressor.partial.mkv", {"encoded_frames": 2892, "source_frames": None})]
+    after = source.stat()
+    assert (after.st_ino, after.st_size, after.st_mtime_ns) == (before.st_ino, before.st_size, before.st_mtime_ns)
+    assert sorted(source.parent.iterdir()) == [source]
+    assert not workspace_outputs(workspace)
 
 
 @pytest.mark.parametrize("change, message", [

@@ -41,8 +41,9 @@ FastAPI, so restarting or stopping the WebUI does not terminate its ffmpeg subpr
 Both real lanes accept only confirmed SDR progressive sources and keep resolution.
 Each job writes a validated MKV under the workspace, then either keeps it there
 (keep original) or swaps it in place of an MKV source (replace, the WebUI default).
-Replacement happens only after output validation, a bit-exact check of every copied
-audio track and the preset's minimum measured saving; the original stays as a hidden
+Replacement happens only after output validation, a full decode of the output's
+video, a bit-exact check of every copied audio track and the preset's minimum
+measured saving; the original stays as a hidden
 backup until the replaced file is verified. Audio is copied untouched unless the
 job explicitly unticks Preserve Audio; CPU always copies audio, and GPU can then
 apply the Efficient Audio rules. HDR is not enabled.

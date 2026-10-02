@@ -34,6 +34,22 @@ def stale_statistics_args(stream: StreamFacts, specifier: str) -> list[str]:
     return args
 
 
+def source_frame_count(stream: StreamFacts | None) -> int | None:
+    """Frame count from the source's mkvmerge track statistics, if it has them."""
+    if stream is None:
+        return None
+    for key, value in stream.metadata.items():
+        base, separator, suffix = key.rpartition("-")
+        name = base if separator and re.fullmatch(r"[A-Za-z]{2,3}", suffix) else key
+        if name.upper() == "NUMBER_OF_FRAMES":
+            try:
+                count = int(str(value).strip())
+            except ValueError:
+                return None
+            return count if count > 0 else None
+    return None
+
+
 class FFmpegError(RuntimeError):
     def __init__(self, message: str, exit_code: int | None = None):
         super().__init__(message)
@@ -50,6 +66,8 @@ class FFmpegOutput:
     final_path: Path
     exit_code: int
     stderr: str
+    # Video frames ffmpeg reported writing; None when its progress never said.
+    frames: int | None = None
 
 
 class FFmpegEncoder:
@@ -265,31 +283,10 @@ class FFmpegEncoder:
         for selector in selectors:
             command.extend(["-map", selector])
         command.extend(["-c", "copy", "-f", "streamhash", "-hash", "sha256", "-"])
-        try:
-            process = subprocess.Popen(command, shell=False, stdin=subprocess.DEVNULL,
-                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        except OSError as error:
-            raise FFmpegError(f"Could not run ffmpeg to verify audio: {error}") from error
-        with self._lock:
-            cancelled = job_id in self._cancelled
-            if not cancelled:
-                self._processes[job_id] = process
-        try:
-            if cancelled:
-                self._terminate(process)
-                raise EncodingCancelled("Audio verification was stopped.")
-            stdout, stderr = process.communicate()
-        finally:
-            if process.poll() is None:
-                self._terminate(process)
-            with self._lock:
-                self._processes.pop(job_id, None)
-                cancelled = job_id in self._cancelled
-        if cancelled:
-            raise EncodingCancelled("Audio verification was stopped.")
-        if process.returncode:
-            raise FFmpegError(f"Audio verification failed: {(stderr or '').strip()[-2000:]}",
-                              process.returncode)
+        stdout, stderr, returncode = self._run_owned(
+            job_id, command, "verify audio", "Audio verification was stopped.")
+        if returncode:
+            raise FFmpegError(f"Audio verification failed: {stderr.strip()[-2000:]}", returncode)
         hashes: dict[int, str] = {}
         for line in stdout.splitlines():
             match = re.fullmatch(r"(\d+),a,SHA256=([0-9a-f]{64})", line.strip())
@@ -298,6 +295,75 @@ class FFmpegEncoder:
         if sorted(hashes) != list(range(len(selectors))):
             raise FFmpegError("Audio verification returned an unexpected hash report.")
         return [hashes[index] for index in range(len(selectors))]
+
+    def _run_owned(self, job_id: str, command: list[str], what: str,
+                   stopped: str) -> tuple[str, str, int]:
+        """Run a helper ffmpeg owned like an encode, so Stop & Skip and shutdown end it."""
+        try:
+            process = subprocess.Popen(command, shell=False, stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        except OSError as error:
+            raise FFmpegError(f"Could not run ffmpeg to {what}: {error}") from error
+        with self._lock:
+            cancelled = job_id in self._cancelled
+            if not cancelled:
+                self._processes[job_id] = process
+        try:
+            if cancelled:
+                self._terminate(process)
+                raise EncodingCancelled(stopped)
+            stdout, stderr = process.communicate()
+        finally:
+            if process.poll() is None:
+                self._terminate(process)
+            with self._lock:
+                self._processes.pop(job_id, None)
+                cancelled = job_id in self._cancelled
+        if cancelled:
+            raise EncodingCancelled(stopped)
+        return stdout or "", stderr or "", process.returncode
+
+    def decode_errors(self, job_id: str, path: Path, *, encoded_frames: int | None = None,
+                      source_frames: int | None = None) -> list[str]:
+        """Decode the output's video in full before anything trusts it.
+
+        ffprobe validation reads headers and the first frames only, so damage
+        further in (dropped or corrupt frames while ffmpeg still exits 0) would
+        otherwise reach the source path. Any decoder error fails, and so does a
+        frame count that differs from what the encoder wrote, or clearly from the
+        source's own track statistics.
+        """
+        command = [self.binary, "-hide_banner", "-nostdin", "-v", "error",
+                   "-protocol_whitelist", "file,pipe", "-i", str(path), "-map", "0:v:0",
+                   "-progress", "pipe:1", "-nostats", "-f", "null", "-"]
+        stdout, stderr, returncode = self._run_owned(
+            job_id, command, "decode the output", "Output decoding was stopped.")
+        problems = [line for line in stderr.strip().splitlines() if line.strip()]
+        if returncode:
+            detail = "; ".join(problems[:5]) or f"ffmpeg exited with status {returncode}"
+            return [f"The output could not be decoded in full: {detail}"]
+        if problems:
+            more = f" (+{len(problems) - 5} more)" if len(problems) > 5 else ""
+            return [f"Decoding the output reported errors: {'; '.join(problems[:5])}{more}"]
+        frames = None
+        for line in stdout.splitlines():
+            key, separator, value = line.strip().partition("=")
+            if separator and key == "frame":
+                try:
+                    frames = int(value)
+                except ValueError:
+                    continue
+        if not frames:
+            return ["Decoding the output produced no video frames."]
+        errors = []
+        if encoded_frames is not None and frames != encoded_frames:
+            errors.append(f"The output decodes to {frames} video frames; the encoder wrote {encoded_frames}.")
+        # mkvmerge statistics can be slightly off for remuxed sources; only a clear
+        # difference (above 0.1%) means frames were lost while encoding.
+        if source_frames is not None and abs(frames - source_frames) > max(2, source_frames // 1000):
+            errors.append(f"The output has {frames} video frames; the source's track statistics "
+                          f"list {source_frames}.")
+        return errors
 
     def copied_audio_mismatches(self, job: QueueJob, source_path: Path, source_probe: MediaProbeResult,
                                 output_path: Path, output_probe: MediaProbeResult) -> list[str]:
@@ -333,6 +399,7 @@ class FFmpegEncoder:
         )
         started = monotonic()
         output_us = 0
+        frames: int | None = None
         stderr_tail: deque[str] = deque()
         stderr_lock = Lock()
         process: subprocess.Popen[str] | None = None
@@ -368,6 +435,11 @@ class FFmpegEncoder:
                         output_us = max(output_us, int(value))
                     except ValueError:
                         continue
+                elif key == "frame":
+                    try:
+                        frames = int(value)
+                    except ValueError:
+                        continue
                 elif key == "progress":
                     duration = probe.duration_seconds
                     percent = min(99.0, output_us / (duration * 1_000_000) * 100) if duration and duration > 0 else None
@@ -382,7 +454,7 @@ class FFmpegEncoder:
                 error_text = "\n".join(stderr_tail)[-16_384:]
             if exit_code != 0:
                 raise FFmpegError(error_text or f"ffmpeg exited with status {exit_code}.", exit_code)
-            return FFmpegOutput(partial, final, exit_code, error_text)
+            return FFmpegOutput(partial, final, exit_code, error_text, frames)
         except FileNotFoundError as error:
             partial.unlink(missing_ok=True)
             raise FFmpegError(f"ffmpeg executable not found: {self.binary}") from error

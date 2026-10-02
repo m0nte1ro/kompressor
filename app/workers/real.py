@@ -14,7 +14,7 @@ from app.services.analysis import AnalysisTarget
 from app.services.errors import Conflict
 from app.services.source_guard import SourceGuard
 from app.services.filesystem_source import FilesystemObservationSource
-from app.workers.ffmpeg import EncodingCancelled, FFmpegEncoder, FFmpegError
+from app.workers.ffmpeg import EncodingCancelled, FFmpegEncoder, FFmpegError, source_frame_count
 from app.workers.replacement import ReplacementError, SourceReplacer, replacement_reasons
 
 if TYPE_CHECKING:
@@ -292,6 +292,10 @@ class RealEncoderWorker:
             # bit-identical, or the job fails and nothing is promoted or replaced.
             errors = self.encoder.copied_audio_mismatches(
                 job, source_path, item.probe, output.partial_path, output_probe)
+        if not errors:
+            errors = self.encoder.decode_errors(
+                job.id, output.partial_path, encoded_frames=output.frames,
+                source_frames=source_frame_count(_primary_video(item)))
         if errors:
             queue.record_validation_errors(job.id, errors)
             raise Conflict("Output validation failed: " + "; ".join(errors))
@@ -325,6 +329,9 @@ class RealEncoderWorker:
         errors = capability.validate_output(item, job, output_probe, output)
         if not errors:
             errors = self.encoder.copied_audio_mismatches(job, source_path, item.probe, output, output_probe)
+        if not errors:
+            errors = self.encoder.decode_errors(
+                job.id, output, source_frames=source_frame_count(_primary_video(item)))
         if errors:
             queue.record_validation_errors(job.id, errors)
             raise Conflict("Kept output failed validation: " + "; ".join(errors))

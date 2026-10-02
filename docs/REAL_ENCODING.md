@@ -43,7 +43,12 @@ revision, root/path, physical identity and stat evidence immediately before
 starting FFmpeg. After FFmpeg succeeds, ffprobe validates codec, dimensions, progressive scan,
 requested bit depth, SDR signalling, known source colour range, duration,
 preserved stream/chapter counts, stream order and every audio track (see
-[Audio safety](#audio-safety)). Only then is the partial promoted to
+[Audio safety](#audio-safety)). ffprobe reads only headers and the first frames, so
+the output's video is then decoded in full (`ffmpeg -map 0:v:0 -f null -`): any
+decoder error fails the job, as does a decoded frame count that differs from the
+frames ffmpeg reported writing, or by more than 0.1% from the source's mkvmerge
+`NUMBER_OF_FRAMES` statistic when it has one. This costs one more read of the
+output and CPU decode time, never another encode. Only then is the partial promoted to
 `<source-stem>.kompressor.mkv`. A keep-original job ends there and never renames,
 truncates, replaces or deletes the source. Re-encoded video (and audio converted by Efficient Audio) drops
 copied mkvmerge track statistics (`BPS`, `NUMBER_OF_BYTES`, `NUMBER_OF_FRAMES`,
