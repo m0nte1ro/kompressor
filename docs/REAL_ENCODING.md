@@ -205,7 +205,7 @@ Replacement also runs `before_replacement` directly before the swap, so a file t
 becomes hardlinked (for example re-seeded) while encoding is not replaced.
 
 After replacement the inventory still describes the old file until the next
-**Scan library**. Queueing the same item again before that fails safely at the source
+**Rescan library**. Queueing the same item again before that fails safely at the source
 guard. After the rescan it shows HEVC and is blocked by "Preset does not allow HEVC
 recompression" unless a preset allows it.
 

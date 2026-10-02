@@ -23,7 +23,7 @@ Roots default to unconfigured, never to production paths. Either root can be
 omitted. Environment roots are defaults; paths explicitly saved in Settings take
 precedence. Paths must be absolute and non-overlapping, with the application
 SQLite database outside them. Saving paths does not scan, create or move media.
-Use **Settings → Scan library**, or `POST /api/library/scan`, to initiate discovery.
+Use **Settings → Rescan library**, or `POST /api/library/scan`, to initiate discovery.
 `GET /api/library/scan` shows the current/last report in this application process.
 
 Scans are explicit and run in a managed background thread. POST returns 202;

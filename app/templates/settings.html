@@ -36,7 +36,7 @@
 {% endfor %}
 <section class="card library-settings" aria-labelledby="library-settings-title">
   <h2 id="library-settings-title">Library paths</h2>
-  <p class="muted">Saved paths override environment defaults, including empty paths. They apply to the next scan; an active scan keeps its original roots. In filesystem mode, use Scan library after saving. Leave a root empty to disable it. Scans never modify media.</p>
+  <p class="muted">Saved paths override environment defaults, including empty paths. They apply to the next scan; an active scan keeps its original roots. In filesystem mode, use Rescan library after saving. Leave a root empty to disable it. Scans never modify media.</p>
   <form id="library-paths-form" class="field-grid">
     <label class="field">Movies path<input name="movies_path" value="{{ library_paths.movies_path }}" maxlength="500"></label>
     <label class="field">Shows path<input name="shows_path" value="{{ library_paths.shows_path }}" maxlength="500"></label>
