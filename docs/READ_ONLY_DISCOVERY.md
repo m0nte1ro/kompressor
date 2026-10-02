@@ -76,7 +76,8 @@ rename, delete, chmod/chown, hash, or traverse symlink files/directories. A syml
 root is unavailable. Supported extensions are listed in `filesystem_scanner.py`.
 
 Incomplete directory traversal yields a partial scan; an inaccessible root yields
-an unavailable scan. Neither marks unobserved records missing. Complete scans can
+an unavailable scan, and so does an empty root that held files at the last scan (an
+unmounted mount point is an empty directory). Neither marks unobserved records missing. Complete scans can
 mark missing records without deleting their history. Probe failures do not turn a
 physically discovered file into a missing file. Stat facts are checked again after
 probing; facts from a file changed during the probe are discarded and reported.

@@ -89,6 +89,13 @@ reports itself locked, because the lane cannot claim its next job until that wri
 lands; other write errors are logged after five attempts and left to restart
 recovery. A failed progress write is only logged and never ends a healthy encode.
 
+A library root that cannot be listed, or is empty (unmounted), is an outage, not a
+verdict on its jobs. Queued jobs on it stay queued: revalidation skips them instead of
+blocking them, and the lane claims jobs on other roots or waits, re-checking every
+10 seconds. An encode that fails while its root is unavailable is requeued from zero
+with a note instead of failing. A file that is missing while its root is reachable
+still blocks its job, as before.
+
 
 ## Audio safety
 

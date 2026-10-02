@@ -1,4 +1,5 @@
 """Fresh, read-only source stat observations for SourceGuard."""
+import os
 import stat
 from pathlib import Path, PurePosixPath
 from collections.abc import Callable
@@ -40,6 +41,21 @@ class FilesystemObservationSource:
             return path
         except OSError:
             return None
+
+    def root_available(self, root_id: str) -> bool | None:
+        """Whether a configured root can be listed and is not an empty mount point.
+
+        None when no configured root has this ID: removing a root is a setting,
+        not an outage.
+        """
+        root = self._root(root_id)
+        if root is None:
+            return None
+        try:
+            with os.scandir(root) as entries:
+                return next(entries, None) is not None
+        except OSError:
+            return False
 
     def reference_for(self, file_id: str, revision_id: str) -> SourceReference | None:
         record = self.inventory.get_file(file_id)

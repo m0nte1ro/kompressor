@@ -53,8 +53,14 @@ class FilesystemScanner:
             if not root.is_dir() or root.is_symlink():
                 raise OSError(f'Root is unavailable or a symlink: {root}')
             # Explicitly test enumeration; os.walk otherwise reports a missing root ambiguously.
-            with os.scandir(root):
-                pass
+            with os.scandir(root) as entries:
+                empty = next(entries, None) is None
+            # An unmounted mount point is an empty directory. Scanning it as complete
+            # would mark every file missing and block their queued jobs.
+            present = sum(f.presence == 'present' for f in existing)
+            if empty and present:
+                raise OSError(f'Root is empty but held {present} files at the last scan; '
+                              f'it may be unmounted: {root}')
         except OSError as error:
             snapshot.status = 'unavailable'
             return snapshot, [str(error)]

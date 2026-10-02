@@ -1,6 +1,7 @@
 """Standalone real encoder worker with one owned backend lane per process."""
 import logging
 import sqlite3
+import time
 from collections.abc import Callable
 from pathlib import Path
 from threading import Event, Lock, Thread
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
 Backend = Literal["cpu", "gpu"]
 T = TypeVar("T")
 PERSIST_ATTEMPTS = 5
+ROOT_CHECK_SECONDS = 2.0
 
 
 log = logging.getLogger(__name__)
@@ -101,6 +103,7 @@ class RealEncoderWorker:
         self._control_thread: Thread | None = None
         self._cancelled: set[str] = set()
         self._active: set[str] = set()
+        self._root_checks: dict[str, tuple[float, bool | None]] = {}
 
     def diagnostics(self, runtime: dict) -> dict:
         supported = list(runtime.get("supported_backends", self.supported_backends))
@@ -139,6 +142,24 @@ class RealEncoderWorker:
             else:
                 reasons.extend(replacement_reasons(path))
         return list(dict.fromkeys(reasons))
+
+    def source_outage(self, job: QueueJob) -> str | None:
+        """Why the job's library root is unreachable right now, if it is.
+
+        An unmounted or unreachable root is an outage, not a verdict on the job:
+        the queue keeps such jobs waiting instead of blocking or failing them.
+        """
+        reference = job.source_reference
+        if reference is None or reference.root_id is None:
+            return None
+        # One claim revalidates every queued job; list each root once, not per job.
+        checked_at, available = self._root_checks.get(reference.root_id, (float("-inf"), None))
+        if time.monotonic() - checked_at > ROOT_CHECK_SECONDS:
+            available = self.source.root_available(reference.root_id)
+            self._root_checks[reference.root_id] = (time.monotonic(), available)
+        if available is False:
+            return "The library root holding this source is unavailable (unmounted or unreachable)."
+        return None
 
     def recover_replacement(self, job: QueueJob) -> tuple[str, str]:
         """Resolve a replacement interrupted by a worker crash or kill.
@@ -238,6 +259,12 @@ class RealEncoderWorker:
                 if not self._stop.is_set() and queue:
                     owner = queue
                     self._persist("record the stop", lambda: owner.cancelled_real_job(job_id))
+            elif queue and (outage := self.source_outage(job)) and self._persist(
+                    "requeue the job", lambda: queue.requeue_real_job(
+                        job_id, "Requeued: the library root became unavailable while this job ran.")):
+                # The media mount dropped mid-encode; the failure says nothing about the job.
+                log.warning("%s Job %s was requeued: %s", outage, job_id, error)
+                self.encoder.cleanup(job_id, remove_final=True)
             else:
                 if queue:
                     owner = queue

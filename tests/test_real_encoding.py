@@ -1025,6 +1025,81 @@ def test_an_unkillable_ffmpeg_does_not_escape_termination(caplog):
     assert "has not exited" in caplog.text
 
 
+@pytest.fixture
+def no_outage_caching(monkeypatch):
+    from app.services import queue as queue_module
+    from app.workers import real
+    monkeypatch.setattr(real, "ROOT_CHECK_SECONDS", -1.0)
+    monkeypatch.setattr(queue_module, "OUTAGE_BACKOFF_SECONDS", 0.0)
+
+
+def test_an_empty_mount_point_is_not_scanned_as_a_library_with_every_file_gone(tmp_path, monkeypatch, probe_facts):
+    application, source, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        processor.scan_library()
+        movie = processor.get_library().movies[0]
+        aside = tmp_path / "aside.mkv"
+        source.rename(aside)  # The pool is unmounted: its mount point is empty.
+        processor.scan_library()
+        # Still present, so its tags, history and queued jobs keep their file identity.
+        assert [m.id for m in processor.get_library().movies] == [movie.id]
+        aside.rename(source)
+        processor.scan_library()
+        assert [m.id for m in processor.get_library().movies] == [movie.id]
+
+
+def test_queued_jobs_wait_out_an_unreachable_library_root(tmp_path, monkeypatch, probe_facts, no_outage_caching):
+    application, source, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        processor.scan_library()
+        movie = processor.get_library().movies[0]
+        added = processor.queue_encode(EnqueueRequest(
+            media_ids=[movie.id], scope="movie", preset_id="movie-streaming-quality", replace_source=True))["added"]
+        root = source.parent
+        root.rename(tmp_path / "unmounted")
+        # Neither claimed (it would fail) nor blocked (that is final): it waits.
+        assert processor.queue.claim_next("cpu") is None
+        processor.queue.revalidate()
+        assert processor.queue._find(added[0]["id"]).status == "queued"
+        (tmp_path / "unmounted").rename(root)
+        job = processor.queue.claim_next("cpu")
+        assert job is not None and job.id == added[0]["id"]
+
+
+def test_an_encode_interrupted_by_a_dropped_mount_is_requeued_not_failed(
+        tmp_path, monkeypatch, probe_facts, no_outage_caching):
+    application, source, workspace, _ = build_real_app(tmp_path, monkeypatch, probe_facts, exit_code=1)
+    with TestClient(application):
+        processor, job = claimed_movie_job(application)
+        worker = processor.queue.worker
+        root = source.parent
+        original_progress = processor.queue.update_real_progress
+
+        def progress(job_id, percent, elapsed):
+            original_progress(job_id, percent, elapsed)
+            if root.exists():
+                root.rename(tmp_path / "unmounted")  # ffmpeg then fails with an I/O error.
+        processor.queue.update_real_progress = progress
+        worker._run_job(job)
+        current = processor.queue._find(job.id)
+        assert current.status == "queued" and current.error_message is None
+        assert current.reasons[-1] == "Requeued: the library root became unavailable while this job ran."
+        assert not list((workspace / "jobs" / job.id).glob("*.mkv"))
+        (tmp_path / "unmounted").rename(root)
+        assert processor.queue.claim_next("cpu").id == job.id
+
+
+def test_an_encode_failure_with_the_library_reachable_still_fails(tmp_path, monkeypatch, probe_facts):
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts, exit_code=1)
+    with TestClient(application):
+        processor, job = claimed_movie_job(application)
+        processor.queue.worker._run_job(job)
+        saved = history_entry(processor, job.id)
+    assert saved["status"] == "failed" and saved["ffmpeg_exit_code"] == 1
+
+
 def test_stop_request_survives_until_the_jobs_own_cleanup(tmp_path):
     encoder = FFmpegEncoder("ffmpeg", tmp_path / "workspace")
     encoder.stop("job-stop")

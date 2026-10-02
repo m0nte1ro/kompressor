@@ -1,7 +1,9 @@
 """Dual-lane scheduler. Policy decisions remain in the existing PolicyEngine."""
+import logging
 from pathlib import Path
 from datetime import datetime, timezone
 from threading import RLock
+from time import monotonic
 from typing import Literal
 from uuid import uuid4
 
@@ -18,6 +20,10 @@ from app.workers.base import EncoderWorker
 ACTIVE = {"encoding", "validating", "replacing", "stopping"}
 PENDING = {"queued", *ACTIVE}
 PRIORITIES = {"urgent": 3, "high": 2, "normal": 1, "low": 0}
+# How long a lane whose queued sources are all unreachable waits before looking again.
+OUTAGE_BACKOFF_SECONDS = 10.0
+
+log = logging.getLogger(__name__)
 
 
 def now() -> str:
@@ -41,6 +47,7 @@ class QueueService:
         self.external_backends = frozenset(getattr(worker, "external_backends", ()))
         self.supported_backends = frozenset(getattr(worker, "supported_backends", ("cpu", "gpu")))
         self.lock = RLock()
+        self._claim_backoff: dict[str, float] = {}
         self.move_sequence = max((j.move_next_order for j in repository.get_all()), default=0)
 
     @staticmethod
@@ -52,6 +59,10 @@ class QueueService:
             # sizes are authoritative, so expose the measured delta correctly.
             payload["measured_saving"] = job.source_size - job.output_size
         return payload
+
+    def _source_outage(self, job: QueueJob) -> str | None:
+        check = getattr(self.worker, "source_outage", None)
+        return check(job) if check and job.execution_mode == "real" else None
 
     def _queued(self, backend: str, jobs: list[QueueJob] | None = None) -> list[QueueJob]:
         source = self.repository.get_all() if jobs is None else jobs
@@ -530,6 +541,8 @@ class QueueService:
             return None
         if self.controls and not self.controls.can_claim(backend):
             return None
+        if monotonic() < self._claim_backoff.get(backend, 0.0):
+            return None
         # Idle workers poll frequently. Avoid BEGIN IMMEDIATE when there is
         # visibly no queued work; the transactional section below rechecks all
         # conditions before claiming, so this preflight cannot create a race.
@@ -544,7 +557,14 @@ class QueueService:
             queued = self._queued(backend)
             if not queued:
                 return None
-            job = queued[0]
+            # Jobs whose library root is unreachable wait; the rest of the lane runs.
+            claimable = [j for j in queued if not self._source_outage(j)]
+            if not claimable:
+                self._claim_backoff[backend] = monotonic() + OUTAGE_BACKOFF_SECONDS
+                log.warning("%s lane: all %d queued sources are on unavailable library roots; waiting.",
+                            backend.upper(), len(queued))
+                return None
+            job = claimable[0]
             job.status = "encoding"
             job.started_at = now()
             self.repository.save(job)
@@ -631,6 +651,27 @@ class QueueService:
             job.output_size = output_size
             job.measured_saving = job.source_size - output_size
             job.reasons = [*job.reasons, reason]
+            self.repository.save(job)
+            return True
+
+    def requeue_real_job(self, job_id: str, reason: str) -> bool:
+        """Put a job interrupted by a storage outage back in the queue, from zero."""
+        with self.lock, self.repository.transaction():
+            job = self._find(job_id)
+            if job.status not in {"encoding", "validating"} or job.cancel_requested:
+                return False
+            job.status = "queued"
+            job.progress = 0
+            job.progress_known = False
+            job.elapsed_seconds = 0
+            job.started_at = None
+            job.output_path = None
+            job.output_size = None
+            job.measured_saving = None
+            job.error_message = None
+            job.ffmpeg_exit_code = None
+            job.validation_errors = []
+            job.reasons = list(dict.fromkeys([*job.reasons, reason]))
             self.repository.save(job)
             return True
 
@@ -789,6 +830,9 @@ class QueueService:
                     continue
                 if job.status not in PENDING or job.status == "replacing":
                     continue  # A source swap is never interrupted by policy changes.
+                if job.status == "queued" and self._source_outage(job):
+                    # A dropped mount is not a verdict: re-check once the root is back.
+                    continue
                 before = job.model_dump()
                 result = None
                 try:
