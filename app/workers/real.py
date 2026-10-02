@@ -418,7 +418,7 @@ class RealEncoderWorker:
         if not errors:
             errors = self.encoder.decode_errors(
                 job.id, output.partial_path, encoded_frames=output.frames,
-                source_frames=source_frame_count(_primary_video(item)))
+                source_frames=source_frame_count(item.probe, _primary_video(item)))
         if errors:
             queue.record_validation_errors(job.id, errors)
             raise Conflict("Output validation failed: " + "; ".join(errors))
@@ -454,7 +454,7 @@ class RealEncoderWorker:
             errors = self.encoder.copied_audio_mismatches(job, source_path, item.probe, output, output_probe)
         if not errors:
             errors = self.encoder.decode_errors(
-                job.id, output, source_frames=source_frame_count(_primary_video(item)))
+                job.id, output, source_frames=source_frame_count(item.probe, _primary_video(item)))
         if errors:
             queue.record_validation_errors(job.id, errors)
             raise Conflict("Kept output failed validation: " + "; ".join(errors))

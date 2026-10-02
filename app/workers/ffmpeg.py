@@ -24,33 +24,47 @@ log = logging.getLogger(__name__)
 # stream is re-encoded. Keys may carry a language suffix, e.g. BPS-eng.
 MKV_STATISTICS_TAGS = {"BPS", "DURATION", "NUMBER_OF_FRAMES", "NUMBER_OF_BYTES",
                        "_STATISTICS_WRITING_APP", "_STATISTICS_WRITING_DATE_UTC", "_STATISTICS_TAGS"}
+# Applications that write track statistics, and the mark each leaves in the
+# muxing application of a file it wrote (ffprobe's format "encoder" tag).
+STATISTICS_WRITERS = {"mkvmerge": "libmatroska", "mkvpropedit": "libmatroska", "makemkv": "makemkv"}
+
+
+def statistics_name(key: str) -> str:
+    """The tag name without its language suffix: BPS-eng is BPS."""
+    base, separator, suffix = key.rpartition("-")
+    return (base if separator and re.fullmatch(r"[A-Za-z]{2,3}", suffix) else key).upper()
 
 
 def stale_statistics_args(stream: StreamFacts, specifier: str) -> list[str]:
     """Empty -metadata values delete the copied key from the re-encoded output stream."""
     args = []
     for key in stream.metadata:
-        base, separator, suffix = key.rpartition("-")
-        name = base if separator and re.fullmatch(r"[A-Za-z]{2,3}", suffix) else key
-        if name.upper() in MKV_STATISTICS_TAGS:
+        if statistics_name(key) in MKV_STATISTICS_TAGS:
             args.extend([f"-metadata:s:{specifier}", f"{key}="])
     return args
 
 
-def source_frame_count(stream: StreamFacts | None) -> int | None:
-    """Frame count from the source's mkvmerge track statistics, if it has them."""
+def source_frame_count(probe: MediaProbeResult, stream: StreamFacts | None) -> int | None:
+    """The source's frame count from its track statistics, when they are current.
+
+    ffmpeg and the tools built on it copy mkvmerge's statistics unchanged when
+    they remux, so after a trim the count describes frames that are gone. It
+    counts only when the application that wrote the statistics also wrote the
+    file: its mark (libmatroska for MKVToolNix) is in the file's muxing application.
+    """
     if stream is None:
         return None
-    for key, value in stream.metadata.items():
-        base, separator, suffix = key.rpartition("-")
-        name = base if separator and re.fullmatch(r"[A-Za-z]{2,3}", suffix) else key
-        if name.upper() == "NUMBER_OF_FRAMES":
-            try:
-                count = int(str(value).strip())
-            except ValueError:
-                return None
-            return count if count > 0 else None
-    return None
+    tags = {statistics_name(key): str(value).strip() for key, value in stream.metadata.items()}
+    writer = tags.get("_STATISTICS_WRITING_APP", "").split(maxsplit=1)
+    mark = STATISTICS_WRITERS.get(writer[0].lower()) if writer else None
+    muxer = next((str(value) for key, value in probe.metadata.items() if key.lower() == "encoder"), "")
+    if mark is None or mark not in muxer.lower():
+        return None
+    try:
+        count = int(tags.get("NUMBER_OF_FRAMES", ""))
+    except ValueError:
+        return None
+    return count if count > 0 else None
 
 
 class _StallWatch:
@@ -406,6 +420,8 @@ class FFmpegEncoder:
         frame count that differs from what the encoder wrote, or clearly from the
         source's own track statistics.
         """
+        # build_command maps the primary video first, so 0:v:0 is it, never cover
+        # art, and the encoder's reported frame count is that stream's count too.
         command = [self.binary, "-hide_banner", "-nostdin", "-v", "error",
                    "-protocol_whitelist", "file,pipe", "-i", str(path), "-map", "0:v:0",
                    "-progress", "pipe:1", "-nostats", "-f", "null", "-"]
@@ -431,8 +447,8 @@ class FFmpegEncoder:
         errors = []
         if encoded_frames is not None and frames != encoded_frames:
             errors.append(f"The output decodes to {frames} video frames; the encoder wrote {encoded_frames}.")
-        # mkvmerge statistics can be slightly off for remuxed sources; only a clear
-        # difference (above 0.1%) means frames were lost while encoding.
+        # Even current statistics can differ slightly from what ffmpeg decodes;
+        # only a clear difference (above 0.1%) means frames were lost while encoding.
         if source_frames is not None and abs(frames - source_frames) > max(2, source_frames // 1000):
             errors.append(f"The output has {frames} video frames; the source's track statistics "
                           f"list {source_frames}.")

@@ -47,7 +47,10 @@ preserved stream/chapter counts, stream order and every audio track (see
 the output's video is then decoded in full (`ffmpeg -map 0:v:0 -f null -`): any
 decoder error fails the job, as does a decoded frame count that differs from the
 frames ffmpeg reported writing, or by more than 0.1% from the source's mkvmerge
-`NUMBER_OF_FRAMES` statistic when it has one. This costs one more read of the
+`NUMBER_OF_FRAMES` statistic when it has a current one. ffmpeg and the tools built on
+it copy that statistic unchanged when they remux, even after a trim, so it counts only
+when the application that wrote it also wrote the file (MKVToolNix: `libmatroska` in
+the muxing application; MakeMKV); otherwise it is ignored. This costs one more read of the
 output and CPU decode time, never another encode. Only then is the partial promoted to
 `<source-stem>.kompressor.mkv`. A keep-original job ends there and never renames,
 truncates, replaces or deletes the source. Re-encoded video (and audio converted by Efficient Audio) drops

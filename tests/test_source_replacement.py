@@ -698,16 +698,40 @@ def test_output_is_decoded_in_full_and_frame_counts_must_match(tmp_path, monkeyp
     assert command[-3:] == ["-f", "null", "-"]
 
 
-def test_source_frame_count_reads_mkvmerge_statistics_with_a_language_suffix(probe_facts):
+MKVTOOLNIX_MUXER = "libebml v1.4.5 + libmatroska v1.7.1"
+
+
+def test_source_frame_count_trusts_only_statistics_written_with_the_file(probe_facts):
     video = next(stream for stream in probe_facts.streams if stream.kind == "video")
-    assert source_frame_count(video.model_copy(update={"metadata": {}})) is None
-    assert source_frame_count(video.model_copy(update={"metadata": {"NUMBER_OF_FRAMES-eng": "2892"}})) == 2892
-    assert source_frame_count(video.model_copy(update={"metadata": {"NUMBER_OF_FRAMES": "n/a"}})) is None
+
+    def frames(statistics, muxer):
+        probe = probe_facts.model_copy(update={"metadata": {"encoder": muxer} if muxer else {}})
+        return source_frame_count(probe, video.model_copy(update={"metadata": statistics}))
+
+    mkvmerge = {"NUMBER_OF_FRAMES-eng": "2892", "_STATISTICS_WRITING_APP-eng": "mkvmerge v81.0 ('Hello Ivy') 64-bit"}
+    assert frames(mkvmerge, MKVTOOLNIX_MUXER) == 2892
+    assert frames({**mkvmerge, "NUMBER_OF_FRAMES-eng": "n/a"}, MKVTOOLNIX_MUXER) is None
+    assert frames({}, MKVTOOLNIX_MUXER) is None
+    # ffmpeg remuxed (and perhaps trimmed) the file, copying mkvmerge's statistics unchanged.
+    assert frames(mkvmerge, "Lavf60.16.100") is None
+    assert frames(mkvmerge, None) is None
+    assert frames({"NUMBER_OF_FRAMES": "2892"}, MKVTOOLNIX_MUXER) is None  # Writer unknown.
+    makemkv = {"NUMBER_OF_FRAMES": "2892", "_STATISTICS_WRITING_APP": "MakeMKV v1.17.7 linux(x64-release)"}
+    assert frames(makemkv, "libmakemkv v1.17.7 (1.3.10/1.5.2) linux(x64-release)") == 2892
 
 
-def test_output_that_does_not_decode_cleanly_never_replaces_the_source(tmp_path, monkeypatch, probe_facts):
+@pytest.mark.parametrize("muxer, source_frames", [
+    (None, None),  # No statistics at all.
+    (MKVTOOLNIX_MUXER, 60551),  # mkvmerge wrote the file and its statistics.
+    ("Lavf58.76.100", None),  # ffmpeg remuxed it and copied them unchanged.
+])
+def test_output_that_does_not_decode_cleanly_never_replaces_the_source(
+        tmp_path, monkeypatch, probe_facts, muxer, source_frames):
+    from tests.test_real_encoding import with_statistics
+    source_probe = probe_facts if muxer is None else with_statistics(probe_facts).model_copy(
+        update={"metadata": {"encoder": muxer}})
     application, source, workspace, _ = build_real_app(
-        tmp_path, monkeypatch, probe_facts, hevc_output(probe_facts), output_size=1_000_000)
+        tmp_path, monkeypatch, source_probe, hevc_output(probe_facts), output_size=1_000_000)
     calls = []
 
     def decode_errors(self, job_id, path, **frames):
@@ -721,7 +745,7 @@ def test_output_that_does_not_decode_cleanly_never_replaces_the_source(tmp_path,
     assert saved["status"] == "failed" and saved["source_replaced"] is False
     assert saved["validation_errors"] == ["Decoding the output reported errors: corrupt frame"]
     # The partial is decoded before promotion, with the frame count ffmpeg reported writing.
-    assert calls == [("Fixture.kompressor.partial.mkv", {"encoded_frames": 2892, "source_frames": None})]
+    assert calls == [("Fixture.kompressor.partial.mkv", {"encoded_frames": 2892, "source_frames": source_frames})]
     after = source.stat()
     assert (after.st_ino, after.st_size, after.st_mtime_ns) == (before.st_ino, before.st_size, before.st_mtime_ns)
     assert sorted(source.parent.iterdir()) == [source]
