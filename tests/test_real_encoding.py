@@ -1,6 +1,7 @@
 import io
 import json
 import subprocess
+import threading
 from typing import cast
 from pathlib import Path
 
@@ -957,6 +958,71 @@ def test_stop_terminates_only_owned_process_and_removes_partial(tmp_path):
     assert not unrelated.terminated and not unrelated.killed
     assert not partial.exists()
     assert final.read_bytes() == b"already-promoted"
+
+
+class HungProcess:
+    """ffmpeg whose encoder is wedged: progress blocks keep coming, the position never moves."""
+    pid = 4242
+
+    def __init__(self, command):
+        self.returncode = None
+        self.terminated = threading.Event()
+        self.stdout = self._progress()
+        self.stderr = io.StringIO("")
+        Path(command[-1]).touch()
+
+    def _progress(self):
+        yield "frame=10\n"
+        yield "out_time_us=400000\n"
+        yield "progress=continue\n"
+        while not self.terminated.wait(0.01):
+            yield "frame=10\n"
+            yield "out_time_us=400000\n"
+            yield "progress=continue\n"
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        self.terminated.wait()
+        return self.returncode
+
+    def terminate(self):
+        self.returncode = 255
+        self.terminated.set()
+
+    def kill(self):
+        self.terminate()
+
+
+def test_a_hung_encode_is_killed_and_failed_so_the_lane_moves_on(tmp_path, monkeypatch, probe_facts):
+    spawned = []
+
+    def popen(command, **kwargs):
+        spawned.append(HungProcess(command))
+        return spawned[-1]
+
+    monkeypatch.setattr("app.workers.ffmpeg.subprocess.Popen", popen)
+    encoder = FFmpegEncoder("ffmpeg", tmp_path / "workspace", stall_seconds=0.1)
+    with pytest.raises(FFmpegError, match="made no progress"):
+        encoder.encode(queue_job(), Path("/media/Film.mkv"), probe_facts, lambda percent, elapsed: None)
+    assert spawned[0].terminated.is_set()
+    assert not encoder._processes
+
+
+def test_an_unkillable_ffmpeg_does_not_escape_termination(caplog):
+    class Unkillable:
+        pid = 4243
+        returncode = None
+        def poll(self): return None
+        def terminate(self): pass
+        def kill(self): pass
+        def wait(self, timeout=None): raise subprocess.TimeoutExpired("ffmpeg", timeout or 0)
+
+    encoder = FFmpegEncoder("ffmpeg", Path("/unused"), stop_grace_seconds=0.01)
+    with caplog.at_level("ERROR", logger="app.workers.ffmpeg"):
+        encoder._terminate(cast(subprocess.Popen[str], Unkillable()))
+    assert "has not exited" in caplog.text
 
 
 def test_stop_request_survives_until_the_jobs_own_cleanup(tmp_path):

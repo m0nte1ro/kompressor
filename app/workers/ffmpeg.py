@@ -3,11 +3,12 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+import logging
 import os
 import re
 import stat
 import subprocess
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from time import monotonic
 
 from app.workers import vaapi
@@ -15,6 +16,8 @@ from app.models.probe import MediaProbeResult, StreamFacts, assumed_sdr_colours,
 from app.models.queue import QueueJob
 from app.services.encoding_capability import SUPPORTED_PIXEL_FORMATS
 from app.services.estimation import plan_audio_tracks
+
+log = logging.getLogger(__name__)
 
 
 # mkvmerge track statistics describe the source bitstream; they are stale once a
@@ -117,10 +120,13 @@ class FFmpegEncoder:
         return vaapi.smoke_check(binary, device, ffprobe, workspace)
 
     def __init__(self, binary: str, workspace_root: Path, stop_grace_seconds: float = 5.0,
-                 gpu_device: Path | None = None):
+                 gpu_device: Path | None = None, stall_seconds: float = 900.0):
         self.binary = binary
         self.workspace_root = workspace_root.expanduser().absolute()
         self.stop_grace_seconds = stop_grace_seconds
+        # An encode whose output position does not advance for this long is hung
+        # (e.g. a wedged GPU) and is killed, so the lane can move on.
+        self.stall_seconds = stall_seconds
         self.gpu_device = gpu_device.expanduser().absolute() if gpu_device else None
         self._lock = Lock()
         self._processes: dict[str, subprocess.Popen[str]] = {}
@@ -403,6 +409,8 @@ class FFmpegEncoder:
         stderr_tail: deque[str] = deque()
         stderr_lock = Lock()
         process: subprocess.Popen[str] | None = None
+        finished, stalled = Event(), Event()
+        advanced = monotonic()
         try:
             if before_start is not None:
                 before_start()
@@ -425,6 +433,17 @@ class FFmpegEncoder:
                             stderr_tail.popleft()
             stderr_thread = Thread(target=read_stderr, name=f"ffmpeg-stderr-{job.id}", daemon=True)
             stderr_thread.start()
+
+            def watchdog():
+                # ffmpeg keeps printing progress blocks while the encoder is hung,
+                # so only an advancing output position or frame count counts.
+                assert process is not None
+                while not finished.wait(min(5.0, self.stall_seconds)):
+                    if monotonic() - advanced > self.stall_seconds:
+                        stalled.set()
+                        self._terminate(process)
+                        return
+            Thread(target=watchdog, name=f"ffmpeg-watchdog-{job.id}", daemon=True).start()
             assert process.stdout is not None
             for line in process.stdout:
                 key, separator, value = line.strip().partition("=")
@@ -432,14 +451,18 @@ class FFmpegEncoder:
                     continue
                 if key in {"out_time_us", "out_time_ms"}:
                     try:
-                        output_us = max(output_us, int(value))
+                        position = int(value)
                     except ValueError:
                         continue
+                    if position > output_us:
+                        output_us, advanced = position, monotonic()
                 elif key == "frame":
                     try:
-                        frames = int(value)
+                        count = int(value)
                     except ValueError:
                         continue
+                    if frames is None or count > frames:
+                        frames, advanced = count, monotonic()
                 elif key == "progress":
                     duration = probe.duration_seconds
                     percent = min(99.0, output_us / (duration * 1_000_000) * 100) if duration and duration > 0 else None
@@ -450,6 +473,9 @@ class FFmpegEncoder:
                 cancelled = job.id in self._cancelled
             if cancelled:
                 raise EncodingCancelled("Encoding was stopped.")
+            if stalled.is_set():
+                raise FFmpegError(f"ffmpeg made no progress for {self.stall_seconds / 60:g} minutes "
+                                  "and was stopped.", exit_code)
             with stderr_lock:
                 error_text = "\n".join(stderr_tail)[-16_384:]
             if exit_code != 0:
@@ -462,6 +488,7 @@ class FFmpegEncoder:
             partial.unlink(missing_ok=True)
             raise FFmpegError(f"Could not run ffmpeg: {error}") from error
         finally:
+            finished.set()
             if process is not None and process.poll() is None:
                 self._terminate(process)
             with self._lock:
@@ -536,7 +563,12 @@ class FFmpegEncoder:
                 process.kill()
             except OSError:
                 pass
-            process.wait(timeout=2)
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                # Stuck in uninterruptible I/O (e.g. a hung mount); it exits when
+                # the kernel lets it. Raising here would skip the caller's cleanup.
+                log.error("ffmpeg (pid %s) has not exited 2 s after SIGKILL.", process.pid)
 
     def stop(self, job_id: str) -> None:
         with self._lock:

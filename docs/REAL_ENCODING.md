@@ -75,6 +75,20 @@ under [Source replacement](#source-replacement). Pending jobs
 from the other runtime mode are blocked instead of being run by the wrong worker.
 CPU and GPU execution remain independent; one lane never recovers or stops the other.
 
+Each lane has exactly one owner. A worker takes an exclusive lock
+(`.kompressor-worker-<lane>.lock` next to the database) before its startup recovery,
+which requeues the lane's active job and clears its workspace; a second worker for the
+same lane (for example an old `qsv` unit next to the `gpu` unit) exits with status 4,
+which the units do not restart, instead of destroying the running encode.
+
+A lane never waits forever on its active job. An encode whose output position and
+frame count stop advancing for 15 minutes (a wedged GPU, a hung mount) is killed and
+failed; ffmpeg keeps printing progress while hung, so only real advancement counts.
+A job's state changes (completed, failed, stopped) are retried for as long as SQLite
+reports itself locked, because the lane cannot claim its next job until that write
+lands; other write errors are logged after five attempts and left to restart
+recovery. A failed progress write is only logged and never ends a healthy encode.
+
 
 ## Audio safety
 

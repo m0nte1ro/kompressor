@@ -1,6 +1,6 @@
 """Standalone real encoder worker with one owned backend lane per process."""
 import logging
-import time
+import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 from threading import Event, Lock, Thread
@@ -28,11 +28,41 @@ T = TypeVar("T")
 PERSIST_ATTEMPTS = 5
 
 
+log = logging.getLogger(__name__)
+
+
 def _primary_video(item: MediaItem):
     if item.probe is None:
         return None
     return next((s for s in item.probe.streams if s.kind == "video" and not s.dispositions.get("attached_pic")), None)
-log = logging.getLogger(__name__)
+
+
+def persist(what: str, action: Callable[[], T], stopping: Event) -> T | None:
+    """Write a job's state change, retrying while SQLite is locked.
+
+    Until this write lands the job still looks active, and the lane will not
+    claim anything else. A locked database (the web process mid-scan, say) is
+    therefore retried until it frees up or the worker shuts down, when restart
+    recovery takes over. Other errors are retried a few times, then logged.
+    Never raises: an escaped error would end the lane thread.
+    """
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return action()
+        except sqlite3.OperationalError:
+            if stopping.is_set():
+                log.exception("Could not %s before shutdown; restart recovery will resolve the job.", what)
+                return None
+            if attempt == PERSIST_ATTEMPTS:
+                log.warning("Could not %s yet (database busy); retrying until it succeeds.", what)
+        except Exception:
+            if attempt >= PERSIST_ATTEMPTS:
+                log.exception("Could not %s after %d attempts; restart recovery will resolve the job.",
+                              what, attempt)
+                return None
+        stopping.wait(min(attempt, 30))
 
 
 class RealEncoderWorker:
@@ -221,23 +251,18 @@ class RealEncoderWorker:
                 self._cancelled.discard(job_id)
             self._wake.set()
 
-    @staticmethod
-    def _persist(what: str, action: Callable[[], T]) -> T | None:
-        """Retry a job-state write (e.g. SQLite briefly locked by the web process).
+    def _persist(self, what: str, action: Callable[[], T]) -> T | None:
+        return persist(what, action, self._stop)
 
-        Never raises: an escaped error here would end the lane thread and leave
-        the job active until a restart, which then recovers it.
-        """
-        for attempt in range(1, PERSIST_ATTEMPTS + 1):
-            try:
-                return action()
-            except Exception:
-                if attempt == PERSIST_ATTEMPTS:
-                    log.exception("Could not %s after %d attempts; restart recovery will resolve the job.",
-                                  what, attempt)
-                    return None
-                time.sleep(attempt)
-        return None
+    def _report_progress(self, job_id: str, percent: float | None, elapsed: float) -> None:
+        """Progress is informational: a failed write must not end a healthy encode."""
+        queue = self.queue
+        if queue is None:
+            return
+        try:
+            queue.update_real_progress(job_id, percent, elapsed)
+        except Exception:
+            log.warning("Could not record progress for job %s; the encode continues.", job_id, exc_info=True)
 
     def _execute(self, job: QueueJob) -> None:
         queue = self.queue
@@ -284,7 +309,7 @@ class RealEncoderWorker:
 
         output = self.encoder.encode(
             job, source_path, item.probe,
-            lambda percent, elapsed: queue.update_real_progress(job.id, percent, elapsed),
+            lambda percent, elapsed: self._report_progress(job.id, percent, elapsed),
             before_start=lambda: self.guard.before_processing(reference),
         )
         if not queue.set_real_validating(job.id, str(output.final_path)):

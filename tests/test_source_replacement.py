@@ -288,23 +288,68 @@ def test_restart_after_a_stop_before_the_swap_keeps_the_validated_output(
         assert processor.replace_with_kept_output(job.id)["replaces_job_id"] == job.id
 
 
-def test_lane_survives_a_briefly_locked_database_when_recording_a_failure(monkeypatch):
+class Stopping:
+    """threading.Event stand-in whose waits return at once."""
+
+    def __init__(self):
+        self.stopped = False
+        self.waits = []
+
+    def is_set(self):
+        return self.stopped
+
+    def wait(self, seconds):
+        self.waits.append(seconds)
+        return self.stopped
+
+
+def test_a_locked_database_is_retried_until_the_job_state_is_written():
+    import sqlite3
     from app.workers import real
-    monkeypatch.setattr(real.time, "sleep", lambda seconds: None)
     attempts = []
 
-    def flaky():
+    def locked_for_a_while():
         attempts.append(1)
-        if len(attempts) < 3:
-            raise RuntimeError("database is locked")
+        if len(attempts) < 40:  # Far beyond the old five-attempt limit.
+            raise sqlite3.OperationalError("database is locked")
         return True
 
-    assert real.RealEncoderWorker._persist("record", flaky) is True and len(attempts) == 3
+    stopping = Stopping()
+    assert real.persist("record", locked_for_a_while, stopping) is True and len(attempts) == 40
+    assert max(stopping.waits) == 30  # Backs off, capped.
+
+
+def test_other_write_errors_give_up_and_shutdown_ends_lock_retries():
+    import sqlite3
+    from app.workers import real
+    attempts = []
 
     def broken():
-        raise RuntimeError("database is locked")
+        attempts.append(1)
+        raise RuntimeError("unexpected")
 
-    assert real.RealEncoderWorker._persist("record", broken) is None
+    assert real.persist("record", broken, Stopping()) is None and len(attempts) == real.PERSIST_ATTEMPTS
+
+    def locked():
+        raise sqlite3.OperationalError("database is locked")
+
+    stopping = Stopping()
+    stopping.stopped = True
+    assert real.persist("record", locked, stopping) is None and stopping.waits == []
+
+
+def test_a_failed_progress_write_does_not_end_the_encode(tmp_path, monkeypatch, probe_facts):
+    import sqlite3
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts, hevc_output(probe_facts),
+                                          output_size=1_000_000)
+    with TestClient(application):
+        processor = application.state.media_processor
+
+        def locked(*args):
+            raise sqlite3.OperationalError("database is locked")
+        processor.queue.update_real_progress = locked
+        saved = run_one(processor, replace_source=False)
+    assert saved["status"] == "completed", saved
 
 # --- SourceReplacer: failure paths and crash recovery on real files ----------------------
 
