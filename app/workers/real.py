@@ -259,11 +259,7 @@ class RealEncoderWorker:
                 if not self._stop.is_set() and queue:
                     owner = queue
                     self._persist("record the stop", lambda: owner.cancelled_real_job(job_id))
-            elif queue and (outage := self.source_outage(job)) and self._persist(
-                    "requeue the job", lambda: queue.requeue_real_job(
-                        job_id, "Requeued: the library root became unavailable while this job ran.")):
-                # The media mount dropped mid-encode; the failure says nothing about the job.
-                log.warning("%s Job %s was requeued: %s", outage, job_id, error)
+            elif self._requeue_after_outage(job, error):
                 self.encoder.cleanup(job_id, remove_final=True)
             else:
                 if queue:
@@ -280,6 +276,18 @@ class RealEncoderWorker:
                 self._active.discard(job_id)
                 self._cancelled.discard(job_id)
             self._wake.set()
+
+    def _requeue_after_outage(self, job: QueueJob, error: Exception) -> bool:
+        """Requeue a job that failed because its library root dropped away mid-job."""
+        queue = self.queue
+        outage = self.source_outage(job)
+        if queue is None or outage is None:
+            return False
+        requeued = self._persist("requeue the job", lambda: queue.requeue_real_job(
+            job.id, "Requeued: the library root became unavailable while this job ran."))
+        if requeued:
+            log.warning("%s Job %s was requeued: %s", outage, job.id, error)
+        return bool(requeued)
 
     def _persist(self, what: str, action: Callable[[], T]) -> T | None:
         return persist(what, action, self._stop)
