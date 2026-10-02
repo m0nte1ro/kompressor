@@ -150,11 +150,12 @@ Development uses fake/seed data.
 
 Example:
 
-````text
+```text
 fixtures/
 ├── media.json
 ├── presets.json
 └── queue.json
+```
 
 Fake services should be used where production adapters will later exist.
 
@@ -166,6 +167,7 @@ Use clear interfaces/adapters instead.
 
 Example architecture:
 
+```text
 Application services
         │
         ├── MediaRepository
@@ -185,30 +187,33 @@ Application services
         └── EncoderWorker
                 ├── FakeEncoderWorker              [dev]
                 └── FFmpegEncoderWorker            [production]
+```
 
 Development code must not require ffmpeg to import or start the application.
 
-4. Technology Stack
+# 4. Technology Stack
 
 Current preferred stack:
 
-Backend
-Python 3.12+
-FastAPI
-Pydantic
-SQLite later for persistent application state
-Jinja2
-Frontend
+## Backend
+
+- Python 3.12+
+- FastAPI
+- Pydantic
+- SQLite later for persistent application state
+- Jinja2
+
+## Frontend
 
 Frontend lives in the same repository as the backend.
 
 Preferred:
 
-server-rendered HTML
-Jinja2
-vanilla JavaScript
-custom CSS
-optional HTMX where it clearly simplifies interactions
+- server-rendered HTML
+- Jinja2
+- vanilla JavaScript
+- custom CSS
+- optional HTMX where it clearly simplifies interactions
 
 Do NOT introduce React, Vue, Node, npm, or a frontend build pipeline without a strong reason.
 
@@ -216,9 +221,11 @@ The WebUI should feel like a polished self-hosted/homelab tool rather than a gen
 
 Dark UI, compact, desktop-first.
 
-5. Repository Layout
+# 5. Repository Layout
 
 Target shape:
+
+```text
 kompressor/
 ├── app/
 │   ├── main.py
@@ -243,105 +250,113 @@ kompressor/
 ├── PROJECT_SPEC.md
 ├── README.md
 └── LICENSE
+```
 
 Frontend templates, JS and CSS remain in this repository.
 
-6. Production Environment
+# 6. Production Environment
 
 Production target is a Debian LXC container named kompressor.
 
 The production system will eventually have access to:
-/media/movies
-/media/shows
-/mnt/kompressor
+
+- /media/movies
+- /media/shows
+- /mnt/kompressor
+
 The media library currently originates from a mergerfs storage pool on the Proxmox host.
 
 The temporary compression workspace should live on host SSD/ZFS storage and appear inside the container as:
-/mnt/kompressor
+
+- /mnt/kompressor
+
 The media filesystem is the source of truth.
 
 SQLite stores application metadata/state, not the media itself.
 
-7. Media Inventory
+# 7. Media Inventory
 
 Kompressor must inventory Movies and TV Shows.
 
 Technical information should include where available:
 
-name/title
-year
-filesystem path
-source/release type
-file size
-duration
-width
-height
-resolution label
-video codec
-video bitrate
-HDR type
-Dolby Vision presence
-interlaced/progressive state
-audio tracks
-audio codecs
-channel count
-language metadata
-subtitle streams
-chapters
-attachments
-hardlink count
-tags
-queue state
-compression eligibility
-estimated output size
-estimated potential saving
+- name/title
+- year
+- filesystem path
+- source/release type
+- file size
+- duration
+- width
+- height
+- resolution label
+- video codec
+- video bitrate
+- HDR type
+- Dolby Vision presence
+- interlaced/progressive state
+- audio tracks
+- audio codecs
+- channel count
+- language metadata
+- subtitle streams
+- chapters
+- attachments
+- hardlink count
+- tags
+- queue state
+- compression eligibility
+- estimated output size
+- estimated potential saving
 
 Bitrate may come directly from metadata when trustworthy or be calculated from stream/file data.
 
-8. Movies View
+# 8. Movies View
 
 Movies are shown as a flat table.
 
 Suggested columns:
-Select
-Movie
-Year
-Source
-Resolution
-Video Codec
-HDR / DV
-Bitrate
-Size
-Audio
-Policy / Tags
-Estimated Saving
-Action
+
+- Select
+- Movie
+- Year
+- Source
+- Resolution
+- Video Codec
+- HDR / DV
+- Bitrate
+- Size
+- Audio
+- Policy / Tags
+- Estimated Saving
+- Action
+
 Useful filters:
 
-search
-H.264
-HEVC
-1080p
-4K
-HDR
-Dolby Vision
-protected
-compressible
-hardlinked
-queued
-low bitrate
-large files
+- search
+- H.264
+- HEVC
+- 1080p
+- 4K
+- HDR
+- Dolby Vision
+- protected
+- compressible
+- hardlinked
+- queued
+- low bitrate
+- large files
 
 Movie compression uses movie-scoped presets only.
 
 A Show preset must never appear when operating on a Movie.
 
-9. Shows View
+# 9. Shows View
 
 The first Shows page lists individual shows.
 
 Example:
 
+```text
 The Vampire Diaries
 171 episodes
 493 GB
@@ -349,6 +364,7 @@ The Vampire Diaries
 Modern Family
 250 episodes
 620 GB
+```
 
 Opening a show displays a flat episode table.
 
@@ -356,6 +372,7 @@ Do NOT display real season folders.
 
 Instead use small visual separators:
 
+```text
 Season 1
 
 S01E01 ...
@@ -365,25 +382,26 @@ Season 2
 
 S02E01 ...
 S02E02 ...
+```
 
 Suggested columns:
 
-Select
-Episode
-Resolution
-Video Codec
-Bitrate
-Size
-Audio
-Effective Policy / Tags
-Estimated Saving
-Action
+- Select
+- Episode
+- Resolution
+- Video Codec
+- Bitrate
+- Size
+- Audio
+- Effective Policy / Tags
+- Estimated Saving
+- Action
 
 Show compression uses show-scoped presets only.
 
 A Movie preset must never appear when operating on a Show/Episode.
 
-10. Presets
+# 10. Presets
 
 Kompressor ships with exactly five intentionally simple enabled built-in presets.
 They describe user intent rather than resolution-specific variants. Every default
@@ -405,59 +423,50 @@ The user should normally choose a preset rather than manually configuring encode
 
 A preset contains at least:
 
-id
-name
-scope: movie | show
-intent: preserve_quality | streaming_quality
-origin: built_in | custom
-enabled/disabled
-
-backend:
-    cpu
-    qsv
-
-destination codec:
-    hevc
-    av1 [future / disabled for now]
-
-target video bitrate
-rate control and encoder configuration
-quality value and clearly experimental planning range when using CRF/QVBR/ICQ
-
-target resolution:
-  keep
-  max_2160p
-  max_1080p
-  max_720p
-  max_576p
-  max_480p
-
-source applicability:
+- id
+- name
+- scope: movie | show
+- intent: preserve_quality | streaming_quality
+- origin: built_in | custom
+- enabled/disabled
+- backend:
+  - cpu
+  - qsv
+- destination codec:
+  - hevc
+  - av1 [future / disabled for now]
+- target video bitrate
+- rate control and encoder configuration
+- quality value and clearly experimental planning range when using CRF/QVBR/ICQ
+- target resolution:
+  - keep
+  - max_2160p
+  - max_1080p
+  - max_720p
+  - max_576p
+  - max_480p
+- source applicability:
   supported input resolutions, separate from the output target; defaults to all
   supported resolutions and is not a normal user-facing preset choice
-
-audio policy:
-    preserve
-    efficient
-
-audio conversion policy (a legacy preserve-audio-by-default field is retained for
-compatibility; audio is always preserved unless the job opts out)
-efficient audio rules for mono/stereo codec, multichannel codec, bitrates,
-channel handling and copy conditions
-
-target audio bitrate, if applicable
-
-HDR input support and output policy
-preserve source HDR mode by default; no implicit tone mapping
-HDR10 signalling preservation/validation for primaries, transfer, matrix,
-mastering display metadata, MaxCLL, MaxFALL and related playback metadata
-minimum source bitrate
-minimum expected saving %
-allow HEVC re-encode
+- audio policy:
+  - preserve
+  - efficient
+- audio conversion policy (a legacy preserve-audio-by-default field is retained for
+  compatibility; audio is always preserved unless the job opts out)
+- efficient audio rules for mono/stereo codec, multichannel codec, bitrates,
+  channel handling and copy conditions
+- target audio bitrate, if applicable
+- HDR input support and output policy
+- preserve source HDR mode by default; no implicit tone mapping
+- HDR10 signalling preservation/validation for primaries, transfer, matrix,
+  mastering display metadata, MaxCLL, MaxFALL and related playback metadata
+- minimum source bitrate
+- minimum expected saving %
+- allow HEVC re-encode
 
 AV1 may be represented in the model/UI but should remain disabled until implemented.
 
-11. Preset Scope
+# 11. Preset Scope
 
 Preset scope is strict.
 
@@ -471,29 +480,29 @@ means the preset only appears for Shows/Episodes.
 
 Scope filtering should be enforced by the backend/API and not merely hidden in JavaScript.
 
-12. Default Preset Catalogue
+# 12. Default Preset Catalogue
 
 The only enabled built-in defaults are:
 
-Just convert to HEVC
+**Just convert to HEVC**
 Scope: Movie; CPU/x265; HEVC; CRF quality mode; preserve source resolution;
 copy every audio track and language untouched; conservative, experimental
 high-fidelity starting point.
 
-Tone it down a bit + HEVC
+**Tone it down a bit + HEVC**
 Scope: Movie; CPU/x265; HEVC; CRF quality mode; preserve source resolution;
 copy every audio track and language untouched.
 
-Just convert to HEVC
+**Just convert to HEVC**
 Scope: Show; CPU/x265; HEVC; CRF quality mode; preserve source resolution;
 preserve audio; conservative, experimental high-fidelity starting point.
 
-Tone it down a bit + HEVC
+**Tone it down a bit + HEVC**
 Scope: Show; Intel GPU/iGPU (VA-API); HEVC; QVBR quality 23 with per-source-resolution
 nominal bitrates (480p 1, 576p 1.5, 720p 2.5, 1080p 4, 2160p 16 Mbps; other sizes
 use a bitrate chosen in the encode modal); preserve source resolution; preserve every audio track and language by default.
 
-Tone it down a bit + HEVC + Efficient Audio
+**Tone it down a bit + HEVC + Efficient Audio**
 Scope: Show; Intel GPU/iGPU; exactly the same video policy as Show Streaming
 Quality; preserve source resolution; deterministic efficient audio when the job
 unticks Preserve Audio (audio is still copied by default).
@@ -516,7 +525,8 @@ Custom presets support create, duplicate, edit, enable/disable and delete.
 Duplicating a built-in creates an independent custom preset with a new ID and a
 user-chosen name. Existing custom presets and queued preset snapshots are
 preserved during built-in catalogue migration.
-13. Compression Modal
+
+# 13. Compression Modal
 
 The compression modal must intentionally expose very few editable parameters.
 
@@ -526,12 +536,12 @@ Preset
 
 The following preset properties are then displayed as read-only / disabled controls:
 
-Video backend
-Destination codec
-Target bitrate
-Resolution policy
-Audio policy
-HDR policy
+- Video backend
+- Destination codec
+- Target bitrate
+- Resolution policy
+- Audio policy
+- HDR policy
 
 The user should NOT modify those fields in the compression modal.
 
@@ -539,9 +549,9 @@ They belong to the preset.
 
 Only these per-job overrides remain editable:
 
-Preserve Audio (ticked by default for every preset; conversion only when unticked)
-Preserve subtitles / chapters / attachments / metadata
-Output handling (Replace source after validation, the default, or Keep original)
+- Preserve Audio (ticked by default for every preset; conversion only when unticked)
+- Preserve subtitles / chapters / attachments / metadata
+- Output handling (Replace source after validation, the default, or Keep original)
 
 For Shows the suggested preset is the first eligible GPU preset (a Quality CPU tag
 falls back to CPU). Movies keep their CPU presets. The modal lists each item's
@@ -550,19 +560,19 @@ permanently convert audio or drop subtitles/metadata.
 
 The modal should also display:
 
-original/source format
-source resolution
-source bitrate
-source size
-source audio
-source HDR/DV state
-selected preset
-eligibility
-blocking reasons
-warnings
-estimated output size
-estimated saving
-estimated saving percentage
+- original/source format
+- source resolution
+- source bitrate
+- source size
+- source audio
+- source HDR/DV state
+- selected preset
+- eligibility
+- blocking reasons
+- warnings
+- estimated output size
+- estimated saving
+- estimated saving percentage
 
 For CRF/QVBR/ICQ presets, planning ranges remain internal estimate metadata. Do not
 present them as editable encoder settings or a midpoint as an exact predicted
@@ -572,21 +582,23 @@ Eligibility must come from the backend policy engine.
 
 Do NOT duplicate policy logic in JavaScript.
 
-14. Audio Behaviour
-Preserve Audio enabled
+# 14. Audio Behaviour
+
+## Preserve Audio enabled
 
 All audio tracks are copied bit-for-bit where the container supports them.
 
 This includes, for example:
 
-TrueHD
-DTS-HD MA
-E-AC3
-AC3
-AAC
-multiple languages
-commentary tracks
-Preserve Audio disabled
+- TrueHD
+- DTS-HD MA
+- E-AC3
+- AC3
+- AAC
+- multiple languages
+- commentary tracks
+
+## Preserve Audio disabled
 
 The preset's audio conversion policy decides what to do. Both built-in Movie
 presets always stream-copy every source audio track. The Movie modal Preserve
@@ -601,8 +613,8 @@ before a job completes or replaces its source.
 
 For a preset explicitly configured for audio conversion, it may use efficient codecs such as:
 
-E-AC3
-AAC
+- E-AC3
+- AAC
 
 Track languages, dispositions and channel layouts should be retained where
 practical. Downmixing surround audio is allowed only when explicitly part of an
@@ -620,17 +632,17 @@ Efficient audio policy must be deterministic enough to describe mono/stereo and
 multichannel codecs and bitrates, when already-efficient tracks are copied, how
 unknown bitrates are handled, and how channels are handled.
 
-15. Subtitle and Container Metadata
+# 15. Subtitle and Container Metadata
 
 Default behaviour should preserve:
 
-subtitles
-subtitle language metadata
-default/forced dispositions
-chapters
-attachments
-embedded fonts
-container metadata where practical
+- subtitles
+- subtitle language metadata
+- default/forced dispositions
+- chapters
+- attachments
+- embedded fonts
+- container metadata where practical
 
 The compression modal contains an option:
 
@@ -639,7 +651,8 @@ Preserve subtitles / chapters / attachments / metadata
 Default:
 
 enabled
-16. Tags
+
+# 16. Tags
 
 Tags are owned by Kompressor.
 
@@ -647,25 +660,30 @@ They are not Sonarr/Radarr tags.
 
 Initial important tags:
 
-Preserve A/V
-Preserve Video
-Preserve Audio
-Quality CPU
-Quality Floor
-17. Tag Inheritance
+- Preserve A/V
+- Preserve Video
+- Preserve Audio
+- Quality CPU
+- Quality Floor
+
+# 17. Tag Inheritance
 
 TV tags inherit through:
 
+```text
 Series
   ↓
 Season
   ↓
 Episode
+```
 
 Example:
 
+```text
 House of the Dragon
 └── Quality CPU
+```
 
 All episodes inherit Quality CPU.
 
@@ -679,40 +697,42 @@ When rules conflict, the more restrictive protection wins.
 
 Movies have direct tags.
 
-18. Tag Semantics
-Preserve A/V
+# 18. Tag Semantics
+
+## Preserve A/V
 
 Neither video nor audio may be modified.
 
 Effectively immutable for transcoding.
 
-Preserve Video
+## Preserve Video
 
 Video bitstream may not be transcoded.
 
 Audio/container operations may theoretically remain possible.
 
-Preserve Audio
+## Preserve Audio
 
 Audio must remain bit-for-bit preserved.
 
 Video may still be compressed if otherwise eligible.
 
-Quality CPU
+## Quality CPU
 
 Compression should use a CPU/x265 quality-oriented preset instead of the normal GPU show preset.
 
 Typical use:
 
-House of the Dragon
-visually important series
-Quality Floor
+- House of the Dragon
+- visually important series
+
+## Quality Floor
 
 Allows compression but prevents quality from dropping below the configured quality/resolution/bitrate policy.
 
 This is preferable to abusing Preserve Video for TV shows.
 
-19. Movies Are Conservative
+# 19. Movies Are Conservative
 
 Movie policies are intentionally stricter than TV policies.
 
@@ -720,24 +740,28 @@ A movie downloaded as a high-quality 4K REMUX is assumed to have been selected i
 
 Automatic rule:
 
+```text
 Movie
 + 2160p
 + REMUX
 = protected by default
+```
 
 The normal compression workflow must not touch it.
 
 Example:
 
+```text
 Dune: Part Two
 UHD Blu-ray REMUX
 Dolby Vision / HDR
+```
 
 must remain untouched.
 
 This is a core product safety rule.
 
-20. TV Shows Are More Aggressive
+# 20. TV Shows Are More Aggressive
 
 TV episodes may be compressed far more aggressively where appropriate.
 
@@ -745,15 +769,19 @@ Example:
 
 A 1080p episode with:
 
+```text
 H.264
 25 Mbps
 6 GB
+```
 
 may reasonably become approximately:
 
+```text
 HEVC
 2.5 Mbps
 ~1-2 GB
+```
 
 for normal everyday viewing, assuming acceptable visual quality.
 
@@ -763,7 +791,7 @@ The goal is to avoid visible objectionable degradation while recovering signific
 
 A visually unimportant sitcom should not consume REMUX-like bitrate.
 
-21. Compression Floors
+# 21. Compression Floors
 
 Compression should only occur when worthwhile.
 
@@ -771,14 +799,18 @@ Presets define a minimum source bitrate.
 
 Example:
 
+```text
 Tone it down a bit + HEVC
 quality mode with an experimental planning range
 minimum source bitrate remains explicit
+```
 
 A source already at:
 
+```text
 1080p HEVC
 2.1 Mbps
+```
 
 should normally be:
 
@@ -788,11 +820,13 @@ A minimum expected percentage saving should also exist.
 
 Example:
 
+```text
 minimum_expected_saving = 20%
+```
 
 Do not spend hours encoding to recover insignificant storage.
 
-22. HEVC Recompression
+# 22. HEVC Recompression
 
 HEVC → HEVC recompression should be configurable per preset.
 
@@ -800,7 +834,9 @@ Default philosophy:
 
 Movies:
 
+```text
 HEVC → HEVC OFF
+```
 
 unless a specific quality preset explicitly allows it.
 
@@ -810,11 +846,13 @@ May be allowed for selected custom presets, particularly unusually high-bitrate 
 
 Low-bitrate HEVC should normally remain untouched.
 
-23. Resolution Policy
+# 23. Resolution Policy
 
 The user-facing resolution setting is a target-resolution cap with these options:
 
+```text
 KEEP | 2160p | 1080p | 720p | 576p | 480p
+```
 
 KEEP is the default for every built-in preset. A numeric option means maximum
 output resolution, never upscaling. For example, a 4K source with 1080p selected
@@ -826,25 +864,29 @@ Never downscale unless the selected preset explicitly says to.
 
 Examples:
 
+```text
 2160p → 2160p
 1080p → 1080p
+```
 
 Source applicability remains a separate advanced rule. It determines which input
 resolutions a preset accepts and does not determine the output resolution.
 
-24. HDR and Dolby Vision
+# 24. HDR and Dolby Vision
 
 HDR processing must be conservative.
 
-Dolby Vision
+## Dolby Vision
 
 Initial policy:
 
+```text
 Dolby Vision transcoding = BLOCKED
+```
 
 Do not risk losing Dolby Vision RPU/metadata.
 
-HDR10
+## HDR10
 
 HDR10 sources may be encoded to HEVC only through a tested HDR-safe pipeline that
 preserves HDR10 mode and validates, where present, 10-bit output, colour
@@ -853,7 +895,7 @@ metadata, MaxCLL, MaxFALL and related playback signalling.
 
 HDR metadata preservation should be the default.
 
-HDR → SDR
+## HDR → SDR
 
 Do NOT expose this as a normal/default option. No built-in preset performs tone
 mapping.
@@ -863,20 +905,22 @@ HDR to SDR requires tone mapping and is intentionally destructive.
 If supported later, it belongs only to an explicit custom/Advanced workflow with
 warnings and validation.
 
-25. Interlaced Video
+# 25. Interlaced Video
 
 Interlaced media such as some Top Gear 1080i sources requires a correctly validated deinterlacing pipeline.
 
 Initial policy:
 
+```text
 Interlaced detected
 → compression blocked
+```
 
 Do not blindly encode interlaced material as progressive.
 
 Support may be added later once the deinterlacing pipeline is tested.
 
-26. Hardlinks / Seeding Safety
+# 26. Hardlinks / Seeding Safety
 
 This rule is extremely important.
 
@@ -884,45 +928,49 @@ Media files can be hardlinked to qBittorrent download files.
 
 Replacing the library-side file while another hardlink still exists may:
 
-fail to reclaim expected storage
-interfere with seeding assumptions
-create confusing duplicate data
+- fail to reclaim expected storage
+- interfere with seeding assumptions
+- create confusing duplicate data
 
 Initial rule:
 
+```text
 st_nlink > 1
 → compression blocked
+```
 
 UI should show something like:
 
+```text
 Hardlinked / Seeding
+```
 
 There is no override in v1.
 
-27. Eligibility Engine
+# 27. Eligibility Engine
 
 Eligibility must be calculated on the backend.
 
 Possible blocking reasons include:
 
-Preserve A/V
-Preserve Video
-hardlinked/seeding
-2160p Movie REMUX
-Dolby Vision
-interlaced
-source bitrate below preset floor
-HEVC recompression disabled
-estimated saving below minimum
-preset scope mismatch
-disabled preset
-already active/queued where relevant
+- Preserve A/V
+- Preserve Video
+- hardlinked/seeding
+- 2160p Movie REMUX
+- Dolby Vision
+- interlaced
+- source bitrate below preset floor
+- HEVC recompression disabled
+- estimated saving below minimum
+- preset scope mismatch
+- disabled preset
+- already active/queued where relevant
 
 The UI displays backend results.
 
 The UI must not independently recreate those rules.
 
-28. Potential Saving
+# 28. Potential Saving
 
 Potential savings are estimates.
 
@@ -930,26 +978,32 @@ They do not need to predict exact encoder output.
 
 For target-bitrate presets, estimation can use approximately:
 
+```text
 duration × target video bitrate
 + target/preserved audio
 + small container overhead
+```
 
 UI wording should clearly indicate:
 
+```text
 Estimated
 ~3.8 GB saving
+```
 
 Do not present estimates as guarantees.
 
-29. Mass Selection
+# 29. Mass Selection
 
 Movies and Episodes support mass selection.
 
 Example:
 
+```text
 100 selected
 93 eligible
 7 excluded
+```
 
 Blocked items should NOT cause the entire bulk operation to fail.
 
@@ -961,47 +1015,51 @@ Selected queued jobs can be bulk removed if they are not active.
 
 Active jobs cannot be removed with the normal queue-delete action.
 
-30. Queue Architecture
+# 30. Queue Architecture
 
 There is one logical scheduler with two independent execution lanes.
 
+```text
 Scheduler
 ├── CPU Queue
 └── GPU Queue
+```
 
 The lanes may process jobs concurrently.
 
-31. CPU Queue
+# 31. CPU Queue
 
 CPU jobs normally include:
 
-Movies
-Just convert to HEVC
-Quality CPU-tagged shows
-selected custom quality jobs
+- Movies
+- Just convert to HEVC
+- Quality CPU-tagged shows
+- selected custom quality jobs
 
 Production filesystem mode uses the standalone CPU/libx265 worker.
 
 Development/seed mode uses a fake worker.
 
-32. GPU Queue
+# 32. GPU Queue
 
 GPU jobs normally include:
 
-everyday TV compression
-Tone it down a bit + HEVC
-Tone it down a bit + HEVC + Efficient Audio
+- everyday TV compression
+- Tone it down a bit + HEVC
+- Tone it down a bit + HEVC + Efficient Audio
 
 Production filesystem mode uses the standalone Intel GPU/hevc_vaapi worker.
 
 Development/seed mode uses a fake worker.
 
-33. Worker Concurrency
+# 33. Worker Concurrency
 
 Initial production target:
 
+```text
 CPU workers = 1
 GPU workers = 1
+```
 
 A CPU encode and GPU encode may run simultaneously.
 
@@ -1011,14 +1069,14 @@ However Kompressor must leave system headroom for media playback/transcoding.
 
 Long-term production considerations:
 
-CPU budget around 70-75%
-lower scheduler priority / nice level
-avoid monopolizing all host resources
-do not start a new GPU compression job if the media server is actively using hardware transcoding
+- CPU budget around 70-75%
+- lower scheduler priority / nice level
+- avoid monopolizing all host resources
+- do not start a new GPU compression job if the media server is actively using hardware transcoding
 
 The media server has priority over Kompressor.
 
-34. Queue Priority
+# 34. Queue Priority
 
 Default queue ordering should primarily favour:
 
@@ -1032,17 +1090,18 @@ Manual override must exist.
 
 Possible priority concept:
 
-Urgent
-High
-Normal
-Low
+- Urgent
+- High
+- Normal
+- Low
 
 Useful actions:
 
-Move next
-Change priority
-Remove queued job
-35. Active Queue Jobs
+- Move next
+- Change priority
+- Remove queued job
+
+# 35. Active Queue Jobs
 
 An active job cannot be deleted with a normal X.
 
@@ -1059,7 +1118,7 @@ Pause support may be implemented later.
 
 Do not overcomplicate v1 with process suspension/resume.
 
-36. Development Queue
+# 36. Development Queue
 
 Development must not spawn ffmpeg.
 
@@ -1067,37 +1126,43 @@ Use fake queue data and fake workers.
 
 Fake workers should be able to simulate:
 
+```text
 QUEUED
 → ENCODING
 → progress updates
 → VALIDATING
 → COMPLETED
+```
 
 and optionally:
 
-FAILED
-SKIPPED
+- FAILED
+- SKIPPED
 
 This allows the full WebUI workflow to be developed without media tooling.
 
-37. Production Job Lifecycle
+# 37. Production Job Lifecycle
 
 A real replace job follows:
 
+```text
 DISCOVERED
 → QUEUED
 → ENCODING
 → VALIDATING
 → REPLACING
 → COMPLETED
+```
 
 (keep-original jobs complete after VALIDATING; a replace job whose measured saving
 misses the preset minimum is SKIPPED with the source kept)
 
 Failure:
 
+```text
 ENCODING
 → FAILED
+```
 
 The original file must remain untouched until the new output has passed validation.
 
@@ -1107,12 +1172,13 @@ keeps the original and stores a validated real output in the Kompressor workspac
 section 38. Seed mode simulates both choices.
 Future options such as sample_only must not require redesigning the preset model.
 
-38. Safe Replacement
+# 38. Safe Replacement
 
 Never encode directly over the source file.
 
 Target production workflow:
 
+```text
 source.mkv
 
 → encode into /mnt/kompressor/jobs/<job-id>/output.mkv
@@ -1125,6 +1191,7 @@ source.mkv
 → final validation
 
 → backup removed
+```
 
 If replacement fails:
 
@@ -1138,27 +1205,28 @@ workspace is a different filesystem. The backup is a hidden, job-named file in t
 source's directory. Each step is journalled so a killed worker can finish or roll back
 by device/inode identity. MKV sources only.
 
-39. Validation
+# 39. Validation
 
 Before replacing a source, production validation should verify as appropriate:
 
-output exists
-output size > 0
-ffprobe succeeds
-expected video stream exists
-duration sufficiently matches source
-resolution obeys policy
-audio policy obeyed
-subtitle streams preserved when requested
-chapters preserved when requested
-attachments preserved when requested
-HDR policy obeyed
-output is not obviously corrupt
+- output exists
+- output size > 0
+- ffprobe succeeds
+- expected video stream exists
+- duration sufficiently matches source
+- resolution obeys policy
+- audio policy obeyed
+- subtitle streams preserved when requested
+- chapters preserved when requested
+- attachments preserved when requested
+- HDR policy obeyed
+- output is not obviously corrupt
 
 Failure means:
 
 do not replace original
-40. Prevent Recompressing Kompressor Output
+
+# 40. Prevent Recompressing Kompressor Output
 
 Kompressor should record that it processed a file.
 
@@ -1166,24 +1234,30 @@ Eventually this may be stored both in SQLite and media/container metadata where 
 
 Example metadata:
 
+```text
 ENCODER=Kompressor
 KOMPRESSOR_PRESET=Tone it down a bit + HEVC
 KOMPRESSOR_VERSION=1
+```
 
 The scanner should recognise previously processed files.
 
 Avoid accidental chains like:
 
+```text
 AVC
 → HEVC
 → HEVC
 → HEVC
-41. Queue Page
+```
+
+# 41. Queue Page
 
 Queue UI should visibly contain two lanes.
 
 Example:
 
+```text
 CPU Queue
 
 ACTIVE
@@ -1208,31 +1282,33 @@ planning range for potential reclaim
 UP NEXT
 1. ...
 2. ...
+```
 
 Each lane displays:
 
-worker state
-active job
-progress
-preset
-estimated saving
-queued jobs
-priority
-Move Next
-remove queued job
-Stop & Skip active job
-42. Settings
+- worker state
+- active job
+- progress
+- preset
+- estimated saving
+- queued jobs
+- priority
+- Move Next
+- remove queued job
+- Stop & Skip active job
+
+# 42. Settings
 
 Settings should remain focused.
 
 Useful sections:
 
-Paths
+## Paths
 
 Persisted library preferences:
 
-Movies path
-Shows path
+- Movies path
+- Shows path
 
 The Settings page stores these paths in SQLite. They configure the future scanner
 but do not trigger scanning or move media in the current seed workflow.
@@ -1240,27 +1316,32 @@ but do not trigger scanning or move media in the current seed workflow.
 Production-only workspace path:
 
 Workspace path
-Workers
-CPU workers
-GPU workers
-CPU resource budget
-Safety
-Block hardlinks
-Block Dolby Vision
-Block interlaced
-Protect 2160p REMUX Movies
-Minimum expected saving
-Presets
+
+## Workers
+
+- CPU workers
+- GPU workers
+- CPU resource budget
+
+## Safety
+
+- Block hardlinks
+- Block Dolby Vision
+- Block interlaced
+- Protect 2160p REMUX Movies
+- Minimum expected saving
+
+## Presets
 
 Create/edit/delete presets.
 
 Movie and Show presets are clearly separated.
 
-Tags
+## Tags
 
 Manage available Kompressor tags and tag policies.
 
-Scanning
+## Scanning
 
 Eventually:
 
@@ -1268,7 +1349,7 @@ reconciliation interval
 
 Do not turn Settings into a giant collection of obscure ffmpeg flags.
 
-43. Preset Editing
+# 43. Preset Editing
 
 Technical encoding settings belong in preset management.
 
@@ -1276,34 +1357,36 @@ They should not clutter the normal compression modal.
 
 A preset editor may configure:
 
-scope
-backend
-codec
-target bitrate
-resolution policy
-audio policy
-target audio bitrate
-HDR preservation
-minimum source bitrate
-minimum expected saving
-HEVC recompression permission
+- scope
+- backend
+- codec
+- target bitrate
+- resolution policy
+- audio policy
+- target audio bitrate
+- HDR preservation
+- minimum source bitrate
+- minimum expected saving
+- HEVC recompression permission
 
 Future advanced encoder controls may be added later if genuinely necessary.
 
-44. Scanner
+# 44. Scanner
 
 Production scanner should eventually use:
 
-/media/movies
-/media/shows
+- /media/movies
+- /media/shows
 
 No dependency on Sonarr/Radarr is required for inventory.
 
 Preferred approach:
 
+```text
 initial filesystem scan
 + filesystem notifications/inotify
 + periodic reconciliation
+```
 
 The application should tolerate imperfect filenames.
 
@@ -1311,24 +1394,25 @@ No external metadata API is required.
 
 Readable filesystem-derived names are sufficient.
 
-45. Authentication
+# 45. Authentication
 
 No application authentication is required in the initial version.
 
 Production access will be constrained by:
 
-LAN
-Cloudflare access/tunnel
-possibly Tailscale
+- LAN
+- Cloudflare access/tunnel
+- possibly Tailscale
 
 Authentication can be revisited later if necessary.
 
-46. History
+# 46. History
 
 Kompressor should maintain job history.
 
 Example:
 
+```text
 Modern Family S03E04
 
 Before: 6.1 GB
@@ -1342,53 +1426,55 @@ Show streaming-quality intent
 
 Duration: 21 min
 Completed: <timestamp>
+```
 
 Failed jobs should retain useful error information.
 
-47. Statistics
+# 47. Statistics
 
 Useful global statistics:
 
-Total storage saved
-Files compressed
-CPU encodes
-GPU encodes
-Average reduction %
-Failed jobs
-Encoding time
+- Total storage saved
+- Files compressed
+- CPU encodes
+- GPU encodes
+- Average reduction %
+- Failed jobs
+- Encoding time
 
 Possible future breakdowns:
 
-space saved by Show
-space saved by Movie
-space saved by preset
-space saved per month
-48. UI Badges / State Visibility
+- space saved by Show
+- space saved by Movie
+- space saved by preset
+- space saved per month
+
+# 48. UI Badges / State Visibility
 
 Important states should be visible rather than silently hiding actions.
 
 Examples:
 
-Preserve A/V
-Preserve Video
-Preserve Audio
-Quality CPU
-Quality Floor
-Hardlinked
-Dolby Vision
-HDR10
-Interlaced
-Already HEVC
-Low bitrate
-Queued
-Encoding
-Protected
+- Preserve A/V
+- Preserve Video
+- Preserve Audio
+- Quality CPU
+- Quality Floor
+- Hardlinked
+- Dolby Vision
+- HDR10
+- Interlaced
+- Already HEVC
+- Low bitrate
+- Queued
+- Encoding
+- Protected
 
 When an item cannot be compressed, the UI should explain why.
 
 Do not simply hide the action.
 
-49. Error Philosophy
+# 49. Error Philosophy
 
 Kompressor should fail safely.
 
@@ -1408,26 +1494,27 @@ A failed compression is acceptable.
 
 A silently damaged original is not.
 
-50. Current Development State
+# 50. Current Development State
 
 This section records the seed-era baseline; README.md and docs/ describe the
 current filesystem, encoding and replacement state. The baseline had:
 
-FastAPI application
-Python 3.12 environment
-seed media repository
-seed preset repository
-Movie/Show/Season/Episode models
-CompressionPreset model
-policy/eligibility engine
-seed fixtures
-scoped preset API
-media library API
-summary API
-eligibility API
+- FastAPI application
+- Python 3.12 environment
+- seed media repository
+- seed preset repository
+- Movie/Show/Season/Episode models
+- CompressionPreset model
+- policy/eligibility engine
+- seed fixtures
+- scoped preset API
+- media library API
+- summary API
+- eligibility API
 
 Current useful endpoints include:
 
+```text
 GET /healthz
 GET /api/library
 GET /api/summary
@@ -1437,109 +1524,117 @@ GET /api/presets?scope=show
 POST /api/eligibility
 POST /api/presets/{id}/duplicate
 DELETE /api/presets/{id} for custom presets only
+```
 
 Verified behaviour:
 
-Show preset scoping
+## Show preset scoping
 
 scope=show only returns Show presets.
 
-Modern Family eligibility
+## Modern Family eligibility
 
 A high-bitrate H.264 Modern Family episode with the Show streaming-quality intent is eligible.
 
 Example result:
 
+```text
 backend = qsv
 destination codec = hevc
 rate control = experimental QVBR quality mode with a 1080p nominal bitrate
 planning range rather than an exact output-size prediction
-Dune safety
+```
+
+## Dune safety
 
 A Dune: Part Two UHD REMUX seed item returns ineligible due to:
 
-Preserve A/V
-2160p REMUX auto-protection
-Dolby Vision
+- Preserve A/V
+- 2160p REMUX auto-protection
+- Dolby Vision
 
 This behaviour must remain protected by future tests.
 
-51. Git Workflow
+# 51. Git Workflow
 
 Use small, coherent commits.
 
 Examples:
 
-Bootstrap Kompressor application
-Add seed presets and media eligibility policy engine
-Add seed-backed Kompressor web interface
-Add fake dual-lane queue scheduler
-Add preset management
-Add persistent job history
+- Bootstrap Kompressor application
+- Add seed presets and media eligibility policy engine
+- Add seed-backed Kompressor web interface
+- Add fake dual-lane queue scheduler
+- Add preset management
+- Add persistent job history
 
 Avoid huge unrelated commits.
 
 Before starting work:
 
+```sh
 git status
+```
 
 The working tree should be clean.
 
 Before committing:
 
-run tests
-inspect diff
-make sure generated/local files are not included
+- run tests
+- inspect diff
+- make sure generated/local files are not included
 
 Do not commit:
 
-.venv
-.env
-SQLite runtime databases
-logs
-temporary outputs
-actual media
-credentials
-API keys
-52. Current Product Decisions That Should Not Be Accidentally Reversed
+- .venv
+- .env
+- SQLite runtime databases
+- logs
+- temporary outputs
+- actual media
+- credentials
+- API keys
+
+# 52. Current Product Decisions That Should Not Be Accidentally Reversed
 
 These are intentional decisions:
 
-Frontend and backend live in the same repository.
-Development requires no ffmpeg or real media.
-Seed/fake adapters are first-class development infrastructure.
-Movie and Show presets are strictly separated.
-Technical encoder settings belong to presets.
-The five enabled built-ins use the user-owned names Just convert to HEVC, Tone it
-down a bit + HEVC, and Tone it down a bit + HEVC + Efficient Audio across their
-Movie and Show scopes. Their intent remains separate from those names.
-All five preserve source resolution; resolution-specific behavior is custom-preset configuration.
-Built-ins have a built_in origin; user-created and duplicated presets have a custom origin.
-Built-in catalogue migration is idempotent and does not rewrite custom presets or queued snapshots.
-Duplicating is the preferred path for creating specialized presets such as a Show Streaming 1080p Max custom preset.
-Compression modal is intentionally simple.
-Movies are treated more conservatively than Shows.
-2160p REMUX Movies are auto-protected.
-Dolby Vision transcoding is initially blocked.
-Interlaced transcoding is initially blocked.
-Hardlinked media is initially blocked.
-Resolution is preserved unless a preset explicitly allows downscaling.
-Preserve Audio copies all audio streams.
-Audio conversion/downmix behaviour belongs to the preset.
-Subtitle/chapter/attachment preservation is default.
-Tags are Kompressor-native.
-TV tags inherit Series → Season → Episode.
-CPU is preferred for quality-oriented Movie/Show jobs.
-GPU is preferred for everyday TV compression.
-CPU and GPU workers may operate concurrently.
-Queue priority defaults primarily to planning storage savings until real measurements exist.
-Active jobs cannot be casually removed.
-No real file replacement occurs before validation.
-Original media safety is more important than successful compression.
-No application authentication is required for v1.
-SQLite will eventually store application state, but media remains filesystem source-of-truth.
-Do not introduce unnecessary external services or frontend frameworks.
-53. Immediate Development Roadmap
+- Frontend and backend live in the same repository.
+- Development requires no ffmpeg or real media.
+- Seed/fake adapters are first-class development infrastructure.
+- Movie and Show presets are strictly separated.
+- Technical encoder settings belong to presets.
+- The five enabled built-ins use the user-owned names Just convert to HEVC, Tone it
+  down a bit + HEVC, and Tone it down a bit + HEVC + Efficient Audio across their
+  Movie and Show scopes. Their intent remains separate from those names.
+- All five preserve source resolution; resolution-specific behavior is custom-preset configuration.
+- Built-ins have a built_in origin; user-created and duplicated presets have a custom origin.
+- Built-in catalogue migration is idempotent and does not rewrite custom presets or queued snapshots.
+- Duplicating is the preferred path for creating specialized presets such as a Show Streaming 1080p Max custom preset.
+- Compression modal is intentionally simple.
+- Movies are treated more conservatively than Shows.
+- 2160p REMUX Movies are auto-protected.
+- Dolby Vision transcoding is initially blocked.
+- Interlaced transcoding is initially blocked.
+- Hardlinked media is initially blocked.
+- Resolution is preserved unless a preset explicitly allows downscaling.
+- Preserve Audio copies all audio streams.
+- Audio conversion/downmix behaviour belongs to the preset.
+- Subtitle/chapter/attachment preservation is default.
+- Tags are Kompressor-native.
+- TV tags inherit Series → Season → Episode.
+- CPU is preferred for quality-oriented Movie/Show jobs.
+- GPU is preferred for everyday TV compression.
+- CPU and GPU workers may operate concurrently.
+- Queue priority defaults primarily to planning storage savings until real measurements exist.
+- Active jobs cannot be casually removed.
+- No real file replacement occurs before validation.
+- Original media safety is more important than successful compression.
+- No application authentication is required for v1.
+- SQLite will eventually store application state, but media remains filesystem source-of-truth.
+- Do not introduce unnecessary external services or frontend frameworks.
+
+# 53. Immediate Development Roadmap
 
 Near-term milestones:
 
@@ -1559,4 +1654,3 @@ Near-term milestones:
 14. media-server resource awareness
 
 Production encoding should only begin after the WebUI, policies, queue model and safety lifecycle are already well tested with fake data.
-````
