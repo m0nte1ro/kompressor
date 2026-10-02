@@ -6,6 +6,7 @@ export function compressionModal(scope, refreshQueue) {
   let selected = [], presets = [], results = [];
   let presetsRequest = null;
   let generation = 0, evaluation = 0, submitting = false, preserveAudioTouched = false;
+  let bitrateTyping = 0;
   const errorBox = $('#modal-error');
   const submit = $('#add-to-queue');
 
@@ -165,6 +166,7 @@ export function compressionModal(scope, refreshQueue) {
     if (submitting) return;
     ++generation;
     ++evaluation;
+    window.clearTimeout(bitrateTyping);
     dialog.close();
   }
   $$('[data-close]', dialog).forEach(button => button.addEventListener('click', close));
@@ -177,7 +179,11 @@ export function compressionModal(scope, refreshQueue) {
   $('#preserve-audio').addEventListener('change', () => {preserveAudioTouched = true; evaluate();});
   $('#preserve-subtitles').addEventListener('change', evaluate);
   $('#replace-source').addEventListener('change', evaluate);
-  $('#video-bitrate').addEventListener('change', evaluate);
+  // Re-check while typing, once the value settles: each check asks the API about every file.
+  $('#video-bitrate').addEventListener('input', () => {
+    window.clearTimeout(bitrateTyping);
+    bitrateTyping = window.setTimeout(evaluate, 400);
+  });
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
