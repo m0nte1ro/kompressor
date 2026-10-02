@@ -15,13 +15,13 @@ transparent or extremely difficult to distinguish during normal viewing, not
 mathematical or bit-perfect preservation. HEVC/x265 transcoding is lossy in this
 workflow.
 
-| Preset                                      | Scope | Video                                                  | Audio default              | Target resolution |
-| ------------------------------------------- | ----- | ------------------------------------------------------ | -------------------------- | ----------------- |
-| Just convert to HEVC                        | Movie | CPU/x265 HEVC, experimental CRF                        | Preserve every track       | KEEP              |
-| Tone it down a bit + HEVC                   | Movie | CPU/x265 HEVC, experimental CRF                        | Preserve every track       | KEEP              |
-| Just convert to HEVC                        | Show  | CPU/x265 HEVC, experimental CRF                        | Preserve every track       | KEEP              |
-| Tone it down a bit + HEVC                   | Show  | Intel GPU HEVC, experimental QVBR                       | Preserve every track       | KEEP              |
-| Tone it down a bit + HEVC + Efficient Audio | Show  | Same video policy as the Show streaming-quality intent | Efficient rules by default | KEEP              |
+| Preset                                      | Scope | Video                                                  | Audio default                                                              | Target resolution |
+| ------------------------------------------- | ----- | ------------------------------------------------------ | -------------------------------------------------------------------------- | ----------------- |
+| Just convert to HEVC                        | Movie | CPU/x265 HEVC, experimental CRF                        | Preserve every track                                                       | KEEP              |
+| Tone it down a bit + HEVC                   | Movie | CPU/x265 HEVC, experimental CRF                        | Preserve every track                                                       | KEEP              |
+| Just convert to HEVC                        | Show  | CPU/x265 HEVC, experimental CRF                        | Preserve every track                                                       | KEEP              |
+| Tone it down a bit + HEVC                   | Show  | Intel GPU HEVC, experimental QVBR                      | Preserve every track                                                       | KEEP              |
+| Tone it down a bit + HEVC + Efficient Audio | Show  | Same video policy as the Show streaming-quality intent | Preserve every track; Efficient rules only when Preserve Audio is unticked | KEEP              |
 
 The streaming presets aim for a premium-streaming-style visual philosophy and
 significant storage reduction. They do not copy Netflix bitrate settings. CRF and
