@@ -190,27 +190,36 @@ class RealEncoderWorker:
                 self._wake.wait(0.5)
                 self._wake.clear()
                 continue
-            job_id = job.id
-            with self._lock:
-                self._active.add(job_id)
-            try:
-                self._execute(job)
-            except EncodingCancelled:
+            self._run_job(job)
+
+    def _run_job(self, job: QueueJob) -> None:
+        """Execute one claimed job and record how it ended."""
+        queue = self.queue
+        job_id = job.id
+        with self._lock:
+            self._active.add(job_id)
+        try:
+            self._execute(job)
+        except Exception as error:
+            # A stop terminates ffmpeg or removes the partial being validated, so
+            # whatever error follows a stop request is the stop, not a failure.
+            if isinstance(error, EncodingCancelled) or self.cancelled_by_request(job_id) or self._stop.is_set():
+                # Worker shutdown leaves the job for restart recovery, which requeues it.
                 if not self._stop.is_set() and queue:
                     owner = queue
                     self._persist("record the stop", lambda: owner.cancelled_real_job(job_id))
-            except Exception as error:
+            else:
                 if queue:
                     owner = queue
                     self._persist("record the failure", lambda: owner.fail_real_job(
                         job_id, str(error), getattr(error, "exit_code", None)))
-                self.encoder.cleanup(job.id, remove_final=True)
-            finally:
-                self.encoder.cleanup(job.id)
-                with self._lock:
-                    self._active.discard(job.id)
-                    self._cancelled.discard(job.id)
-                self._wake.set()
+                self.encoder.cleanup(job_id, remove_final=True)
+        finally:
+            self.encoder.cleanup(job_id)
+            with self._lock:
+                self._active.discard(job_id)
+                self._cancelled.discard(job_id)
+            self._wake.set()
 
     @staticmethod
     def _persist(what: str, action: Callable[[], T]) -> T | None:

@@ -466,7 +466,6 @@ class FFmpegEncoder:
                 self._terminate(process)
             with self._lock:
                 self._processes.pop(job.id, None)
-                self._cancelled.discard(job.id)
 
     def promote(self, job_id: str, output: FFmpegOutput) -> Path:
         with self._lock:
@@ -504,10 +503,15 @@ class FFmpegEncoder:
                     continue
 
     def cleanup(self, job_id: str, remove_final: bool = False) -> None:
+        """End of a job: forget its stop request and remove its outputs."""
         with self._lock:
-            # Runs at the end of every job; a stop that arrived after encode()
-            # (e.g. during audio verification) must not linger.
+            # A stop that arrived after encode() (e.g. during audio verification)
+            # must not linger into a later job with the same ID.
             self._cancelled.discard(job_id)
+        self._remove_outputs(job_id, remove_final)
+
+    def _remove_outputs(self, job_id: str, remove_final: bool = False) -> None:
+        with self._lock:
             paths = self._paths.get(job_id)
         if not paths:
             return
@@ -540,7 +544,10 @@ class FFmpegEncoder:
             process = self._processes.get(job_id)
         if process is not None:
             self._terminate(process)
-        self.cleanup(job_id)
+        # The stop request stays set until the job's own cleanup(): the encode
+        # thread checks it after ffmpeg exits, and clearing it here raced that
+        # check, so a stopped encode's exit status 255 was recorded as a failure.
+        self._remove_outputs(job_id)
 
     def stop_all(self) -> None:
         with self._lock:

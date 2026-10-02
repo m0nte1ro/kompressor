@@ -57,8 +57,9 @@ otherwise report the source bitrate and size. Copied streams keep theirs. Measur
 
 Stop & Skip is persisted as a cancellation request in SQLite. The standalone owner
 of the affected CPU or GPU lane observes that request, terminates only the subprocess
-it owns (the encode or the audio verification), removes the partial output and records
-the job as skipped. A job in the `replacing` state cannot be stopped, blocked by a tag
+it owns (the encode or the audio/decode verification), removes the partial output and
+records the job as skipped. Whatever error the stop causes (ffmpeg's exit status 255,
+a partial removed while ffprobe reads it) is recorded as that stop, not as a failure. A job in the `replacing` state cannot be stopped, blocked by a tag
 change or cut off by quiet hours; the swap always runs to a verified replacement or
 a restored original. Manual worker pause blocks new claims
 but lets an active job finish. Quiet hours also block new claims; when the quiet

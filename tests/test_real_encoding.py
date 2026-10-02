@@ -959,6 +959,88 @@ def test_stop_terminates_only_owned_process_and_removes_partial(tmp_path):
     assert final.read_bytes() == b"already-promoted"
 
 
+def test_stop_request_survives_until_the_jobs_own_cleanup(tmp_path):
+    encoder = FFmpegEncoder("ffmpeg", tmp_path / "workspace")
+    encoder.stop("job-stop")
+    # The encode thread checks this after ffmpeg exits; stop() must not clear it.
+    assert "job-stop" in encoder._cancelled
+    encoder.cleanup("job-stop")
+    assert "job-stop" not in encoder._cancelled
+
+
+def claimed_movie_job(application, preset_id="movie-streaming-quality"):
+    processor = application.state.media_processor
+    processor.scan_library()
+    movie = processor.get_library().movies[0]
+    result = processor.queue_encode(EnqueueRequest(media_ids=[movie.id], scope="movie", preset_id=preset_id))
+    job = processor.queue.claim_next("cpu")
+    assert job is not None and job.id == result["added"][0]["id"]
+    return processor, job
+
+
+def history_entry(processor, job_id):
+    return next(item for item in processor.get_queue()["history"] if item["id"] == job_id)
+
+
+def test_stop_during_encode_is_skipped_although_ffmpeg_exits_with_an_error(tmp_path, monkeypatch, probe_facts):
+    # SIGTERM makes ffmpeg exit 255; that exit status is the stop, not a failure.
+    application, source, workspace, _ = build_real_app(tmp_path, monkeypatch, probe_facts, exit_code=255)
+    with TestClient(application):
+        processor, job = claimed_movie_job(application)
+        worker = processor.queue.worker
+        original_progress = processor.queue.update_real_progress
+
+        def progress(job_id, percent, elapsed):
+            original_progress(job_id, percent, elapsed)
+            if not worker.cancelled_by_request(job_id):
+                processor.queue.skip(job_id)  # Web process: persisted request.
+                worker.stop(job_id)           # Worker control loop observes it.
+        processor.queue.update_real_progress = progress
+        worker._run_job(job)
+        saved = history_entry(processor, job.id)
+    assert saved["status"] == "skipped", saved
+    assert "Stopped by user." in saved["reasons"]
+    assert saved["error_message"] is None and saved["ffmpeg_exit_code"] is None
+    assert not list((workspace / "jobs" / job.id).glob("*.mkv"))
+    assert source.stat().st_size == 400_000_000
+
+
+def test_stop_during_output_validation_is_skipped_not_failed(tmp_path, monkeypatch, probe_facts):
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts, probe_facts)
+    with TestClient(application):
+        processor, job = claimed_movie_job(application)
+        worker = processor.queue.worker
+
+        def inspect(self, path):
+            # Stop & Skip removes the partial while ffprobe is reading it.
+            processor.queue.skip(job.id)
+            worker.stop(job.id)
+            raise Conflict("Output file is missing.")
+        monkeypatch.setattr(FFprobeService, "inspect", inspect)
+        worker._run_job(job)
+        saved = history_entry(processor, job.id)
+    assert saved["status"] == "skipped", saved
+    assert saved["error_message"] is None and saved["validation_errors"] == []
+
+
+def test_worker_shutdown_mid_encode_leaves_the_job_for_restart_recovery(tmp_path, monkeypatch, probe_facts):
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts, exit_code=255)
+    with TestClient(application):
+        processor, job = claimed_movie_job(application)
+        worker = processor.queue.worker
+        original_progress = processor.queue.update_real_progress
+
+        def progress(job_id, percent, elapsed):
+            original_progress(job_id, percent, elapsed)
+            worker._stop.set()  # As shutdown() does before stopping owned ffmpeg.
+            worker.encoder.stop(job_id)
+        processor.queue.update_real_progress = progress
+        worker._run_job(job)
+        current = processor.queue._find(job.id)
+    # Not failed: the next worker start requeues it from zero.
+    assert current.status == "encoding" and current.error_message is None
+
+
 def test_filesystem_enqueue_returns_runtime_error_when_encoder_prerequisites_fail(tmp_path, monkeypatch, probe_facts):
     application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts,
         runtime_available=False)
