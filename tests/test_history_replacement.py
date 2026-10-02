@@ -14,14 +14,7 @@ from tests.test_source_replacement import hevc_output, run_one
 def execute(processor, job_id):
     job = processor.queue.claim_next("cpu")
     assert job is not None and job.id == job_id
-    worker = processor.queue.worker
-    try:
-        worker._execute(job)
-    except Exception as error:
-        processor.queue.fail_real_job(job.id, str(error))
-        worker.encoder.cleanup(job.id, remove_final=True)
-    finally:
-        worker.encoder.cleanup(job.id)
+    processor.queue.worker._run_job(job)
     return processor.queue._find(job.id)
 
 

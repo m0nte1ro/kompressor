@@ -147,6 +147,13 @@ A replace job (the WebUI default) runs the full encode and validation above, the
 4. **Final validation.** The file now at the source path must be the staged copy
    (same inode and size) and pass the same ffprobe output validation. On failure the
    copy is removed and the backup renamed back: the original is restored.
+
+   Whenever a swap fails with the original untouched or restored (not enough free
+   space, a failed copy, an ffprobe timeout in the final check), the validated
+   encode is not thrown away: the job completes as a keep-original result with the
+   reason, and History offers **Replace source** for it, exactly as after a restart
+   during replacement. Only an unresolved state (`MANUAL CHECK REQUIRED`) fails the
+   job, and then nothing further is deleted.
 5. **Cleanup.** Only after that is the replacement given the source's owner and
    group (best effort: where chown is not permitted, e.g. unprivileged LXC or a
    mergerfs pool, the worker log records the new owner and the job is not marked;
@@ -162,7 +169,7 @@ next start resolves the job before any other recovery, using only identity check
 | --- | --- |
 | Original at the source path, no backup | Staged copy removed, original untouched; the validated output is kept as a History result (Replace source retries the swap) |
 | Source path empty, original at the backup | Backup renamed back, original restored; validated output kept as above |
-| Staged copy at the source path, phase before `verified` | Rolled back to the original; job failed |
+| Staged copy at the source path, phase before `verified` | Rolled back to the original; validated output kept as above |
 | Staged copy at the source path, phase `verified` | Backup removed; job completed |
 | Staged copy at the source path, backup already gone | Job completed |
 | Anything else (unknown file at the path, backup not the original) | Nothing touched; job failed with `MANUAL CHECK REQUIRED` and all paths |

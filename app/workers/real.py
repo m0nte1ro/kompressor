@@ -270,7 +270,10 @@ class RealEncoderWorker:
                     owner = queue
                     self._persist("record the failure", lambda: owner.fail_real_job(
                         job_id, str(error), getattr(error, "exit_code", None)))
-                self.encoder.cleanup(job_id, remove_final=True)
+                # After an unresolved replacement nothing more is deleted: the
+                # MANUAL CHECK message names the files, as in restart recovery.
+                if getattr(error, "outcome", None) != "manual":
+                    self.encoder.cleanup(job_id, remove_final=True)
         finally:
             self.encoder.cleanup(job_id)
             with self._lock:
@@ -462,12 +465,22 @@ class RealEncoderWorker:
                 before_swap=lambda: self.guard.before_replacement(reference),
                 verify=verify, save=lambda state: queue.update_replacement(job.id, state),
                 should_abort=self._stop.is_set)
-        except ReplacementError:
+        except ReplacementError as error:
             if self._stop.is_set():
                 # The original is untouched or restored. Leave the job "replacing"
                 # so restart recovery keeps the validated output (see QueueService).
                 raise EncodingCancelled("Worker stopped during source replacement.")
-            raise
+            if reused or error.outcome not in {"untouched", "restored"}:
+                raise
+            # The original is intact, and the encode is validated work that a full
+            # disk or a probe timeout says nothing about. Keep it, as restart
+            # recovery does, so History can swap it in later.
+            reason = (f"Source replacement failed, so the source was kept: {error} "
+                      "The validated output was kept; use Replace source in History.")
+            if not self._persist("keep the validated output",
+                                 lambda: queue.keep_real_output(job.id, str(output_path), size, reason)):
+                raise
+            return
         # The source is replaced now; failing the job would misreport it.
         completed = self._persist("record the completed replacement", lambda: queue.complete_real_job(
             job.id, str(source_path), size, source_replaced=True, notes=notes))

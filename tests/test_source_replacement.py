@@ -37,21 +37,14 @@ def audio_tracks(probe):
 
 
 def run_one(processor, **request):
-    """Queue, claim and execute one movie job the way the worker loop does."""
+    """Queue, claim and run one movie job through the worker loop's own handling."""
     processor.scan_library()
     movie = processor.get_library().movies[0]
     result = processor.queue_encode(EnqueueRequest(
         media_ids=[movie.id], scope="movie", preset_id="movie-streaming-quality", **request))
     assert result["added"], result["excluded"]
     job = processor.queue.claim_next("cpu")
-    worker = processor.queue.worker
-    try:
-        worker._execute(job)
-    except Exception as error:
-        processor.queue.fail_real_job(job.id, str(error))
-        worker.encoder.cleanup(job.id, remove_final=True)
-    finally:
-        worker.encoder.cleanup(job.id)
+    processor.queue.worker._run_job(job)
     return next(item for item in processor.get_queue()["history"] if item["id"] == job.id)
 
 
@@ -131,13 +124,49 @@ def test_replace_rolls_back_when_the_file_at_the_source_path_fails_validation(
     before = source.stat()
     with TestClient(application):
         saved = run_one(application.state.media_processor, replace_source=True)
-    assert saved["status"] == "failed" and saved["source_replaced"] is False
-    assert "final validation" in saved["error_message"]
-    assert "original restored" in saved["error_message"]
+    # The original is restored; the validated encode is kept rather than thrown away.
+    assert saved["status"] == "completed" and saved["source_replaced"] is False
+    assert saved["replace_source"] is False
+    assert "final validation" in saved["reasons"][-1] and "original restored" in saved["reasons"][-1]
+    assert "use Replace source in History" in saved["reasons"][-1]
     after = source.stat()
     assert (after.st_ino, after.st_size, after.st_mtime_ns) == (before.st_ino, before.st_size, before.st_mtime_ns)
     assert sorted(source.parent.iterdir()) == [source]
-    assert not workspace_outputs(workspace)
+    assert [Path(saved["output_path"])] == workspace_outputs(workspace)
+
+
+def test_a_full_media_disk_keeps_the_validated_output_for_a_later_replace(tmp_path, monkeypatch, probe_facts):
+    application, source, workspace, _ = build_real_app(
+        tmp_path, monkeypatch, probe_facts, hevc_output(probe_facts), output_size=1_000_000)
+    real_usage = replacement.shutil.disk_usage
+    monkeypatch.setattr(replacement.shutil, "disk_usage",
+                        lambda path: real_usage(path)._replace(free=1024))
+    before = source.stat()
+    with TestClient(application):
+        processor = application.state.media_processor
+        saved = run_one(processor, replace_source=True)
+        assert saved["status"] == "completed" and saved["source_replaced"] is False, saved
+        assert "Not enough free space" in saved["reasons"][-1]
+        assert saved["measured_saving"] == 400_000_000 - 1_000_000
+        assert source.stat().st_ino == before.st_ino and sorted(source.parent.iterdir()) == [source]
+        assert [Path(saved["output_path"])] == workspace_outputs(workspace)
+        # Once there is room, History swaps it in without encoding again.
+        assert processor.replace_with_kept_output(saved["id"])["replaces_job_id"] == saved["id"]
+
+
+def test_an_unresolved_replacement_fails_and_deletes_nothing(tmp_path, monkeypatch, probe_facts):
+    application, source, workspace, _ = build_real_app(
+        tmp_path, monkeypatch, probe_facts, hevc_output(probe_facts), output_size=1_000_000)
+
+    def unresolved(self, journal, output, **kwargs):
+        raise ReplacementError("Rename failed. MANUAL CHECK REQUIRED: an unknown file is at the source path.",
+                               "manual")
+    monkeypatch.setattr(SourceReplacer, "replace", unresolved)
+    with TestClient(application):
+        saved = run_one(application.state.media_processor, replace_source=True)
+    assert saved["status"] == "failed" and "MANUAL CHECK REQUIRED" in saved["error_message"]
+    # Like restart recovery, nothing else is removed while the state is unknown.
+    assert len(workspace_outputs(workspace)) == 1
 
 
 def test_replace_keeps_source_when_measured_saving_is_below_the_preset_minimum(

@@ -654,6 +654,30 @@ class QueueService:
             self.repository.save(job)
             return True
 
+    def keep_real_output(self, job_id: str, output_path: str, output_size: int, reason: str) -> bool:
+        """A replace job whose swap failed with the original intact keeps its validated output.
+
+        The job becomes a keep-original result, exactly as restart recovery records
+        one, so History offers Replace source for it.
+        """
+        with self.lock, self.repository.transaction():
+            job = self._find(job_id)
+            if job.status != "replacing":
+                return False
+            job.status = "completed"
+            job.replace_source = False
+            job.progress = 100
+            job.finished_at = now()
+            job.output_path = output_path
+            job.output_size = output_size
+            job.measured_saving = job.source_size - output_size
+            job.reasons = [*job.reasons, reason]
+            job.error_message = None
+            job.cancel_requested = False
+            job.cancel_reason = None
+            self.repository.save(job)
+            return True
+
     def requeue_real_job(self, job_id: str, reason: str) -> bool:
         """Put a job interrupted by a storage outage back in the queue, from zero."""
         with self.lock, self.repository.transaction():

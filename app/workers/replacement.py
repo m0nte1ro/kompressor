@@ -36,7 +36,11 @@ Outcome = Literal["untouched", "restored", "replaced", "manual"]
 
 
 class ReplacementError(RuntimeError):
-    pass
+    def __init__(self, message: str, outcome: Outcome | None = None):
+        super().__init__(message)
+        # How the failure left the files, once resolved: "untouched"/"restored"
+        # mean the original is back at the source path; "manual" means unknown.
+        self.outcome = outcome
 
 
 class ReplacementAborted(ReplacementError):
@@ -129,7 +133,7 @@ class SourceReplacer:
             outcome, detail = self.resolve(journal, finalize=False)
             if outcome == "replaced":
                 return [f"Replacement finished despite a late error: {error}"]
-            raise ReplacementError(f"{error} {detail}") from error
+            raise ReplacementError(f"{error} {detail}", outcome) from error
         return notes
 
     def _replace(self, journal, target: Path, incoming: Path, backup: Path, output: Path,
