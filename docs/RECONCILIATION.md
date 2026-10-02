@@ -88,9 +88,11 @@ subtitle discovery and interpretation of real ffprobe output remain future work.
 `SourceGuard.before_processing(reference)` and
 `SourceGuard.before_replacement(reference)` independently obtain a fresh
 observation through `ObservationSource`. Both require the captured revision to
-remain current, the source to be present, matching identity/stat evidence and
-exactly one known hardlink. Hash conflicts also invalidate the check. The second
-check never reuses an earlier successful result.
+remain current, the source to be present, exactly one known hardlink, and the
+freshly observed physical identity (device and inode, plus generation where the
+source reports one), size and mtime to match. The filesystem source only stats the
+file: nothing is hashed, so an in-place edit that keeps size and mtime is not
+detected. The second check never reuses an earlier successful result.
 
 `ArtifactService` is an isolated fixture lifecycle: plan an output, run the
 pre-processing guard and mark the artifact simulated. Before any replacement

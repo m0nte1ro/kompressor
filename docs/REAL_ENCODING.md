@@ -159,9 +159,9 @@ A replace job (the WebUI default) runs the full encode and validation above, the
    `.<job-id>.kompressor-incoming` (a hidden name the scanner ignores), fsynced,
    given the source's mode, and re-read to confirm its SHA-256 matches the
    workspace output.
-3. **Swap.** SourceGuard re-checks the source afresh (same revision, path, inode,
-   size, mtime, exactly one hardlink; ctime is ignored so chmod/ACL maintenance
-   does not block replacement). The original is renamed to
+3. **Swap.** SourceGuard re-checks the source afresh (same revision, path, device
+   and inode, size, mtime, exactly one hardlink; nothing is hashed, and ctime is
+   ignored so chmod/ACL maintenance does not block replacement). The original is renamed to
    `.<job-id>.kompressor-backup`, and the verified copy is renamed into the source path.
 4. **Final validation.** The file now at the source path must be the staged copy
    (same inode and size) and pass the same ffprobe output validation. On failure the

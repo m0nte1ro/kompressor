@@ -4,7 +4,6 @@ from typing import Protocol
 from app.models.inventory import FileObservation, SourceReference
 from app.repositories.inventory import InventoryRepository
 from app.services.errors import Conflict, NotFound
-from app.services.fingerprints import sample_match, full_match
 
 
 class ObservationSource(Protocol):
@@ -46,13 +45,11 @@ class SourceGuard:
             raise Conflict("Source cannot be revalidated: file/root unavailable.")
         if fresh.hardlinks is None or fresh.hardlinks != 1:
             raise Conflict("Source is hardlinked or its hardlink count is unknown.")
-        # Deliberately stricter than reconciliation for content/identity facts.
-        # ctime is intentionally not an identity check: chmod/chown/ACL maintenance
-        # changes it without changing file contents. Device/inode/generation, size,
-        # mtime, hardlink count and any available fingerprints still have to match.
-        if (fresh.root_id != old.root_id or fresh.relative_path != old.relative_path
-                or fresh.media_id != old.media_id or fresh.scope != old.scope
-                or fresh.physical_key() is None or fresh.physical_key() != old.physical_key()
-                or fresh.size != old.size or fresh.mtime_ns != old.mtime_ns
-                or full_match(old, fresh) is False or sample_match(old, fresh) is False):
+        # Only freshly observed facts are compared: physical identity (device and
+        # inode, plus generation where the source reports one), size and mtime; the
+        # hardlink count is checked above. Nothing is hashed, so an in-place edit
+        # that keeps size and mtime goes unnoticed. ctime is intentionally not an
+        # identity check: chmod/chown/ACL maintenance changes it, not the contents.
+        if (fresh.physical_key() is None or fresh.physical_key() != old.physical_key()
+                or fresh.size != old.size or fresh.mtime_ns != old.mtime_ns):
             raise Conflict("Source changed since its revision was captured. Reconcile and review again.")

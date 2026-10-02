@@ -85,6 +85,13 @@ class FilesystemObservationSource:
         return self._safe_path(root, record.relative_path) if root else None
 
     def observe(self, root_id: str, relative_path: str) -> FileObservation | None:
+        """A fresh stat of a present library file, and nothing it did not see.
+
+        Device, inode, size, mtime, ctime and hardlink count are observed. The file
+        is not read, so it has no fingerprints or probe, and Linux reports no inode
+        generation (scans record none either). Root, path, media ID and scope only
+        name the inventory entry that was looked at.
+        """
         root = self._root(root_id)
         if root is None:
             return None
@@ -99,8 +106,9 @@ class FilesystemObservationSource:
             info = path.stat(follow_symlinks=False)
         except OSError:
             return None
-        return record.observation.model_copy(update={
-            "filesystem_id": str(info.st_dev), "inode": info.st_ino,
-            "size": info.st_size, "mtime_ns": info.st_mtime_ns,
-            "ctime_ns": info.st_ctime_ns, "hardlinks": info.st_nlink,
-        })
+        return FileObservation(
+            root_id=record.root_id, relative_path=record.relative_path,
+            media_id=record.media_id, scope=record.scope,
+            filesystem_id=str(info.st_dev), inode=info.st_ino,
+            size=info.st_size, mtime_ns=info.st_mtime_ns,
+            ctime_ns=info.st_ctime_ns, hardlinks=info.st_nlink)

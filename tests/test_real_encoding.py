@@ -1094,6 +1094,30 @@ def test_an_emptied_root_whose_files_were_recorded_missing_blocks_its_jobs(
     assert blocked.status == "blocked" and blocked.reasons and WAITING_FOR_ROOT not in blocked.reasons
 
 
+def test_a_fresh_source_observation_carries_only_what_the_stat_shows(tmp_path, monkeypatch, probe_facts):
+    import os
+    from app.models.inventory import Fingerprints
+    application, source, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        processor.scan_library()
+        movie = processor.get_library().movies[0]
+        worker = processor.queue.worker
+        record = worker.source.inventory.get_file(movie.id)
+        # Evidence a stored record may hold, which a stat can never confirm.
+        worker.source.inventory.store_file(record.model_copy(update={"observation": record.observation.model_copy(
+            update={"fingerprints": Fingerprints(full_scheme="sha256", full="stored")})}))
+        fresh = worker.source.observe(record.root_id, record.relative_path)
+        reference = worker.source.reference_for(movie.id, record.revision_id)
+        worker.guard.before_replacement(reference)
+        info = source.stat()
+        os.utime(source, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
+        with pytest.raises(Conflict, match="changed since"):
+            worker.guard.before_replacement(reference)
+    assert fresh.fingerprints == Fingerprints() and fresh.probe is None and fresh.generation is None
+    assert (fresh.inode, fresh.size, fresh.mtime_ns, fresh.hardlinks) == (info.st_ino, info.st_size, info.st_mtime_ns, 1)
+
+
 def queue_movie(processor, **request):
     processor.scan_library()
     movie = processor.get_library().movies[0]
