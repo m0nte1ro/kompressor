@@ -95,16 +95,17 @@ class MediaProcessor:
 
     def evaluate_compression(self, media_id: str, scope: MediaScope, preset_id: str,
                              preserve_audio: bool | None = None, preserve_subtitles: bool = True,
-                             replace_source: bool = False):
+                             replace_source: bool = False, video_bitrate: int | None = None):
         preset = self.catalog.preset(preset_id)
         entry = self.catalog.find(media_id, scope)
-        result = self.catalog.evaluate(entry, preset, preserve_audio, preserve_subtitles)
+        result = self.catalog.evaluate(entry, preset, preserve_audio, preserve_subtitles, video_bitrate)
         if self.discovery is not None:
             execution_reasons = self.queue.execution_reasons(
                 entry, preset, result,
                 requested_preserve_audio=preserve_audio,
                 preserve_subtitles=preserve_subtitles,
                 replace_source=replace_source,
+                video_bitrate=video_bitrate,
             )
             if execution_reasons:
                 result = result.model_copy(update={

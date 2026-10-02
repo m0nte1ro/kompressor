@@ -44,6 +44,7 @@ class _HEVCEncodeCapability:
             reasons.append("Real encoding prerequisites are unavailable.")
         reasons.extend(self._backend_reasons(job))
         if (job.preset.rate_control == "qvbr" and job.preset.qvbr_bitrates_by_resolution
+                and job.chosen_video_bitrate is None
                 and job.preset.video_bitrate_for(spatial_resolution(item)) is None):
             reasons.append("QVBR preset has no nominal bitrate for this source resolution.")
         if job.preset.destination_codec != "hevc":
@@ -72,7 +73,7 @@ class _HEVCEncodeCapability:
         if primary.pixel_format not in SUPPORTED_PIXEL_FORMATS:
             reasons.append(f"Unsupported or unknown source pixel format: {primary.pixel_format or 'unknown'}.")
         if (job.preset.rate_control == "qvbr" and job.preset.qvbr_bitrates_by_resolution
-                and primary.resolution_class is None):
+                and job.chosen_video_bitrate is None and primary.resolution_class is None):
             reasons.append("Source probe has no resolution class for QVBR bitrate selection.")
         if item.duration_seconds is None or item.width is None or item.height is None:
             reasons.append("Source duration and dimensions are required for output validation.")

@@ -113,6 +113,13 @@ cached probes are derived on load, so this correction needs no rescan or ffprobe
 run. Missing dimensions and rasters outside the supported classes stay unknown;
 a resolution in the filename is not evidence of measured dimensions.
 
+A file with measured dimensions outside the classes (for example 2560×1440 or
+4096×2160) still encodes at its own size. It matches only presets that apply to
+every resolution; a preset limited to some classes excludes it. When such a preset
+picks its bitrate from a per-resolution table (QVBR), the file is not in the table,
+so the encode modal asks for a video bitrate. That bitrate applies only to the
+files that need it and is stored on their jobs. Missing dimensions still block.
+
 1920×1080 interlaced content stays resolution class 1080 with an `1080i` display
 label. It is blocked with: “Interlaced source requires deinterlacing; no validated
 pipeline is enabled”. A scan type the file does not signal (common for

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from app.dependencies import Processor
+from app.models.queue import ChosenVideoBitrate
 
 
 router = APIRouter()
@@ -17,6 +18,7 @@ class EligibilityRequest(BaseModel):
     preserve_audio: bool | None = None
     preserve_subtitles: bool = True
     replace_source: bool = False
+    video_bitrate: ChosenVideoBitrate | None = None
 
 
 @router.get("/healthz")

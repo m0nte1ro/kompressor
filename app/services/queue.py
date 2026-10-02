@@ -95,7 +95,8 @@ class QueueService:
 
     def _candidate_job(self, entry, preset, result, *, job_id: str,
                        requested_preserve_audio: bool | None,
-                       preserve_subtitles: bool, replace_source: bool) -> QueueJob:
+                       preserve_subtitles: bool, replace_source: bool,
+                       video_bitrate: int | None = None) -> QueueJob:
         return QueueJob(
             id=job_id, media_id=entry.item.id, scope=entry.scope,
             name=entry.name, backend=preset.backend, preset=preset.model_copy(deep=True),
@@ -109,6 +110,7 @@ class QueueService:
                 getattr(self.worker, "capture_source_reference", lambda item: None)(entry.item)
             ),
             replace_source=replace_source,
+            chosen_video_bitrate=video_bitrate if result.video_bitrate_required else None,
             execution_mode=self.execution_mode,
             estimate_basis=result.estimate_basis,
             estimated_saving_low=result.estimated_saving_low,
@@ -123,7 +125,8 @@ class QueueService:
 
     def execution_reasons(self, entry, preset, result, *,
                           requested_preserve_audio: bool | None,
-                          preserve_subtitles: bool, replace_source: bool = False) -> list[str]:
+                          preserve_subtitles: bool, replace_source: bool = False,
+                          video_bitrate: int | None = None) -> list[str]:
         reasons = []
         if preset.backend not in self.supported_backends:
             reasons.append(f"{preset.backend.upper()} real encoding is not available in this runtime.")
@@ -136,6 +139,7 @@ class QueueService:
             requested_preserve_audio=requested_preserve_audio,
             preserve_subtitles=preserve_subtitles,
             replace_source=replace_source,
+            video_bitrate=video_bitrate,
         )
         capability_check = getattr(self.worker, "enqueue_reasons", None)
         if capability_check:
@@ -157,7 +161,7 @@ class QueueService:
                     excluded.append({"media_id": media_id, "reasons": [str(error)]})
                     continue
                 result = self.catalog.evaluate(entry, preset, request.preserve_audio,
-                                               request.preserve_subtitles)
+                                               request.preserve_subtitles, request.video_bitrate)
                 reasons = list(result.reasons)
                 if preset.backend not in self.supported_backends:
                     reasons.append(f"{preset.backend.upper()} real encoding is not available in this runtime.")
@@ -174,6 +178,7 @@ class QueueService:
                     requested_preserve_audio=request.preserve_audio,
                     preserve_subtitles=result.preserve_subtitles,
                     replace_source=request.replace_source,
+                    video_bitrate=request.video_bitrate,
                 )
                 capability_check = getattr(self.worker, "enqueue_reasons", None)
                 if capability_check:
@@ -221,7 +226,8 @@ class QueueService:
                 "reuse_output_path": kept.output_path, "replaces_job_id": kept.id,
             })
             entry = self.catalog.find(job.media_id, job.scope)
-            result = self.catalog.evaluate(entry, job.preset, job.requested_preserve_audio, job.preserve_subtitles)
+            result = self.catalog.evaluate(entry, job.preset, job.requested_preserve_audio, job.preserve_subtitles,
+                                           job.chosen_video_bitrate)
             reasons = list(result.reasons)
             if result.preserve_audio != job.preserve_audio:
                 reasons.append("The audio policy changed since this output was encoded; encode again instead.")
@@ -789,7 +795,7 @@ class QueueService:
                     entry = self.catalog.find(job.media_id, job.scope)
                     # The job's own request decides; None means preserve audio.
                     result = self.catalog.evaluate(entry, job.preset,
-                        job.requested_preserve_audio, job.preserve_subtitles)
+                        job.requested_preserve_audio, job.preserve_subtitles, job.chosen_video_bitrate)
                     reasons = list(result.reasons)
                     if job.execution_mode == "real":
                         # Runtime availability is checked when new work is

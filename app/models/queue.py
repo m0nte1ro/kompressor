@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -10,10 +10,14 @@ from app.models.inventory import SourceReference
 JobStatus = Literal["queued", "encoding", "validating", "replacing", "stopping",
                     "completed", "skipped", "blocked", "failed"]
 Priority = Literal["low", "normal", "high", "urgent"]
+# Nominal video bitrate (bit/s) a user picks for a source whose size is outside
+# the preset's per-resolution bitrate table.
+ChosenVideoBitrate = Annotated[int, Field(ge=100_000, le=200_000_000)]
 
 
 class EnqueueRequest(BaseModel):
-    # The client supplies a preset ID, never technical encoder overrides.
+    # The client supplies a preset ID, never technical encoder overrides. The one
+    # exception is video_bitrate, used only by sources outside the preset's bitrate table.
     model_config = ConfigDict(extra="forbid")
     media_ids: list[str] = Field(min_length=1, max_length=500)
     scope: MediaScope
@@ -23,6 +27,7 @@ class EnqueueRequest(BaseModel):
     preserve_subtitles: bool = True
     # API callers keep the original unless they ask; the WebUI modal defaults to replace.
     replace_source: bool = False
+    video_bitrate: ChosenVideoBitrate | None = None
 
 
 class ReplacementJournal(BaseModel):
@@ -66,6 +71,8 @@ class QueueJob(BaseModel):
     source_revision_id: str | None = None
     source_reference: SourceReference | None = None
     replace_source: bool = False
+    # Set only when the source size is outside the preset's bitrate table.
+    chosen_video_bitrate: ChosenVideoBitrate | None = None
     replacement: ReplacementJournal | None = None
     source_replaced: bool = False
     # History "Replace source": this job swaps in the kept output of replaces_job_id

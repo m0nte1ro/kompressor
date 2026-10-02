@@ -66,12 +66,14 @@ class CatalogService:
 
     def evaluate(self, entry: MediaEntry, preset: CompressionPreset,
                  preserve_audio: bool | None = None,
-                 preserve_subtitles: bool = True) -> EligibilityResult:
+                 preserve_subtitles: bool = True,
+                 video_bitrate: int | None = None) -> EligibilityResult:
         return self.policy.evaluate(
             item=entry.item, scope=entry.scope, preset=preset,
             effective_tags=entry.tags, preserve_audio=preserve_audio,
             preserve_subtitles=preserve_subtitles,
             quality_floor=entry.quality_floor,
+            video_bitrate=video_bitrate,
         )
 
     def preview(self, entry: MediaEntry, available: list[CompressionPreset] | None = None) -> tuple[CompressionPreset | None, EligibilityResult]:

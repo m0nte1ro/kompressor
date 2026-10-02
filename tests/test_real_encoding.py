@@ -730,7 +730,10 @@ def test_web_restart_does_not_recover_or_stop_active_real_job(tmp_path, monkeypa
         assert active["status"] == "encoding"
 
 
-def test_gpu_worker_claims_validates_and_completes_show_job(tmp_path, monkeypatch, probe_facts):
+def build_gpu_show_processor(tmp_path, monkeypatch, probe_facts):
+    """Worker-process GPU lane over one show episode probed as probe_facts.
+
+    Returns the processor and the list of spawned fake ffmpeg processes."""
     shows_root = tmp_path / "shows"
     series = shows_root / "Fixture Show"
     series.mkdir(parents=True)
@@ -793,6 +796,11 @@ def test_gpu_worker_claims_validates_and_completes_show_job(tmp_path, monkeypatc
     monkeypatch.setattr("app.workers.ffmpeg.subprocess.Popen", popen)
 
     processor = build_media_processor(config, process_role="worker", worker_backend="gpu")
+    return processor, spawned
+
+
+def test_gpu_worker_claims_validates_and_completes_show_job(tmp_path, monkeypatch, probe_facts):
+    processor, spawned = build_gpu_show_processor(tmp_path, monkeypatch, probe_facts)
     assert processor.queue.supported_backends == frozenset({"gpu"})
     assert isinstance(processor.queue.worker, RealEncoderWorker)
     assert processor.queue.worker.supported_backends == frozenset({"gpu"})

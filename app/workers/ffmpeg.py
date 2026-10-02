@@ -213,7 +213,7 @@ class FFmpegEncoder:
         elif job.backend == "gpu":
             source_resolution = f"{primary.resolution_class}p" if primary.resolution_class else "unknown"
             try:
-                nominal_bitrate = job.preset.video_bitrate_for(source_resolution)
+                nominal_bitrate = job.chosen_video_bitrate or job.preset.video_bitrate_for(source_resolution)
                 command.extend(vaapi.video_args(
                     job.preset.output_bit_depth, job.preset.rate_control,
                     job.preset.quality_value, nominal_bitrate,

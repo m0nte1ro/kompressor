@@ -7,7 +7,7 @@ from app.models.media import (
 from app.models.media import spatial_resolution
 from app.models.policy import EligibilityResult
 from app.models.probe import assumed_sdr_colours
-from app.models.preset import CompressionPreset
+from app.models.preset import SUPPORTED_SOURCE_RESOLUTIONS, CompressionPreset
 from app.models.tags import QualityFloor
 from app.services.estimation import estimate
 
@@ -26,9 +26,11 @@ class PolicyEngine:
         preserve_audio: bool | None,
         preserve_subtitles: bool,
         quality_floor: QualityFloor | None = None,
+        video_bitrate: int | None = None,
     ) -> EligibilityResult:
         reasons: list[str] = []
         warnings: list[str] = []
+        bitrate_required = False
         if not item.processing_supported:
             reasons.append("Read-only filesystem inventory: encoding is not enabled.")
         if item.hdr in {"hdr10plus", "hlg", "unknown"}:
@@ -46,8 +48,19 @@ class PolicyEngine:
             reasons.append("Source duration is unknown.")
         if item.interlaced is None:
             reasons.append("Source scan type is unknown.")
-        if spatial_resolution(item) not in preset.source_resolutions:
-            reasons.append("Source resolution is not supported by this preset. Configure explicit applicability.")
+        resolution = spatial_resolution(item)
+        if resolution in SUPPORTED_SOURCE_RESOLUTIONS:
+            if resolution not in preset.source_resolutions:
+                reasons.append("Source resolution is not supported by this preset. Configure explicit applicability.")
+        elif item.width is None or item.height is None:
+            reasons.append("Source resolution is unknown.")
+        elif set(preset.source_resolutions) != set(SUPPORTED_SOURCE_RESOLUTIONS):
+            # A size outside the standard classes only matches presets for every resolution.
+            reasons.append(f"Source size {item.width}×{item.height} is outside this preset's resolutions.")
+        elif preset.rate_control == "qvbr" and preset.qvbr_bitrates_by_resolution:
+            bitrate_required = True
+            if video_bitrate is None:
+                reasons.append(f"Source size {item.width}×{item.height} is not in this preset's bitrate table; choose a video bitrate.")
         if item.hdr and preset.hdr_support == "sdr_only":
             reasons.append("This preset supports SDR sources only.")
         elif item.hdr == "hdr10":
@@ -176,7 +189,8 @@ class PolicyEngine:
                 "Preserve Audio tag overrides the modal audio setting."
             )
 
-        estimates = estimate(item, preset, effective_preserve_audio)
+        estimates = estimate(item, preset, effective_preserve_audio,
+                             video_bitrate if bitrate_required else None)
         if "Preserve A/V" in effective_tags:
             estimates.update(
                 estimated_output_size=None,
@@ -218,4 +232,5 @@ class PolicyEngine:
             preserve_subtitles=(
                 preserve_subtitles
             ),
+            video_bitrate_required=bitrate_required,
         )

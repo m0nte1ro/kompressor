@@ -490,8 +490,8 @@ preserve audio; conservative, experimental high-fidelity starting point.
 
 Tone it down a bit + HEVC
 Scope: Show; Intel GPU/iGPU (VA-API); HEVC; QVBR quality 23 with per-source-resolution
-nominal bitrates (480p 1, 576p 1.5, 720p 2.5, 1080p 4, 2160p 16 Mbps); preserve
-source resolution; preserve every audio track and language by default.
+nominal bitrates (480p 1, 576p 1.5, 720p 2.5, 1080p 4, 2160p 16 Mbps; other sizes
+use a bitrate chosen in the encode modal); preserve source resolution; preserve every audio track and language by default.
 
 Tone it down a bit + HEVC + Efficient Audio
 Scope: Show; Intel GPU/iGPU; exactly the same video policy as Show Streaming
