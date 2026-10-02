@@ -1,5 +1,7 @@
 """Dual-lane scheduler. Policy decisions remain in the existing PolicyEngine."""
 import logging
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import datetime, timezone
 from threading import RLock
@@ -26,6 +28,18 @@ OUTAGE_BACKOFF_SECONDS = 10.0
 WAITING_FOR_ROOT = "Waiting: the library root holding this source is unavailable (unmounted or unreachable)."
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class StorageChecks:
+    """What library storage said, gathered before a transaction opened.
+
+    Listing a root or stat'ing a source blocks while its network mount hangs,
+    and SQLite's write lock must never wait on library storage.
+    """
+    unavailable_roots: frozenset[str] = frozenset()
+    # Replacement preconditions (path, writable mount) of queued replace jobs, by job ID.
+    replacement: Mapping[str, list[str]] = field(default_factory=dict)
 
 
 def now() -> str:
@@ -63,23 +77,25 @@ class QueueService:
             payload["measured_saving"] = job.source_size - job.output_size
         return payload
 
-    def unavailable_roots(self, backends: set[str] | frozenset[str] | None = None) -> frozenset[str]:
-        """Library roots of pending real jobs that cannot be listed right now.
+    def storage_checks(self, backends: set[str] | frozenset[str] | None = None) -> StorageChecks:
+        """Check library storage for the pending real jobs: which roots are down, and
+        whether each queued replace job's source can still be replaced.
 
-        Listing a root can block on a hung network mount, so this runs before a
-        transaction opens, never inside one: SQLite's write lock must not wait on
-        library storage. Callers inside a transaction hand the result to revalidate().
+        Runs before a transaction opens, never inside one. Callers inside a
+        transaction hand the result to revalidate().
         """
-        check = getattr(self.worker, "unavailable_roots", None)
-        if check is None:
-            return frozenset()
-        roots = set()
-        for job in self.repository.pending():
-            reference = job.source_reference
-            if (job.status in PENDING and job.execution_mode == "real" and reference is not None
-                    and reference.root_id is not None and (backends is None or job.backend in backends)):
-                roots.add(reference.root_id)
-        return check(roots) if roots else frozenset()
+        unavailable_roots = getattr(self.worker, "unavailable_roots", None)
+        replacement_check = getattr(self.worker, "replacement_check", None)
+        if unavailable_roots is None or replacement_check is None:
+            return StorageChecks()
+        jobs = [job for job in self.repository.pending() if job.execution_mode == "real"
+                and job.source_reference is not None and (backends is None or job.backend in backends)]
+        roots = {job.source_reference.root_id for job in jobs if job.source_reference.root_id is not None}
+        unavailable = unavailable_roots(roots) if roots else frozenset()
+        replacement = {job.id: replacement_check(job.source_reference) for job in jobs
+                       if job.status == "queued" and job.replace_source
+                       and not self._awaits_root(job, unavailable)}
+        return StorageChecks(unavailable, replacement)
 
     @staticmethod
     def _awaits_root(job: QueueJob, unavailable: frozenset[str]) -> bool:
@@ -188,6 +204,7 @@ class QueueService:
         if getattr(self.worker, "filesystem_mode", False) and not getattr(self.worker, "enabled", False):
             raise InvalidOperation("Real encoding is unavailable: " + (getattr(self.worker, "unavailable_reason", None) or "runtime prerequisites failed."))
         added, excluded = [], []
+        replacement = self._replacement_checks(request.media_ids, request.scope) if request.replace_source else {}
         with self.lock, self.repository.transaction():
             pending = {(j.media_id, j.scope) for j in self.repository.pending()}
             for media_id in dict.fromkeys(request.media_ids):
@@ -217,7 +234,7 @@ class QueueService:
                 )
                 capability_check = getattr(self.worker, "enqueue_reasons", None)
                 if capability_check:
-                    reasons.extend(capability_check(entry.item, job))
+                    reasons.extend(capability_check(entry.item, job, replacement=replacement.get(media_id, [])))
                 if reasons:
                     excluded.append({"media_id": media_id, "reasons": list(dict.fromkeys(reasons))})
                     continue
@@ -228,6 +245,22 @@ class QueueService:
             if wake:
                 wake()
         return {"added": added, "excluded": excluded}
+
+    def _replacement_checks(self, media_ids: list[str], scope) -> dict[str, list[str]]:
+        """replacement_check() for each item's current source, before a transaction opens."""
+        check = getattr(self.worker, "replacement_check", None)
+        capture = getattr(self.worker, "capture_source_reference", None)
+        if check is None or capture is None:
+            return {}
+        checks = {}
+        for media_id in dict.fromkeys(media_ids):
+            try:
+                reference = capture(self.catalog.find(media_id, scope).item)
+            except LookupError:
+                continue  # Excluded with its reason inside the transaction.
+            if reference is not None:
+                checks[media_id] = check(reference)
+        return checks
 
     def enqueue_replacement(self, job_id: str) -> dict:
         """Queue a replace-only job that swaps a kept, validated output into its source.
@@ -241,6 +274,9 @@ class QueueService:
         if not getattr(self.worker, "enabled", False):
             raise InvalidOperation("Real encoding is unavailable: " + (
                 getattr(self.worker, "unavailable_reason", None) or "runtime prerequisites failed."))
+        reference = self._find(job_id).source_reference
+        check = getattr(self.worker, "replacement_check", None)
+        replacement = check(reference) if check and reference is not None else []  # Before the lock.
         with self.lock, self.repository.transaction():
             kept = self._find(job_id)
             if (kept.execution_mode != "real" or kept.status != "completed" or kept.replace_source
@@ -267,7 +303,7 @@ class QueueService:
                 reasons.append("The audio policy changed since this output was encoded; encode again instead.")
             capability_check = getattr(self.worker, "enqueue_reasons", None)
             if capability_check:
-                reasons.extend(capability_check(entry.item, job))
+                reasons.extend(capability_check(entry.item, job, replacement=replacement))
             if reasons:
                 raise QueueConflict("Cannot replace the source: " + " ".join(dict.fromkeys(reasons)))
             self.repository.add(job)
@@ -491,7 +527,7 @@ class QueueService:
         interrupted = []
         # Covers the active jobs requeued below: a worker restarting before the
         # library is mounted must leave them waiting, not block them.
-        unavailable = self.unavailable_roots(backends)
+        storage = self.storage_checks(backends)
         with self.lock, self.repository.transaction():
             for job in self.repository.get_all():
                 if backends is not None and job.backend not in backends:
@@ -552,11 +588,11 @@ class QueueService:
                     job.cancel_requested = False
                     self.repository.save(job)
             if backends is None:
-                self.revalidate(unavailable_roots=unavailable)
+                self.revalidate(storage=storage)
             else:
                 ready_backends = frozenset(backends) & self.supported_backends
                 if ready_backends:
-                    self.revalidate(backends=ready_backends, unavailable_roots=unavailable)
+                    self.revalidate(backends=ready_backends, storage=storage)
         cleanup = getattr(self.worker, "cleanup_interrupted", None)
         if cleanup:
             for job_id in interrupted:
@@ -574,18 +610,18 @@ class QueueService:
         # conditions before claiming, so this preflight cannot create a race.
         if not self._queued(backend):
             return None
-        unavailable = self.unavailable_roots({backend})
+        storage = self.storage_checks({backend})
         with self.lock, self.repository.transaction():
             if self.controls and not self.controls.can_claim(backend):
                 return None
             if any(j.backend == backend and j.status in ACTIVE for j in self.repository.pending()):
                 return None
-            self.revalidate(backends={backend}, unavailable_roots=unavailable)
+            self.revalidate(backends={backend}, storage=storage)
             queued = self._queued(backend)
             if not queued:
                 return None
             # Jobs whose library root is unreachable wait; the rest of the lane runs.
-            claimable = [j for j in queued if not self._awaits_root(j, unavailable)]
+            claimable = [j for j in queued if not self._awaits_root(j, storage.unavailable_roots)]
             waiting = not claimable
             if waiting != (backend in self._lanes_waiting):
                 # Log the change, not every poll: an outage can last for hours.
@@ -881,14 +917,14 @@ class QueueService:
 
     def revalidate(self, *, defer_external_stops: bool = False,
                    backends: set[str] | frozenset[str] | None = None,
-                   unavailable_roots: frozenset[str] | None = None) -> list[str]:
+                   storage: StorageChecks | None = None) -> list[str]:
         """Apply current protections, optionally restricted to process-owned lanes.
 
-        A caller already inside a transaction passes unavailable_roots, worked
-        out before it opened that transaction (see unavailable_roots()).
+        A caller already inside a transaction passes storage, gathered before it
+        opened that transaction (see storage_checks()).
         """
-        if unavailable_roots is None:
-            unavailable_roots = self.unavailable_roots(backends)
+        if storage is None:
+            storage = self.storage_checks(backends)
         stop_after_commit = []
         with self.lock, self.repository.transaction():
             for job in self.repository.pending():
@@ -896,7 +932,7 @@ class QueueService:
                     continue
                 if job.status not in PENDING or job.status == "replacing":
                     continue  # A source swap is never interrupted by policy changes.
-                if self._awaits_root(job, unavailable_roots):
+                if self._awaits_root(job, storage.unavailable_roots):
                     # A dropped mount is not a verdict: re-check once the root is back.
                     if WAITING_FOR_ROOT not in job.reasons:
                         job.reasons = [*job.reasons, WAITING_FOR_ROOT]
@@ -928,7 +964,10 @@ class QueueService:
                         reasons.append("Audio policy changed during execution. Submit a new job.")
                     capability_check = getattr(self.worker, "enqueue_reasons", None)
                     if capability_check and job.status == "queued":
-                        capability_reasons = capability_check(entry.item, job)
+                        # A replace job queued after storage was checked gets checked on
+                        # the next pass, and again before its swap; never on disk here.
+                        capability_reasons = capability_check(
+                            entry.item, job, replacement=storage.replacement.get(job.id, []))
                         if job.execution_mode == "real":
                             capability_reasons = [
                                 reason for reason in capability_reasons

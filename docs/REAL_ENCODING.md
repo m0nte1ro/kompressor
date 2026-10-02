@@ -111,8 +111,11 @@ while its root is unavailable is requeued from zero with a note instead of faili
 file that is missing while its root is reachable still blocks its job, as before, and
 so does a root emptied after scans recorded its files missing.
 
-Roots are listed before any database transaction opens, so a hung network mount
-never holds SQLite's write lock (which would stall the WebUI and the other lane). A
+Library storage is only touched before a database transaction opens: root listings,
+and for replace jobs the source checks (its path, and whether its folder's mount is
+writable), when queueing, replacing from History, claiming, revalidating and
+recovering. A hung network mount therefore never holds SQLite's write lock (which
+would stall the WebUI and the other lane). A
 listing that has not answered within 5 seconds counts as unavailable; it keeps
 running in the background and is reused, not repeated, until the mount answers.
 

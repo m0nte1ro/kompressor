@@ -174,7 +174,12 @@ class RealEncoderWorker:
             raise Conflict(f"No real execution capability is registered for {backend.upper()}.")
         return capability
 
-    def enqueue_reasons(self, item: MediaItem, job: QueueJob) -> list[str]:
+    def enqueue_reasons(self, item: MediaItem, job: QueueJob, replacement: list[str] | None = None) -> list[str]:
+        """Why the job cannot run here.
+
+        replacement is replacement_check() for a replace job, gathered before the
+        caller opened a transaction; without it the check runs here, on the disk.
+        """
         reasons = self._capability(job.backend).reasons(item, job)
         reference = job.source_reference
         revision_id = item.revision_id
@@ -185,12 +190,18 @@ class RealEncoderWorker:
         elif reference is not None:
             reasons.append("Source revision changed after the job was queued.")
         if job.replace_source and reference is not None:
-            path = self.source.path_for(reference)
-            if path is None:
-                reasons.append("Current source path is unavailable.")
-            else:
-                reasons.extend(replacement_reasons(path))
+            reasons.extend(self.replacement_check(reference) if replacement is None else replacement)
         return list(dict.fromkeys(reasons))
+
+    def replacement_check(self, reference: SourceReference) -> list[str]:
+        """Whether the source at this reference can be replaced: a stat of its path
+        and its mount. Blocks while that mount hangs, so never inside a transaction."""
+        if reference.root_id is not None and self.unavailable_roots({reference.root_id}):
+            return ["The library root holding this source is unavailable (unmounted or unreachable)."]
+        path = self.source.path_for(reference)
+        if path is None:
+            return ["Current source path is unavailable."]
+        return replacement_reasons(path)
 
     def unavailable_roots(self, root_ids: Iterable[str]) -> frozenset[str]:
         """The library roots among these that cannot be listed right now.

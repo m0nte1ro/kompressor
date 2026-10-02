@@ -187,11 +187,11 @@ class MediaProcessor:
     def update_tags(self, payload: TagUpdate):
         # Tag changes and queue revalidation commit atomically. Any real process
         # cancellation waits until both the queue lock and DB transaction release.
-        # Library roots are listed first, never while holding the write lock.
-        unavailable = self.queue.unavailable_roots()
+        # Library storage is checked first, never while holding the write lock.
+        storage = self.queue.storage_checks()
         with self.queue.lock, self.queue.repository.transaction():
             updated = self._tagger().update(payload)
-            self.queue.revalidate(defer_external_stops=True, unavailable_roots=unavailable)
+            self.queue.revalidate(defer_external_stops=True, storage=storage)
         return {"updated": updated}
 
     def scan_library(self):

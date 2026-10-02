@@ -1161,38 +1161,54 @@ def queue_movie(processor, **request):
     return movie, added[0]["id"]
 
 
-def test_library_roots_are_never_listed_while_the_queue_holds_the_write_lock(
-        tmp_path, monkeypatch, probe_facts, no_outage_caching):
+def lock_probe(database_path, results):
+    """Record, from inside a storage check, whether another process could write now."""
     import sqlite3
+
+    def probe():
+        other = sqlite3.connect(database_path, timeout=0)
+        try:
+            other.execute("BEGIN IMMEDIATE")
+            other.rollback()
+            results.append(True)
+        except sqlite3.OperationalError:
+            results.append(False)
+        finally:
+            other.close()
+    return probe
+
+
+def test_library_storage_is_never_checked_while_the_queue_holds_the_write_lock(
+        tmp_path, monkeypatch, probe_facts, no_outage_caching):
     from app.models.tags import TagTarget, TagUpdate
+    from app.workers import real
     application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
     with TestClient(application):
         processor = application.state.media_processor
-        movie, job_id = queue_movie(processor)
         source = processor.queue.worker.source
-        list_root = source.root_available
-        writable = []
+        listed, checked = [], []
+        list_root, check_source = source.root_available, real.replacement_reasons
+        probe_listing, probe_check = lock_probe(tmp_path / "state.sqlite3", listed), lock_probe(
+            tmp_path / "state.sqlite3", checked)
 
         def root_available(root_id):
-            # A hung mount blocks right here; the other processes must still be able to write.
-            other = sqlite3.connect(tmp_path / "state.sqlite3", timeout=0)
-            try:
-                other.execute("BEGIN IMMEDIATE")
-                other.rollback()
-                writable.append(True)
-            except sqlite3.OperationalError:
-                writable.append(False)
-            finally:
-                other.close()
+            probe_listing()  # A hung mount blocks right here.
             return list_root(root_id)
 
+        def replacement_reasons(path):
+            probe_check()  # statvfs/access of the source's folder.
+            return check_source(path)
+
         monkeypatch.setattr(source, "root_available", root_available)
+        monkeypatch.setattr(real, "replacement_reasons", replacement_reasons)
+        movie, job_id = queue_movie(processor, replace_source=True)  # WebUI.
         processor.queue.recover(backends={"cpu"})  # Worker startup.
         processor.update_tags(TagUpdate(targets=[TagTarget(kind="movie", id=movie.id)],
                                         tags=["Preserve Audio"]))  # WebUI.
         job = processor.queue.claim_next("cpu")  # Lane.
     assert job is not None and job.id == job_id
-    assert len(writable) == 3 and all(writable)
+    assert checked == [True] * 4  # Each step checked the replace job's source, unlocked.
+    assert listed and all(listed)
 
 
 def test_a_hung_library_mount_times_out_and_its_jobs_wait(tmp_path, monkeypatch, probe_facts, no_outage_caching):
