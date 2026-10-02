@@ -31,6 +31,10 @@ replace jobs, swap verified outputs into source paths; a replaced file gets a ne
   indexed issues, including requested fingerprint tier and candidate IDs.
 - `artifacts`: independent output identity, unique job and reserved location,
   source file/revision, complete preset snapshot and simulated lifecycle.
+- `jobs`: one JSON payload per queue/history job. An index on the payload's
+  status (`job_status`) serves the unfinished-job reads that lanes poll (claims,
+  revalidation, Stop & Skip checks), and single jobs are read by ID, so finished
+  history is parsed only for the queue page's snapshot and startup recovery.
 
 Indexes cover root/path, present root/scope, media ID, show ID/presence,
 file/current-revision relationships, semantic scope, physical identities,

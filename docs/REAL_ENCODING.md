@@ -97,7 +97,8 @@ A job's state changes (completed, failed, stopped) are retried for as long as SQ
 reports the database locked by another connection (`SQLITE_BUSY`/`SQLITE_LOCKED`),
 because the lane cannot claim its next job until that write lands; any other write
 error, including a read-only or failing database, is logged after five attempts and
-left to restart recovery. A failed progress write is only logged and never ends a
+left to restart recovery. Progress is written at most every 2 seconds (the WebUI
+refreshes at that rate); a failed progress write is only logged and never ends a
 healthy encode.
 
 A library root that cannot be listed is an outage, not a verdict on its jobs, and so is

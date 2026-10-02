@@ -8,7 +8,8 @@ from typing import Literal
 from uuid import uuid4
 
 from app.services.errors import Conflict, InvalidOperation, NotFound
-from app.models.queue import EnqueueRequest, Priority, QueueJob, ReplacementJournal
+from app.models.queue import (ACTIVE_STATUSES, PENDING_STATUSES, EnqueueRequest, Priority, QueueJob,
+                              ReplacementJournal)
 from app.models.preferences import WorkerSettings
 from app.repositories.base import QueueRepository
 from app.services.catalog import CatalogService
@@ -16,9 +17,8 @@ from app.services.worker_control import WorkerControlService
 from app.workers.base import EncoderWorker
 
 
-# "replacing" is active but never stoppable: the source swap must run to a known state.
-ACTIVE = {"encoding", "validating", "replacing", "stopping"}
-PENDING = {"queued", *ACTIVE}
+ACTIVE = ACTIVE_STATUSES
+PENDING = PENDING_STATUSES
 PRIORITIES = {"urgent": 3, "high": 2, "normal": 1, "low": 0}
 # How long a lane whose queued sources are all unreachable waits before looking again.
 OUTAGE_BACKOFF_SECONDS = 10.0
@@ -74,7 +74,7 @@ class QueueService:
         if check is None:
             return frozenset()
         roots = set()
-        for job in self.repository.get_all():
+        for job in self.repository.pending():
             reference = job.source_reference
             if (job.status in PENDING and job.execution_mode == "real" and reference is not None
                     and reference.root_id is not None and (backends is None or job.backend in backends)):
@@ -89,7 +89,7 @@ class QueueService:
                 and reference.root_id in unavailable)
 
     def _queued(self, backend: str, jobs: list[QueueJob] | None = None) -> list[QueueJob]:
-        source = self.repository.get_all() if jobs is None else jobs
+        source = self.repository.pending() if jobs is None else jobs
         return sorted(
             (j for j in source if j.backend == backend and j.status == "queued"),
             key=lambda j: (-j.move_next_order, -PRIORITIES[j.priority],
@@ -189,6 +189,7 @@ class QueueService:
             raise InvalidOperation("Real encoding is unavailable: " + (getattr(self.worker, "unavailable_reason", None) or "runtime prerequisites failed."))
         added, excluded = [], []
         with self.lock, self.repository.transaction():
+            pending = {(j.media_id, j.scope) for j in self.repository.pending()}
             for media_id in dict.fromkeys(request.media_ids):
                 try:
                     entry = self.catalog.find(media_id, request.scope)
@@ -200,8 +201,7 @@ class QueueService:
                 reasons = list(result.reasons)
                 if preset.backend not in self.supported_backends:
                     reasons.append(f"{preset.backend.upper()} real encoding is not available in this runtime.")
-                if any(j.media_id == media_id and j.scope == request.scope and j.status in PENDING
-                       for j in self.repository.get_all()):
+                if (media_id, request.scope) in pending:
                     reasons.append("Already queued or active.")
                 if preset.destination_codec != "hevc":
                     reasons.append("AV1 is not available in this workflow.")
@@ -246,8 +246,7 @@ class QueueService:
             if (kept.execution_mode != "real" or kept.status != "completed" or kept.replace_source
                     or kept.source_replaced or not kept.output_path):
                 raise QueueConflict("Only completed keep-original real encodes with a kept output can replace their source.")
-            jobs = self.repository.get_all()
-            if any(j.media_id == kept.media_id and j.scope == kept.scope and j.status in PENDING for j in jobs):
+            if any(j.media_id == kept.media_id and j.scope == kept.scope for j in self.repository.pending()):
                 raise QueueConflict("This item already has a queued or active job.")
             if kept.backend not in self.supported_backends:
                 raise QueueConflict(f"The {kept.backend.upper()} worker lane is not available.")
@@ -307,7 +306,7 @@ class QueueService:
             self.repository.save(kept)
 
     def _find(self, job_id: str) -> QueueJob:
-        job = next((j for j in self.repository.get_all() if j.id == job_id), None)
+        job = self.repository.get(job_id)
         if job is None:
             raise NotFound("Job not found.")
         return job
@@ -325,7 +324,7 @@ class QueueService:
             job = self._find(job_id)
             if job.status in PENDING:
                 raise QueueConflict("Only finished jobs can be deleted from History.")
-            if any(j.replaces_job_id == job.id and j.status in PENDING for j in self.repository.get_all()):
+            if any(j.replaces_job_id == job.id for j in self.repository.pending()):
                 raise QueueConflict("A replacement using this kept output is queued or running.")
             self.repository.remove(job_id)
         cleanup = getattr(self.worker, "cleanup_interrupted", None)
@@ -396,7 +395,7 @@ class QueueService:
                 continue
             if self.controls and not self.controls.can_claim(backend):
                 continue
-            if any(j.backend == backend and j.status in ACTIVE for j in self.repository.get_all()):
+            if any(j.backend == backend and j.status in ACTIVE for j in self.repository.pending()):
                 continue
             queued = self._queued(backend)
             if queued:
@@ -409,7 +408,7 @@ class QueueService:
         """Called by the fake worker clock, never by GET requests."""
         with self.lock, self.repository.transaction():
             self.revalidate()
-            for job in self.repository.get_all():
+            for job in self.repository.pending():
                 if job.backend in self.external_backends:
                     continue
                 if job.status in ACTIVE:
@@ -431,7 +430,7 @@ class QueueService:
         if resolve is None:
             return
         keep_outputs: set[str] = set()
-        for job in self.repository.get_all():
+        for job in self.repository.pending():
             if job.status != "replacing" or (backends is not None and job.backend not in backends):
                 continue
             if job.replacement is None:
@@ -579,7 +578,7 @@ class QueueService:
         with self.lock, self.repository.transaction():
             if self.controls and not self.controls.can_claim(backend):
                 return None
-            if any(j.backend == backend and j.status in ACTIVE for j in self.repository.get_all()):
+            if any(j.backend == backend and j.status in ACTIVE for j in self.repository.pending()):
                 return None
             self.revalidate(backends={backend}, unavailable_roots=unavailable)
             queued = self._queued(backend)
@@ -790,7 +789,7 @@ class QueueService:
         if self.controls is None or not self.controls.quiet_active(backend):
             return None
         with self.lock, self.repository.transaction():
-            active = next((j for j in self.repository.get_all()
+            active = next((j for j in self.repository.pending()
                            if j.backend == backend and j.status in ACTIVE), None)
             if active is None:
                 return None
@@ -872,7 +871,7 @@ class QueueService:
 
     def stop_active_backend(self, backend: str, reason: str = "user_stop") -> bool:
         with self.lock, self.repository.transaction():
-            active = next((j for j in self.repository.get_all()
+            active = next((j for j in self.repository.pending()
                            if j.backend == backend and j.status in ACTIVE), None)
             job_id = active.id if active and active.status != "replacing" else None
         if job_id is None:
@@ -892,7 +891,7 @@ class QueueService:
             unavailable_roots = self.unavailable_roots(backends)
         stop_after_commit = []
         with self.lock, self.repository.transaction():
-            for job in self.repository.get_all():
+            for job in self.repository.pending():
                 if backends is not None and job.backend not in backends:
                     continue
                 if job.status not in PENDING or job.status == "replacing":

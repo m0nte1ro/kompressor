@@ -5,6 +5,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from threading import RLock, local
 
+# A job's status inside its JSON payload; indexed, so queries must use this exact expression.
+JOB_STATUS = "json_extract(payload, '$.status')"
+
 
 class Database:
     def __init__(self, path: Path):
@@ -18,6 +21,9 @@ class Database:
                 raise RuntimeError(f"Unsupported database schema version: {version}")
             for table in ("presets", "tags", "jobs", "metadata"):
                 connection.execute(f"CREATE TABLE IF NOT EXISTS {table} (id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+            # Unfinished jobs are found without parsing every finished one (see
+            # SQLiteQueueRepository.pending). Older databases gain it on startup.
+            connection.execute(f"CREATE INDEX IF NOT EXISTS job_status ON jobs({JOB_STATUS})")
             if version < 2:
                 from app.models.inventory import InventoryState
                 from app.repositories.inventory import SQLiteInventoryRepository

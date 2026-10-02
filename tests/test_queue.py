@@ -309,3 +309,17 @@ def test_the_old_preserve_subtitles_name_is_still_read():
     assert EligibilityRequest.model_validate(
         {"media_id": "m", "scope": "movie", "preset_id": "p", "preserve_subtitles": False}
     ).preserve_subtitles_and_metadata is False
+
+
+def test_unfinished_jobs_are_read_through_the_status_index(tmp_path):
+    from app.repositories.database import JOB_STATUS, Database
+    from app.repositories.sqlite import SQLiteQueueRepository
+    from tests.test_real_encoding import queue_job
+    repository = SQLiteQueueRepository(Database(tmp_path / "state.sqlite3"))
+    for job_id, status in [("done", "completed"), ("waiting", "queued"), ("running", "encoding"), ("failed", "failed")]:
+        repository.add(queue_job(id=job_id, status=status))
+    assert [job.id for job in repository.pending()] == ["waiting", "running"]
+    assert repository.get("done").status == "completed" and repository.get("missing") is None
+    with repository.database.read() as connection:
+        plan = connection.execute(f"EXPLAIN QUERY PLAN SELECT payload FROM jobs WHERE {JOB_STATUS} = 'queued'").fetchall()
+    assert any("job_status" in row[3] for row in plan), plan

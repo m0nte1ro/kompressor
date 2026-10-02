@@ -10,6 +10,10 @@ from app.models.inventory import SourceReference
 JobStatus = Literal["queued", "encoding", "validating", "replacing", "stopping",
                     "completed", "skipped", "blocked", "failed"]
 Priority = Literal["low", "normal", "high", "urgent"]
+# "replacing" is active but never stoppable: the source swap must run to a known state.
+ACTIVE_STATUSES = frozenset({"encoding", "validating", "replacing", "stopping"})
+# Not finished yet. Repositories index on this, so polling never reads history.
+PENDING_STATUSES = frozenset({"queued", *ACTIVE_STATUSES})
 # Nominal video bitrate (bit/s) a user picks for a source whose size is outside
 # the preset's per-resolution bitrate table.
 ChosenVideoBitrate = Annotated[int, Field(ge=100_000, le=200_000_000)]

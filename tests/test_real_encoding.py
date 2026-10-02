@@ -1118,6 +1118,41 @@ def test_a_fresh_source_observation_carries_only_what_the_stat_shows(tmp_path, m
     assert (fresh.inode, fresh.size, fresh.mtime_ns, fresh.hardlinks) == (info.st_ino, info.st_size, info.st_mtime_ns, 1)
 
 
+def test_lane_polling_and_job_updates_never_read_the_whole_history(tmp_path, monkeypatch, probe_facts):
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        _, job_id = queue_movie(processor)
+        queue = processor.queue
+
+        def everything():
+            raise AssertionError("the whole jobs table, history included, was read")
+        monkeypatch.setattr(queue.repository, "get_all", everything)
+        job = queue.claim_next("cpu")
+        assert job is not None and job.id == job_id
+        assert queue.cancel_requested(job_id) is False  # Polled every 0.5 s per active job.
+        queue.update_real_progress(job_id, 50.0, 10.0)
+        assert queue.set_real_validating(job_id, str(tmp_path / "output.mkv"))
+
+
+def test_progress_is_written_at_most_once_per_refresh(tmp_path, monkeypatch, probe_facts):
+    import time
+    from app.workers import real
+    monkeypatch.setattr(real, "PROGRESS_WRITE_SECONDS", 0.2)
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        writes = []
+        monkeypatch.setattr(processor.queue, "update_real_progress",
+                            lambda job_id, percent, elapsed: writes.append(percent))
+        worker = processor.queue.worker
+        for percent in (10.0, 20.0, 30.0):  # ffmpeg reports every 0.5 s; these arrive at once.
+            worker._report_progress("job", percent, 1.0)
+        time.sleep(0.25)
+        worker._report_progress("job", 40.0, 1.0)
+    assert writes == [10.0, 40.0]
+
+
 def queue_movie(processor, **request):
     processor.scan_library()
     movie = processor.get_library().movies[0]

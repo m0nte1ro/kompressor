@@ -32,6 +32,9 @@ ROOT_CHECK_SECONDS = 2.0
 # A root listing still running after this long is a hung mount: the root counts as
 # unavailable meanwhile.
 ROOT_LIST_TIMEOUT_SECONDS = 5.0
+# ffmpeg reports progress every 0.5 s and the WebUI refreshes every 2 s; writing it
+# more often only adds write transactions.
+PROGRESS_WRITE_SECONDS = 2.0
 
 
 log = logging.getLogger(__name__)
@@ -149,6 +152,7 @@ class RealEncoderWorker:
         self._active: set[str] = set()
         self._root_lock = Lock()
         self._root_listings: dict[str, _RootListing] = {}
+        self._progress_written: dict[str, float] = {}
 
     def diagnostics(self, runtime: dict) -> dict:
         supported = list(runtime.get("supported_backends", self.supported_backends))
@@ -322,6 +326,7 @@ class RealEncoderWorker:
                     self.encoder.cleanup(job_id, remove_final=True)
         finally:
             self.encoder.cleanup(job_id)
+            self._progress_written.pop(job_id, None)
             with self._lock:
                 self._active.discard(job_id)
                 self._cancelled.discard(job_id)
@@ -348,6 +353,10 @@ class RealEncoderWorker:
         queue = self.queue
         if queue is None:
             return
+        written = time.monotonic()
+        if written - self._progress_written.get(job_id, float("-inf")) < PROGRESS_WRITE_SECONDS:
+            return
+        self._progress_written[job_id] = written
         try:
             queue.update_real_progress(job_id, percent, elapsed)
         except Exception:
