@@ -98,6 +98,11 @@ blocking them, and the lane claims jobs on other roots or waits, re-checking eve
 with a note instead of failing. A file that is missing while its root is reachable
 still blocks its job, as before.
 
+Roots are listed before any database transaction opens, so a hung network mount
+never holds SQLite's write lock (which would stall the WebUI and the other lane). A
+listing that has not answered within 5 seconds counts as unavailable; it keeps
+running in the background and is reused, not repeated, until the mount answers.
+
 
 ## Audio safety
 

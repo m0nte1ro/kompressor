@@ -1068,6 +1068,80 @@ def test_queued_jobs_wait_out_an_unreachable_library_root(tmp_path, monkeypatch,
         assert job is not None and job.id == added[0]["id"]
 
 
+def queue_movie(processor, **request):
+    processor.scan_library()
+    movie = processor.get_library().movies[0]
+    added = processor.queue_encode(EnqueueRequest(
+        media_ids=[movie.id], scope="movie", preset_id="movie-streaming-quality", **request))["added"]
+    return movie, added[0]["id"]
+
+
+def test_library_roots_are_never_listed_while_the_queue_holds_the_write_lock(
+        tmp_path, monkeypatch, probe_facts, no_outage_caching):
+    import sqlite3
+    from app.models.tags import TagTarget, TagUpdate
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        movie, job_id = queue_movie(processor)
+        source = processor.queue.worker.source
+        list_root = source.root_available
+        writable = []
+
+        def root_available(root_id):
+            # A hung mount blocks right here; the other processes must still be able to write.
+            other = sqlite3.connect(tmp_path / "state.sqlite3", timeout=0)
+            try:
+                other.execute("BEGIN IMMEDIATE")
+                other.rollback()
+                writable.append(True)
+            except sqlite3.OperationalError:
+                writable.append(False)
+            finally:
+                other.close()
+            return list_root(root_id)
+
+        monkeypatch.setattr(source, "root_available", root_available)
+        processor.queue.recover(backends={"cpu"})  # Worker startup.
+        processor.update_tags(TagUpdate(targets=[TagTarget(kind="movie", id=movie.id)],
+                                        tags=["Preserve Audio"]))  # WebUI.
+        job = processor.queue.claim_next("cpu")  # Lane.
+    assert job is not None and job.id == job_id
+    assert len(writable) == 3 and all(writable)
+
+
+def test_a_hung_library_mount_times_out_and_its_jobs_wait(tmp_path, monkeypatch, probe_facts, no_outage_caching):
+    import time
+    from app.workers import real
+    monkeypatch.setattr(real, "ROOT_LIST_TIMEOUT_SECONDS", 0.05)
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        _, job_id = queue_movie(processor, replace_source=True)
+        source = processor.queue.worker.source
+        list_root = source.root_available
+        answered, listings = threading.Event(), []
+
+        def hung(root_id):
+            listings.append(root_id)
+            answered.wait()  # os.scandir on a hung NFS/CIFS mount.
+            return list_root(root_id)
+
+        monkeypatch.setattr(source, "root_available", hung)
+        try:
+            assert processor.queue.claim_next("cpu") is None
+            assert processor.queue.claim_next("cpu") is None
+            # The hung listing is waited out once, then reused rather than joined by more threads.
+            assert len(listings) == 1
+            assert processor.queue._find(job_id).status == "queued"
+        finally:
+            answered.set()
+        deadline = time.monotonic() + 5
+        while (job := processor.queue.claim_next("cpu")) is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+    assert job is not None and job.id == job_id
+
+
 def test_an_encode_interrupted_by_a_dropped_mount_is_requeued_not_failed(
         tmp_path, monkeypatch, probe_facts, no_outage_caching):
     application, source, workspace, _ = build_real_app(tmp_path, monkeypatch, probe_facts, exit_code=1)

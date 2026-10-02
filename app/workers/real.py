@@ -2,7 +2,7 @@
 import logging
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import TYPE_CHECKING, Literal, TypeVar
@@ -27,7 +27,11 @@ if TYPE_CHECKING:
 Backend = Literal["cpu", "gpu"]
 T = TypeVar("T")
 PERSIST_ATTEMPTS = 5
+# A finished root listing is reused for this long.
 ROOT_CHECK_SECONDS = 2.0
+# A root listing still running after this long is a hung mount: the root counts as
+# unavailable meanwhile.
+ROOT_LIST_TIMEOUT_SECONDS = 5.0
 
 
 log = logging.getLogger(__name__)
@@ -37,6 +41,34 @@ def _primary_video(item: MediaItem):
     if item.probe is None:
         return None
     return next((s for s in item.probe.streams if s.kind == "video" and not s.dispositions.get("attached_pic")), None)
+
+
+class _RootListing:
+    """One listing of a library root, run in a daemon thread.
+
+    os.scandir on a hung network mount can block for minutes. Callers wait at
+    most ROOT_LIST_TIMEOUT_SECONDS from the listing's start, and a listing that
+    is still running is reused rather than joined by another.
+    """
+
+    def __init__(self, list_root: Callable[[], bool | None]):
+        self.started = time.monotonic()
+        self.finished: float | None = None
+        self.available: bool | None = None
+        self._done = Event()
+        Thread(target=self._run, args=(list_root,), name="kompressor-root-check", daemon=True).start()
+
+    def _run(self, list_root: Callable[[], bool | None]) -> None:
+        try:
+            self.available = list_root()
+        finally:
+            self.finished = time.monotonic()
+            self._done.set()
+
+    def result(self) -> bool | None:
+        """The listing's answer, or False while it hangs past the timeout."""
+        remaining = self.started + ROOT_LIST_TIMEOUT_SECONDS - time.monotonic()
+        return self.available if self._done.wait(max(0.0, remaining)) else False
 
 
 def database_busy(error: BaseException) -> bool:
@@ -115,7 +147,8 @@ class RealEncoderWorker:
         self._control_thread: Thread | None = None
         self._cancelled: set[str] = set()
         self._active: set[str] = set()
-        self._root_checks: dict[str, tuple[float, bool | None]] = {}
+        self._root_lock = Lock()
+        self._root_listings: dict[str, _RootListing] = {}
 
     def diagnostics(self, runtime: dict) -> dict:
         supported = list(runtime.get("supported_backends", self.supported_backends))
@@ -155,23 +188,28 @@ class RealEncoderWorker:
                 reasons.extend(replacement_reasons(path))
         return list(dict.fromkeys(reasons))
 
-    def source_outage(self, job: QueueJob) -> str | None:
-        """Why the job's library root is unreachable right now, if it is.
+    def unavailable_roots(self, root_ids: Iterable[str]) -> frozenset[str]:
+        """The library roots among these that cannot be listed right now.
 
-        An unmounted or unreachable root is an outage, not a verdict on the job:
+        An unmounted or unreachable root is an outage, not a verdict on its jobs:
         the queue keeps such jobs waiting instead of blocking or failing them.
+        Listing a hung mount can block for minutes, so callers run this before
+        opening a transaction, and a hung listing counts as unavailable after
+        ROOT_LIST_TIMEOUT_SECONDS.
         """
-        reference = job.source_reference
-        if reference is None or reference.root_id is None:
-            return None
-        # One claim revalidates every queued job; list each root once, not per job.
-        checked_at, available = self._root_checks.get(reference.root_id, (float("-inf"), None))
-        if time.monotonic() - checked_at > ROOT_CHECK_SECONDS:
-            available = self.source.root_available(reference.root_id)
-            self._root_checks[reference.root_id] = (time.monotonic(), available)
-        if available is False:
-            return "The library root holding this source is unavailable (unmounted or unreachable)."
-        return None
+        # Start every listing before waiting on any, so hung roots time out together.
+        listings = {root_id: self._root_listing(root_id) for root_id in set(root_ids)}
+        return frozenset(root_id for root_id, listing in listings.items() if listing.result() is False)
+
+    def _root_listing(self, root_id: str) -> _RootListing:
+        # One claim revalidates every queued job: list each root once, not per job.
+        with self._root_lock:
+            listing = self._root_listings.get(root_id)
+            if listing is None or (listing.finished is not None
+                                   and time.monotonic() - listing.finished > ROOT_CHECK_SECONDS):
+                listing = self._root_listings[root_id] = _RootListing(
+                    lambda: self.source.root_available(root_id))
+            return listing
 
     def recover_replacement(self, job: QueueJob) -> tuple[str, str]:
         """Resolve a replacement interrupted by a worker crash or kill.
@@ -292,13 +330,14 @@ class RealEncoderWorker:
     def _requeue_after_outage(self, job: QueueJob, error: Exception) -> bool:
         """Requeue a job that failed because its library root dropped away mid-job."""
         queue = self.queue
-        outage = self.source_outage(job)
-        if queue is None or outage is None:
+        reference = job.source_reference
+        if (queue is None or reference is None or reference.root_id is None
+                or not self.unavailable_roots({reference.root_id})):
             return False
         requeued = self._persist("requeue the job", lambda: queue.requeue_real_job(
             job.id, "Requeued: the library root became unavailable while this job ran."))
         if requeued:
-            log.warning("%s Job %s was requeued: %s", outage, job.id, error)
+            log.warning("The library root of job %s became unavailable; it was requeued: %s", job.id, error)
         return bool(requeued)
 
     def _persist(self, what: str, action: Callable[[], T]) -> T | None:

@@ -60,9 +60,30 @@ class QueueService:
             payload["measured_saving"] = job.source_size - job.output_size
         return payload
 
-    def _source_outage(self, job: QueueJob) -> str | None:
-        check = getattr(self.worker, "source_outage", None)
-        return check(job) if check and job.execution_mode == "real" else None
+    def unavailable_roots(self, backends: set[str] | frozenset[str] | None = None) -> frozenset[str]:
+        """Library roots of pending real jobs that cannot be listed right now.
+
+        Listing a root can block on a hung network mount, so this runs before a
+        transaction opens, never inside one: SQLite's write lock must not wait on
+        library storage. Callers inside a transaction hand the result to revalidate().
+        """
+        check = getattr(self.worker, "unavailable_roots", None)
+        if check is None:
+            return frozenset()
+        roots = set()
+        for job in self.repository.get_all():
+            reference = job.source_reference
+            if (job.status in PENDING and job.execution_mode == "real" and reference is not None
+                    and reference.root_id is not None and (backends is None or job.backend in backends)):
+                roots.add(reference.root_id)
+        return check(roots) if roots else frozenset()
+
+    @staticmethod
+    def _awaits_root(job: QueueJob, unavailable: frozenset[str]) -> bool:
+        """A queued real job whose library root is down waits instead of being judged."""
+        reference = job.source_reference
+        return (job.status == "queued" and job.execution_mode == "real" and reference is not None
+                and reference.root_id in unavailable)
 
     def _queued(self, backend: str, jobs: list[QueueJob] | None = None) -> list[QueueJob]:
         source = self.repository.get_all() if jobs is None else jobs
@@ -466,6 +487,9 @@ class QueueService:
         """Recover only lanes owned by this process; seed recovery still covers all lanes."""
         self._recover_replacements(backends)
         interrupted = []
+        # Covers the active jobs requeued below: a worker restarting before the
+        # library is mounted must leave them waiting, not block them.
+        unavailable = self.unavailable_roots(backends)
         with self.lock, self.repository.transaction():
             for job in self.repository.get_all():
                 if backends is not None and job.backend not in backends:
@@ -526,11 +550,11 @@ class QueueService:
                     job.cancel_requested = False
                     self.repository.save(job)
             if backends is None:
-                self.revalidate()
+                self.revalidate(unavailable_roots=unavailable)
             else:
                 ready_backends = frozenset(backends) & self.supported_backends
                 if ready_backends:
-                    self.revalidate(backends=ready_backends)
+                    self.revalidate(backends=ready_backends, unavailable_roots=unavailable)
         cleanup = getattr(self.worker, "cleanup_interrupted", None)
         if cleanup:
             for job_id in interrupted:
@@ -548,17 +572,18 @@ class QueueService:
         # conditions before claiming, so this preflight cannot create a race.
         if not self._queued(backend):
             return None
+        unavailable = self.unavailable_roots({backend})
         with self.lock, self.repository.transaction():
             if self.controls and not self.controls.can_claim(backend):
                 return None
             if any(j.backend == backend and j.status in ACTIVE for j in self.repository.get_all()):
                 return None
-            self.revalidate(backends={backend})
+            self.revalidate(backends={backend}, unavailable_roots=unavailable)
             queued = self._queued(backend)
             if not queued:
                 return None
             # Jobs whose library root is unreachable wait; the rest of the lane runs.
-            claimable = [j for j in queued if not self._source_outage(j)]
+            claimable = [j for j in queued if not self._awaits_root(j, unavailable)]
             if not claimable:
                 self._claim_backoff[backend] = monotonic() + OUTAGE_BACKOFF_SECONDS
                 log.warning("%s lane: all %d queued sources are on unavailable library roots; waiting.",
@@ -845,8 +870,15 @@ class QueueService:
         return True
 
     def revalidate(self, *, defer_external_stops: bool = False,
-                   backends: set[str] | frozenset[str] | None = None) -> list[str]:
-        """Apply current protections, optionally restricted to process-owned lanes."""
+                   backends: set[str] | frozenset[str] | None = None,
+                   unavailable_roots: frozenset[str] | None = None) -> list[str]:
+        """Apply current protections, optionally restricted to process-owned lanes.
+
+        A caller already inside a transaction passes unavailable_roots, worked
+        out before it opened that transaction (see unavailable_roots()).
+        """
+        if unavailable_roots is None:
+            unavailable_roots = self.unavailable_roots(backends)
         stop_after_commit = []
         with self.lock, self.repository.transaction():
             for job in self.repository.get_all():
@@ -854,7 +886,7 @@ class QueueService:
                     continue
                 if job.status not in PENDING or job.status == "replacing":
                     continue  # A source swap is never interrupted by policy changes.
-                if job.status == "queued" and self._source_outage(job):
+                if self._awaits_root(job, unavailable_roots):
                     # A dropped mount is not a verdict: re-check once the root is back.
                     continue
                 before = job.model_dump()
