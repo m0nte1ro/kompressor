@@ -4,10 +4,13 @@ The GPU lane executes `hevc_vaapi` exclusively. The UI calls it GPU or Intel GPU
 (VA-API), including presets, queue/history, worker controls, status badges and
 eligibility messages. CPU/libx265 behavior is unchanged.
 
-Persisted backend `qsv`, worker argument `qsv`, `kompressor-worker-qsv.service`
-and `KOMPRESSOR_QSV_DEVICE` deliberately retain their old spellings. They now mean
-the Intel GPU lane using VA-API. Existing job snapshots, priorities, quiet hours,
-pauses and user-owned preset names survive unchanged. No data reset is needed.
+The migration first kept the `qsv` spellings; a later rename made the lane `gpu`
+everywhere: persisted backend `gpu`, worker argument `gpu`,
+`kompressor-worker-gpu.service` and `KOMPRESSOR_GPU_DEVICE`. The old names still
+work: persisted `qsv` keys are read as `gpu`, the worker accepts `qsv` with a
+deprecation warning, and `KOMPRESSOR_QSV_DEVICE` is read when `KOMPRESSOR_GPU_DEVICE`
+is unset. Existing job snapshots, priorities, quiet hours, pauses and user-owned
+preset names survive unchanged. No data reset is needed.
 The runtime diagnostics field is now `hevc_vaapi_available`. History labels use
 the generic GPU lane name so old outputs are not relabeled with a new encoder.
 
@@ -251,15 +254,15 @@ After deploying this branch and the updated service file:
 ```sh
 systemctl daemon-reload
 systemctl restart kompressor-web.service
-systemctl start kompressor-worker-qsv.service
-systemctl status kompressor-worker-qsv.service --no-pager
-journalctl -u kompressor-worker-qsv.service -n 50 --no-pager
+systemctl start kompressor-worker-gpu.service
+systemctl status kompressor-worker-gpu.service --no-pager
+journalctl -u kompressor-worker-gpu.service -n 50 --no-pager
 curl -fsS http://127.0.0.1:8000/api/settings/runtime
 curl -fsS http://127.0.0.1:8000/api/queue
 ```
 
-Expect an active worker, `hevc_vaapi_available: true`, `qsv_available: true` and
-`qsv` in `supported_backends`. Settings and Queue should show GPU as available.
+Expect an active worker, `hevc_vaapi_available: true`, `gpu_available: true` and
+`gpu` in `supported_backends`. Settings and Queue should show GPU as available.
 The CLI exits 2 when unavailable; the supplied systemd unit excludes that exit
 from automatic restarts. Settings availability reflects startup checks; it is
 not a worker heartbeat. Start only one worker per lane.

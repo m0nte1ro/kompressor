@@ -431,7 +431,7 @@ A preset contains at least:
 - enabled/disabled
 - backend:
   - cpu
-  - qsv
+  - gpu
 - destination codec:
   - hevc
   - av1 [future / disabled for now]

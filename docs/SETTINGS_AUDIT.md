@@ -49,7 +49,7 @@ checks in `services/presets.py`. API-only nested controls are included.
 | `ffprobe_binary` | `config.py` | Startup precedence; nonempty string | Env/config only | `FFprobeService.inspect` subprocess argument 0 and runtime diagnostics | Restart | RESTART REQUIRED |
 | `ffmpeg_binary` | `config.py` | Startup precedence; nonempty string | Env/config only | Startup `-encoders` capability check and real `FFmpegEncoder` subprocess | Restart | RESTART REQUIRED |
 | `workspace_root` | `config.py` | Startup precedence; absolute path | Env/config only | Runtime writable/overlap check and per-job output paths | Restart | RESTART REQUIRED |
-| `qsv_device` | `config.py` | Startup precedence; absolute path; default `/dev/dri/renderD128` | Env/config only | GPU render-node access check, HEVC smoke test and ffmpeg device selection | Restart | RESTART REQUIRED |
+| `gpu_device` | `config.py` | Startup precedence (`KOMPRESSOR_GPU_DEVICE`, or legacy `KOMPRESSOR_QSV_DEVICE`); absolute path; default `/dev/dri/renderD128` | Env/config only | GPU render-node access check, HEVC smoke test and ffmpeg device selection | Restart | RESTART REQUIRED |
 | `timezone` | `config.py` -> persisted `WorkerSettings` default | Saved worker setting > startup default | SQLite after first save | Quiet-hours wall-clock evaluation for CPU/GPU | Immediate after save | WIRED |
 | `ffprobe_timeout` | `config.py` | Startup precedence; >0 and ≤600 seconds | Env/config only | `subprocess.run(timeout=...)` | Restart | RESTART REQUIRED |
 | `seed_media_path` | `config.py` | Startup precedence | Env/config only | `SeedMediaRepository` in seed mode | Restart for path; fixture content read on requests | RESTART REQUIRED |

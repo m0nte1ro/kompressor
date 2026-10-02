@@ -9,7 +9,7 @@ remains deterministic simulation. No encode runs inside an HTTP request.
 Configure the existing filesystem roots and output workspace for both processes.
 Start the WebUI with `.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1`,
 the CPU encoder with `.venv/bin/python -m app.worker_main cpu`, and, after the render
-device is available, the GPU encoder with `.venv/bin/python -m app.worker_main qsv`.
+device is available, the GPU encoder with `.venv/bin/python -m app.worker_main gpu`.
 The processes share the same SQLite database and environment configuration.
 Restarting or stopping the WebUI leaves active ffmpeg processes alone; each worker
 owns only its own lane. Example systemd units live in `deploy/systemd/`.
@@ -299,8 +299,11 @@ codec_type=audio` lists the same audio tracks, languages and titles as before.
 
 ## VA-API GPU migration
 
-The GPU lane now uses only `hevc_vaapi`. Persisted `qsv` lane keys, the worker CLI,
-service filename and `KOMPRESSOR_QSV_DEVICE` remain compatible; UI labels say GPU.
+The GPU lane now uses only `hevc_vaapi` and is called `gpu` throughout: the worker
+argument (`app.worker_main gpu`), `kompressor-worker-gpu.service`, `KOMPRESSOR_GPU_DEVICE`
+and the UI labels. Names from before the rename still work: persisted `qsv` lane keys
+are read as `gpu`, the worker accepts `qsv` with a deprecation warning, and
+`KOMPRESSOR_QSV_DEVICE` is read when `KOMPRESSOR_GPU_DEVICE` is unset.
 User preset names and queued preset snapshots are unchanged. GPU `encoder_preset`
 values remain stored for compatibility but are not emitted as x265 effort options.
 See [VA-API migration and manual checks](VAAPI_MIGRATION.md) for command details.
