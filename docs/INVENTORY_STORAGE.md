@@ -74,6 +74,14 @@ candidates. Complete scans load current records for one root to preserve existin
 rename/displacement semantics; no historical revisions or other roots are loaded.
 In-memory media/path indexes remove per-episode whole-root searches.
 
+Loading and reconciling a root runs on a read snapshot; only the writes hold the
+write lock, so a rescan never stalls the workers or the WebUI. Scans are the only
+writers of a root's files and run one at a time; if another scan of the root was
+applied meanwhile, the scan sequence no longer matches and the snapshot is rejected
+without writes. Unchanged files only get their scan sequence updated; a row and its
+observation are rewritten only when something in them changed (a hardlink count, for
+example). An unchanged 4,000-file rescan holds the write lock for about 15 ms.
+
 SQLite uses foreign keys and WAL. Snapshot readers do not acquire the writer lock
 or start `BEGIN IMMEDIATE`. No database transaction spans walking/statting media
 or invoking ffprobe. Each technical result attaches in a short transaction only

@@ -204,8 +204,8 @@ def test_stale_scan_rejected_without_state_change(inventory, snapshot):
 
 def test_atomic_reconciliation_rollback(inventory, snapshot, monkeypatch):
     save = inventory.repository.apply
-    def fail_after_save(*args):
-        save(*args)
+    def fail_after_save(*args, **kwargs):
+        save(*args, **kwargs)
         raise RuntimeError('storage failure')
     monkeypatch.setattr(inventory.repository, 'apply', fail_after_save)
     with pytest.raises(RuntimeError):
@@ -248,3 +248,60 @@ def test_rename_plus_replacement_is_independent_of_scan_order(inventory, snapsho
     assert not result.revised
     assert inventory.capture(file_id) == reference
     assert inventory.repository.load().files[file_id].relative_path == moved.relative_path
+
+
+def test_a_rescan_rewrites_only_what_changed(inventory, snapshot):
+    first = changed(snapshot.files[0], relative_path='A/first.mkv', media_id='movie-a', inode=1)
+    second = changed(snapshot.files[0], relative_path='B/second.mkv', media_id='movie-b', inode=2)
+    created = inventory.reconcile(scan(snapshot, 1, [first, second])).created
+    stored = []
+    store_file = inventory.repository.store_file
+    inventory.repository.store_file = lambda record: (stored.append(record.file_id), store_file(record))
+    # Same identity, size and mtime: both unchanged. Only the second one's hardlink count
+    # (which eligibility reads) moved, so only it needs its row and observation rewritten.
+    result = inventory.reconcile(scan(snapshot, 2, [first, changed(second, hardlinks=2)]))
+    assert sorted(result.unchanged) == sorted(created)
+    assert stored == [created[1]]
+    files = inventory.repository.load().files
+    assert files[created[1]].observation.hardlinks == 2
+    assert {record.last_seen_sequence for record in files.values()} == {2}
+    assert files[created[0]].observation.probe is not None  # Kept, not rewritten without it.
+
+
+def test_reconciliation_holds_the_write_lock_only_to_write(inventory, snapshot, tmp_path):
+    import sqlite3
+    root_state = inventory.repository.root_state
+    writable = []
+
+    def reading(*args, **kwargs):
+        other = sqlite3.connect(tmp_path / 'inventory.sqlite3', timeout=0)
+        try:
+            other.execute('BEGIN IMMEDIATE')
+            other.rollback()
+            writable.append(True)
+        except sqlite3.OperationalError:
+            writable.append(False)
+        finally:
+            other.close()
+        return root_state(*args, **kwargs)
+
+    inventory.repository.root_state = reading
+    inventory.reconcile(snapshot)
+    assert writable == [True]
+
+
+def test_a_scan_applied_while_another_was_reconciled_is_rejected(inventory, snapshot):
+    file_id = inventory.reconcile(snapshot).created[0]
+    root_state = inventory.repository.root_state
+
+    def raced(*args, **kwargs):
+        state = root_state(*args, **kwargs)
+        inventory.repository.root_state = root_state
+        inventory.reconcile(scan(snapshot, 2, snapshot.files))  # Lands between read and write.
+        return state
+
+    inventory.repository.root_state = raced
+    with pytest.raises(Conflict, match='meanwhile'):
+        inventory.reconcile(scan(snapshot, 3, [changed(snapshot.files[0], size=1)]))
+    current = inventory.repository.load()
+    assert current.scan_sequences[snapshot.root_id] == 2 and current.files[file_id].observation.size != 1

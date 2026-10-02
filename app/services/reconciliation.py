@@ -28,18 +28,34 @@ class ReconciliationService:
         return SourceReference(file_id=file_id, revision_id=record.revision_id)
 
     def reconcile(self, snapshot: ScanSnapshot) -> ReconciliationResult:
+        """Apply one root scan atomically, holding SQLite's write lock only to write it.
+
+        Loading and reconciling a large root takes seconds, which would stall every
+        other writer (workers, the WebUI). It runs on a read snapshot instead. Scans
+        are the only writers of a root's files and run one at a time; the sequence
+        re-check inside the transaction rejects one that raced this scan.
+        """
+        state = self.repository.root_state(snapshot.root_id, snapshot.files if snapshot.status != "complete" else None)
+        loaded = state.scan_sequences.get(snapshot.root_id, 0)
+        if snapshot.sequence <= loaded:
+            raise Conflict("Stale or already applied scan sequence.")
+        before = dict(state.files)  # _apply replaces the records it changes.
+        result = self._apply(state, snapshot)
+        state.scan_sequences[snapshot.root_id] = snapshot.sequence
+        # Most files of a rescan are unchanged: they only need their sequence bumped.
+        seen = {file_id for file_id in result.unchanged if file_id in before and before[file_id]
+                .model_copy(update={"last_seen_sequence": snapshot.sequence}) == state.files[file_id]}
         with self.repository.transaction():
-            state = self.repository.root_state(snapshot.root_id, snapshot.files if snapshot.status != "complete" else None)
-            if snapshot.sequence <= state.scan_sequences.get(snapshot.root_id, 0):
-                raise Conflict("Stale or already applied scan sequence.")
-            result = self._apply(state, snapshot)
-            state.scan_sequences[snapshot.root_id] = snapshot.sequence
-            self.repository.apply(state, snapshot, result)
-            return result
+            if self.repository.scan_sequence(snapshot.root_id) != loaded:
+                raise Conflict("Another scan of this root was applied meanwhile; scan again.")
+            self.repository.apply(state, snapshot, result, seen=seen)
+        return result
 
     def _apply(self, state: InventoryState, snapshot: ScanSnapshot) -> ReconciliationResult:
         result = ReconciliationResult()
-        records = [r.model_copy(deep=True) for r in state.files.values() if r.root_id == snapshot.root_id]
+        # Records are changed by reassigning fields and observations are frozen, so a
+        # shallow copy keeps the loaded state intact (a deep copy cost seconds per root).
+        records = [r.model_copy() for r in state.files.values() if r.root_id == snapshot.root_id]
         observations = {item.relative_path: item for item in snapshot.files}
         claimed: set[str] = set()
         unresolved: set[str] = set()

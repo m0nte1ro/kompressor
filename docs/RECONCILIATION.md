@@ -38,7 +38,8 @@ Matching bytes alone does not merge files that are simultaneously present.
 
 Each root has a monotonic scan sequence. Applying an older/already-applied sequence
 fails without writes; rescanning with a new sequence is idempotent for inventory
-identity. All changes commit in one repository transaction.
+identity. All changes commit in one repository transaction, after reconciling on a
+read snapshot; a scan of the same root applied in between rejects it.
 
 1. Unchanged paths are reserved before rename matching.
 2. Unique displaced physical identities with unchanged content evidence identify
