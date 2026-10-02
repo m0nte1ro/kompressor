@@ -323,3 +323,25 @@ def test_unfinished_jobs_are_read_through_the_status_index(tmp_path):
     with repository.database.read() as connection:
         plan = connection.execute(f"EXPLAIN QUERY PLAN SELECT payload FROM jobs WHERE {JOB_STATUS} = 'queued'").fetchall()
     assert any("job_status" in row[3] for row in plan), plan
+
+
+def test_job_status_changes_follow_the_transition_table():
+    from app.models.queue import JOB_TRANSITIONS, InvalidTransition
+    from tests.test_real_encoding import queue_job
+    job = queue_job(status="queued")
+    for status in ("encoding", "validating", "replacing", "completed", "completed"):  # Staying put is no change.
+        job.move_to(status)
+    for final in ("completed", "skipped", "blocked", "failed"):
+        assert not JOB_TRANSITIONS[final]
+        with pytest.raises(InvalidTransition, match=f"A {final} job cannot become queued"):
+            queue_job(status=final).move_to("queued")
+    with pytest.raises(InvalidTransition):
+        queue_job(status="replacing").move_to("stopping")  # A source swap is never stopped.
+
+
+def test_queue_and_worker_code_change_job_status_only_through_the_table():
+    from app.config import PROJECT_ROOT
+    paths = [*(PROJECT_ROOT / "app/services").glob("queue*.py"), *(PROJECT_ROOT / "app/workers").glob("*.py")]
+    offenders = [f"{path.name}:{number}" for path in paths
+                 for number, line in enumerate(path.read_text().splitlines(), 1) if re.search(r"\.status = ", line)]
+    assert offenders == []

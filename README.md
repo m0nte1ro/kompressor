@@ -225,8 +225,12 @@ and scheduler. Server-rendered estimates use the first eligible scoped preset,
 falling back to the first enabled preset to expose blockers. The modal opens the
 suggested preset and calls the eligibility API again when inputs change.
 
-`QueueService` coordinates ordering, state transitions and duplicate prevention
-under a lock. SQLite repositories own persisted state; `FakeEncoderWorker` advances
+`QueueService` (`services/queue.py`) coordinates ordering, claiming, revalidation and
+duplicate prevention under a lock. Its other parts sit beside it: the real lanes' job
+lifecycle (`queue_lifecycle.py`), startup recovery (`queue_recovery.py`), worker
+controls and quiet hours (`queue_controls.py`) and History actions (`queue_history.py`).
+Every status change goes through `QueueJob.move_to`, which allows only the changes in
+`JOB_TRANSITIONS` (`models/queue.py`). SQLite repositories own persisted state; `FakeEncoderWorker` advances
 progress independently of browser polling through the application lifespan.
 Repository, scanner, probe and encoder protocols provide the adapter boundaries.
 `FakeEncoder` implements encode/progress/stop without touching files; the fake

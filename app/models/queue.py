@@ -14,6 +14,22 @@ Priority = Literal["low", "normal", "high", "urgent"]
 ACTIVE_STATUSES = frozenset({"encoding", "validating", "replacing", "stopping"})
 # Not finished yet. Repositories index on this, so polling never reads history.
 PENDING_STATUSES = frozenset({"queued", *ACTIVE_STATUSES})
+# Every status change a job may make (QueueJob.move_to); anything else is a bug.
+# completed, skipped, blocked and failed are final.
+JOB_TRANSITIONS: dict[str, frozenset[str]] = {
+    # Claimed by its lane, or refused by a policy or mode check.
+    "queued": frozenset({"encoding", "blocked"}),
+    # Stopped on request, requeued after a restart or storage outage, blocked by
+    # a policy change, failed, or skipped once its stop is acknowledged.
+    "encoding": frozenset({"validating", "stopping", "queued", "skipped", "blocked", "failed"}),
+    # Kept (completed), swapped in (replacing), or skipped below the minimum saving.
+    "validating": frozenset({"completed", "replacing", "skipped", "stopping", "queued",
+                             "blocked", "failed"}),
+    # A swap is never stopped, requeued or blocked: it is replaced or kept, or it fails.
+    "replacing": frozenset({"completed", "failed"}),
+    "stopping": frozenset({"skipped", "queued", "blocked", "failed"}),
+    "completed": frozenset(), "skipped": frozenset(), "blocked": frozenset(), "failed": frozenset(),
+}
 # Nominal video bitrate (bit/s) a user picks for a source whose size is outside
 # the preset's per-resolution bitrate table.
 ChosenVideoBitrate = Annotated[int, Field(ge=100_000, le=200_000_000)]
@@ -55,6 +71,10 @@ class ReplacementJournal(BaseModel):
 class PriorityRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     priority: Priority
+
+
+class InvalidTransition(RuntimeError):
+    """A status change outside JOB_TRANSITIONS."""
 
 
 class QueueJob(BaseModel):
@@ -111,3 +131,9 @@ class QueueJob(BaseModel):
     validation_errors: list[str] = Field(default_factory=list)
     cancel_requested: bool = False
     cancel_reason: str | None = None
+
+    def move_to(self, status: JobStatus) -> None:
+        """Change status along JOB_TRANSITIONS; staying in the same status is allowed."""
+        if status != self.status and status not in JOB_TRANSITIONS[self.status]:
+            raise InvalidTransition(f"A {self.status} job cannot become {status}.")
+        self.status = status

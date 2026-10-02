@@ -19,9 +19,9 @@ class FakeEncoderWorker:
                 result = self.encoder.encode(job, lambda progress: setattr(job, "progress", progress))
                 if not result.simulated:
                     raise RuntimeError("The fake worker only accepts simulated encoder results.")
-            job.status = "validating"
+            job.move_to("validating")
         if job.elapsed_seconds >= self.encode_seconds + self.validation_seconds:
-            job.status = "completed"
+            job.move_to("completed")
 
     def stop(self, job_id: str) -> None:
         self.encoder.stop(job_id)
