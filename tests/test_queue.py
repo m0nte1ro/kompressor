@@ -36,10 +36,10 @@ def test_cross_scope_is_rejected_by_backend(client, movie_payload, show_payload)
 
 def test_preservation_and_preset_snapshot(client, catalog, show_payload):
     catalog.media.library.shows[0].tags.append("Preserve Audio")
-    show_payload.update(preserve_audio=False, preserve_subtitles=False)
+    show_payload.update(preserve_audio=False, preserve_subtitles_and_metadata=False)
     job = add(client, show_payload)["added"][0]
     assert job["preserve_audio"] is True
-    assert job["preserve_subtitles"] is False
+    assert job["preserve_subtitles_and_metadata"] is False
     assert job["preset"]["rate_control"] == "qvbr"
     assert job["preset"]["qvbr_bitrates_by_resolution"]["1080p"] == 4_000_000
     assert job["preset"]["quality_value"] == 23
@@ -291,3 +291,21 @@ def test_quiet_hours_cross_midnight_and_apply_progress_cutoff(queue, movie_paylo
     assert controls.quiet_action("cpu", saved) == "stop"
     saved.progress = 50.1
     assert controls.quiet_action("cpu", saved) == "finish"
+
+
+def test_the_old_preserve_subtitles_name_is_still_read():
+    """Jobs saved, and API callers written, before the rename say preserve_subtitles."""
+    from app.models.queue import QueueJob
+    from app.routers.api import EligibilityRequest
+    from tests.test_real_encoding import queue_job
+    saved = queue_job().model_dump()
+    del saved["preserve_subtitles_and_metadata"]
+    saved["preserve_subtitles"] = False
+    job = QueueJob.model_validate(saved)
+    assert job.preserve_subtitles_and_metadata is False
+    assert "preserve_subtitles" not in job.model_dump()  # Saved again under the new name.
+    request = {"media_ids": ["m"], "scope": "movie", "preset_id": "p", "preserve_subtitles": False}
+    assert EnqueueRequest.model_validate(request).preserve_subtitles_and_metadata is False
+    assert EligibilityRequest.model_validate(
+        {"media_id": "m", "scope": "movie", "preset_id": "p", "preserve_subtitles": False}
+    ).preserve_subtitles_and_metadata is False

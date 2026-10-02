@@ -66,12 +66,12 @@ class CatalogService:
 
     def evaluate(self, entry: MediaEntry, preset: CompressionPreset,
                  preserve_audio: bool | None = None,
-                 preserve_subtitles: bool = True,
+                 preserve_subtitles_and_metadata: bool = True,
                  video_bitrate: int | None = None) -> EligibilityResult:
         return self.policy.evaluate(
             item=entry.item, scope=entry.scope, preset=preset,
             effective_tags=entry.tags, preserve_audio=preserve_audio,
-            preserve_subtitles=preserve_subtitles,
+            preserve_subtitles_and_metadata=preserve_subtitles_and_metadata,
             quality_floor=entry.quality_floor,
             video_bitrate=video_bitrate,
         )
@@ -84,7 +84,7 @@ class CatalogService:
                 eligible=False, reasons=[f"No enabled {entry.scope} presets. Create or enable one in Settings."],
                 warnings=[], preset_id="", preset_name="No enabled preset", backend="", destination_codec="",
                 source_size=entry.item.size, estimated_output_size=None, estimated_saving=None,
-                estimated_saving_percent=None, preserve_audio=True, preserve_subtitles=True,
+                estimated_saving_percent=None, preserve_audio=True, preserve_subtitles_and_metadata=True,
             )
         # Shows default to the GPU lane when a GPU preset is eligible (a Quality CPU
         # tag, for example, falls through to CPU). Movies keep catalogue order.

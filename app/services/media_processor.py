@@ -94,16 +94,16 @@ class MediaProcessor:
         self.presets.delete(preset_id)
 
     def evaluate_compression(self, media_id: str, scope: MediaScope, preset_id: str,
-                             preserve_audio: bool | None = None, preserve_subtitles: bool = True,
+                             preserve_audio: bool | None = None, preserve_subtitles_and_metadata: bool = True,
                              replace_source: bool = False, video_bitrate: int | None = None):
         preset = self.catalog.preset(preset_id)
         entry = self.catalog.find(media_id, scope)
-        result = self.catalog.evaluate(entry, preset, preserve_audio, preserve_subtitles, video_bitrate)
+        result = self.catalog.evaluate(entry, preset, preserve_audio, preserve_subtitles_and_metadata, video_bitrate)
         if self.discovery is not None:
             execution_reasons = self.queue.execution_reasons(
                 entry, preset, result,
                 requested_preserve_audio=preserve_audio,
-                preserve_subtitles=preserve_subtitles,
+                preserve_subtitles_and_metadata=preserve_subtitles_and_metadata,
                 replace_source=replace_source,
                 video_bitrate=video_bitrate,
             )

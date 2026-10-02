@@ -63,7 +63,7 @@ export function compressionModal(scope, refreshQueue) {
     if (replace && !$('#preserve-audio').checked) {
       warnings.push('Preserve Audio is off: tracks listed as "convert" below are permanently re-encoded in the replaced file.');
     }
-    if (replace && !$('#preserve-subtitles').checked) {
+    if (replace && !$('#preserve-subtitles-and-metadata').checked) {
       warnings.push('Subtitles, chapters, attachments and container metadata will be permanently removed from the replaced file.');
     }
     $('#replace-warnings').textContent = warnings.join(' ');
@@ -128,7 +128,7 @@ export function compressionModal(scope, refreshQueue) {
     outputHandling();
     $('#eligibility').textContent = 'Checking eligibility…';
     ['estimated-output', 'estimated-saving', 'estimated-percent'].forEach(id => $(`#${id}`).textContent = '—');
-    const overrides = {preserve_audio: $('#preserve-audio').checked, preserve_subtitles: $('#preserve-subtitles').checked,
+    const overrides = {preserve_audio: $('#preserve-audio').checked, preserve_subtitles_and_metadata: $('#preserve-subtitles-and-metadata').checked,
       replace_source: $('#replace-source').value === 'true', video_bitrate: chosenBitrate()};
     try {
       const [evaluated, queue] = await Promise.all([
@@ -177,7 +177,7 @@ export function compressionModal(scope, refreshQueue) {
   });
   $('#preset').addEventListener('change', evaluate);
   $('#preserve-audio').addEventListener('change', () => {preserveAudioTouched = true; evaluate();});
-  $('#preserve-subtitles').addEventListener('change', evaluate);
+  $('#preserve-subtitles-and-metadata').addEventListener('change', evaluate);
   $('#replace-source').addEventListener('change', evaluate);
   // Re-check while typing, once the value settles: each check asks the API about every file.
   $('#video-bitrate').addEventListener('input', () => {
@@ -197,7 +197,7 @@ export function compressionModal(scope, refreshQueue) {
     try {
       const response = await api('/api/queue', {method: 'POST', body: JSON.stringify({
         media_ids: selected.map(row => row.dataset.id), scope, preset_id: $('#preset').value,
-        preserve_audio: $('#preserve-audio').checked, preserve_subtitles: $('#preserve-subtitles').checked,
+        preserve_audio: $('#preserve-audio').checked, preserve_subtitles_and_metadata: $('#preserve-subtitles-and-metadata').checked,
         replace_source: $('#replace-source').value === 'true', video_bitrate: chosenBitrate(),
       })});
       const exclusions = response.excluded.map(item => {
@@ -243,7 +243,7 @@ export function compressionModal(scope, refreshQueue) {
     $('#preserve-audio').disabled = false;
     $('#preserve-audio-text').textContent = 'Preserve Audio · copy every audio track';
     preserveAudioTouched = false;
-    $('#preserve-subtitles').checked = true;
+    $('#preserve-subtitles-and-metadata').checked = true;
     $('#replace-source').value = 'true';
     $('#video-bitrate').value = '';
     $('#video-bitrate-field').hidden = true;

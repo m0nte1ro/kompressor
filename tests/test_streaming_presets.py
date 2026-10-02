@@ -110,7 +110,7 @@ def test_hdr10_source_preserves_hdr_mode_without_tone_mapping(streaming):
         preset=app.state.media_processor.catalog.preset("show-preserve-quality"),
         effective_tags=item.tags + ["Quality CPU"],
         preserve_audio=True,
-        preserve_subtitles=True,
+        preserve_subtitles_and_metadata=True,
     )
     assert result.eligible is True
     assert any("HDR10" in warning for warning in result.warnings)
@@ -519,7 +519,7 @@ def test_estimates_are_not_clamped_to_source_size(streaming):
     assert result["estimated_output_size_low"] > item.size
     assert result["planning_saving"] == 0
     eligibility = app.state.media_processor.catalog.policy.evaluate(item=item, scope="movie", preset=preset,
-        effective_tags=[], preserve_audio=True, preserve_subtitles=True)
+        effective_tags=[], preserve_audio=True, preserve_subtitles_and_metadata=True)
     assert eligibility.eligible
     assert any("minimum saving" in warning for warning in eligibility.warnings)
 
@@ -535,7 +535,7 @@ def test_progressive_576p_show_is_eligible_for_builtin_gpu_preset(streaming):
     })
     preset = catalog.preset('show-streaming-quality')
     result = PolicyEngine().evaluate(item=episode, scope='show', preset=preset,
-        effective_tags=[], preserve_audio=True, preserve_subtitles=True)
+        effective_tags=[], preserve_audio=True, preserve_subtitles_and_metadata=True)
     assert result.eligible, result.reasons
     assert preset.video_bitrate_for('576p') == 1_500_000
     assert result.estimate_basis == 'planning_range'

@@ -49,7 +49,7 @@ def hdr_reasons(messages):
 def policy_reasons(facts):
     item = movie_item(facts, video_codec=facts.streams[0].codec)
     return PolicyEngine().evaluate(item=item, scope='movie', preset=movie_preset(), effective_tags=[],
-                                   preserve_audio=True, preserve_subtitles=True).reasons
+                                   preserve_audio=True, preserve_subtitles_and_metadata=True).reasons
 
 
 @ACCEPTED

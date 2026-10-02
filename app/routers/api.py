@@ -2,10 +2,10 @@ from app.models.preferences import LibraryPaths
 from typing import Literal
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.dependencies import Processor
-from app.models.queue import ChosenVideoBitrate
+from app.models.queue import SUBTITLES_AND_METADATA, ChosenVideoBitrate
 
 
 router = APIRouter()
@@ -16,7 +16,7 @@ class EligibilityRequest(BaseModel):
     scope: Literal["movie", "show"]
     preset_id: str
     preserve_audio: bool | None = None
-    preserve_subtitles: bool = True
+    preserve_subtitles_and_metadata: bool = Field(default=True, validation_alias=SUBTITLES_AND_METADATA)
     replace_source: bool = False
     video_bitrate: ChosenVideoBitrate | None = None
 

@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.models.media import MediaScope
 from app.models.preset import CompressionPreset, EncoderBackend
@@ -13,6 +13,10 @@ Priority = Literal["low", "normal", "high", "urgent"]
 # Nominal video bitrate (bit/s) a user picks for a source whose size is outside
 # the preset's per-resolution bitrate table.
 ChosenVideoBitrate = Annotated[int, Field(ge=100_000, le=200_000_000)]
+# preserve_subtitles_and_metadata keeps subtitle and attachment streams, chapters and
+# container tags: everything but the audio and video. Jobs saved and API callers
+# written before the rename say preserve_subtitles.
+SUBTITLES_AND_METADATA = AliasChoices("preserve_subtitles_and_metadata", "preserve_subtitles")
 
 
 class EnqueueRequest(BaseModel):
@@ -24,7 +28,7 @@ class EnqueueRequest(BaseModel):
     preset_id: str
     # None preserves audio. Conversion requires an explicit per-job False.
     preserve_audio: bool | None = None
-    preserve_subtitles: bool = True
+    preserve_subtitles_and_metadata: bool = Field(default=True, validation_alias=SUBTITLES_AND_METADATA)
     # API callers keep the original unless they ask; the WebUI modal defaults to replace.
     replace_source: bool = False
     video_bitrate: ChosenVideoBitrate | None = None
@@ -58,7 +62,7 @@ class QueueJob(BaseModel):
     preset: CompressionPreset
     preserve_audio: bool
     requested_preserve_audio: bool | None = None
-    preserve_subtitles: bool
+    preserve_subtitles_and_metadata: bool = Field(validation_alias=SUBTITLES_AND_METADATA)
     source_size: int
     estimated_output_size: int | None
     estimated_saving: int | None

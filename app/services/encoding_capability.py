@@ -142,13 +142,13 @@ class _HEVCEncodeCapability:
         if source_probe is not None:
             for kind, label in (("audio", "audio"), ("subtitle", "subtitle"),
                                 ("attachment", "attachment"), ("video", "video")):
-                if kind not in mapped_kinds(job.preserve_subtitles):
+                if kind not in mapped_kinds(job.preserve_subtitles_and_metadata):
                     continue
                 expected = sum(s.kind == kind for s in source_probe.streams)
                 actual = sum(s.kind == kind for s in output_probe.streams)
                 if expected != actual:
                     errors.append(f"Output has {actual} {label} streams; expected {expected}.")
-            if job.preserve_subtitles and len(output_probe.chapters) != len(source_probe.chapters):
+            if job.preserve_subtitles_and_metadata and len(output_probe.chapters) != len(source_probe.chapters):
                 errors.append("Output chapter count does not match the source.")
             errors.extend(self._stream_order_errors(job, source_probe, output_probe))
             errors.extend(self._audio_errors(job, source_probe, output_probe))
@@ -161,7 +161,7 @@ class _HEVCEncodeCapability:
         if source_video is None:
             return errors
         source_streams = [stream for stream in source_probe.streams
-                          if stream.kind in mapped_kinds(job.preserve_subtitles)]
+                          if stream.kind in mapped_kinds(job.preserve_subtitles_and_metadata)]
         ordered = [source_video, *(s for s in source_streams if s.index != source_video.index)]
         actual = sorted(output_probe.streams, key=lambda stream: stream.index)
         if [s.kind for s in ordered] != [s.kind for s in actual]:
@@ -172,7 +172,7 @@ class _HEVCEncodeCapability:
             codec = "subrip" if source.codec == "mov_text" else source.codec
             if output.codec != codec:
                 errors.append(f"Output {source.kind} codec/order differs from the mapped source.")
-            if job.preserve_subtitles:
+            if job.preserve_subtitles_and_metadata:
                 if source.language and source.language != output.language:
                     errors.append(f"Output {source.kind} stream language/order differs from the mapped source.")
                 if source.title and source.title != output.title:

@@ -141,8 +141,10 @@ mismatch fails the job; nothing is promoted or replaced. The hash pass costs one
 extra read of the source and output (I/O only, no decoding) and runs for keep-original
 jobs too.
 
-Unticking "Preserve subtitles / chapters / attachments / metadata" drops subtitles,
-attachments, chapters and global container tags only. It uses
+Unticking "Preserve subtitles / chapters / attachments / metadata" (the job's
+`preserve_subtitles_and_metadata`; API callers may still send the old
+`preserve_subtitles`) drops subtitles, attachments, chapters and global container
+tags only. It uses
 `-map_metadata:g -1`: a bare `-map_metadata -1` would also have stripped every audio
 track's language and title, which earlier builds did.
 

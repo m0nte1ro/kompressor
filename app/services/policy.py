@@ -24,7 +24,7 @@ class PolicyEngine:
         preset: CompressionPreset,
         effective_tags: list[str],
         preserve_audio: bool | None,
-        preserve_subtitles: bool,
+        preserve_subtitles_and_metadata: bool,
         quality_floor: QualityFloor | None = None,
         video_bitrate: int | None = None,
     ) -> EligibilityResult:
@@ -229,8 +229,8 @@ class PolicyEngine:
             preserve_audio=(
                 effective_preserve_audio
             ),
-            preserve_subtitles=(
-                preserve_subtitles
+            preserve_subtitles_and_metadata=(
+                preserve_subtitles_and_metadata
             ),
             video_bitrate_required=bitrate_required,
         )

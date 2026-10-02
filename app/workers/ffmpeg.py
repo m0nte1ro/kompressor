@@ -250,7 +250,7 @@ class FFmpegEncoder:
             raise FFmpegError("Source has no primary video stream.")
         if primary.pixel_format not in SUPPORTED_PIXEL_FORMATS:
             raise FFmpegError(f"Unsupported or unknown source pixel format: {primary.pixel_format or 'unknown'}.")
-        kinds = mapped_kinds(job.preserve_subtitles)
+        kinds = mapped_kinds(job.preserve_subtitles_and_metadata)
         streams = [s for s in probe.streams if s.kind in kinds]
         ordered = [primary, *(s for s in streams if s.index != primary.index)]
 
@@ -272,8 +272,8 @@ class FFmpegEncoder:
         # A bare "-map_metadata -1" also drops per-stream tags, wiping every audio
         # track's language and title. Opting out of metadata only drops the global
         # container tags; stream tags always follow their stream.
-        command.extend(["-map_metadata", "0"] if job.preserve_subtitles else ["-map_metadata:g", "-1"])
-        command.extend(["-map_chapters", "0" if job.preserve_subtitles else "-1", "-c", "copy"])
+        command.extend(["-map_metadata", "0"] if job.preserve_subtitles_and_metadata else ["-map_metadata:g", "-1"])
+        command.extend(["-map_chapters", "0" if job.preserve_subtitles_and_metadata else "-1", "-c", "copy"])
 
         assumed = assumed_sdr_colours(primary)
         # ffmpeg 7.1 takes primaries/transfer from the frames and negotiates

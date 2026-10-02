@@ -23,7 +23,7 @@ def odd_size(probe, width=2560, height=1440):
 
 def evaluate(item, preset, **changes):
     return PolicyEngine().evaluate(item=item, scope=preset.scope, preset=preset, effective_tags=[],
-                                   preserve_audio=None, preserve_subtitles=True, **changes)
+                                   preserve_audio=None, preserve_subtitles_and_metadata=True, **changes)
 
 
 def odd_item(probe):

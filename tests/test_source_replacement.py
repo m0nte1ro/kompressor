@@ -546,7 +546,7 @@ def test_audio_is_preserved_unless_the_job_explicitly_opts_out(probe_facts):
 
     def evaluate(preserve_audio, tags=()):
         return PolicyEngine().evaluate(item=item, scope="show", preset=preset, effective_tags=list(tags),
-                                       preserve_audio=preserve_audio, preserve_subtitles=True)
+                                       preserve_audio=preserve_audio, preserve_subtitles_and_metadata=True)
 
     default = evaluate(None)
     assert default.preserve_audio is True and {t["action"] for t in default.audio_plan} == {"copy"}
@@ -588,7 +588,7 @@ def test_command_audio_options_come_from_the_shared_plan(probe_facts, tmp_path):
 
 
 def test_metadata_opt_out_drops_only_global_tags_not_audio_languages(probe_facts, tmp_path):
-    job = queue_job(preserve_subtitles=False)
+    job = queue_job(preserve_subtitles_and_metadata=False)
     command = FFmpegEncoder.build_command("/usr/bin/ffmpeg", job, Path("/media/Film.mkv"), tmp_path / "out.mkv",
                                           probe_facts)
     # A bare "-map_metadata -1" would also wipe every stream's language and title.
@@ -822,7 +822,7 @@ def test_real_cpu_command_copies_every_audio_track_bit_exact(tmp_path, preserve_
         StreamFacts(index=2, kind="audio", codec="ac3", channels=6, bitrate=448_000, language="por",
                     title="Surround"),
     ])
-    job = queue_job(preserve_subtitles=preserve_metadata,
+    job = queue_job(preserve_subtitles_and_metadata=preserve_metadata,
                     preset=queue_job().preset.model_copy(update={"encoder_preset": "fast"}))
     output = tmp_path / "out.mkv"
     command = FFmpegEncoder.build_command(ffmpeg, job, source, output, probe)

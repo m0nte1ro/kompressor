@@ -375,7 +375,7 @@ class RealEncoderWorker:
         if catalog is None:
             raise RuntimeError("Real worker catalog is not bound.")
         entry = catalog.find(job.media_id, job.scope)
-        result = catalog.evaluate(entry, job.preset, job.requested_preserve_audio, job.preserve_subtitles,
+        result = catalog.evaluate(entry, job.preset, job.requested_preserve_audio, job.preserve_subtitles_and_metadata,
                                   job.chosen_video_bitrate)
         if not result.eligible:
             raise Conflict("Policy changed before execution: " + "; ".join(result.reasons))

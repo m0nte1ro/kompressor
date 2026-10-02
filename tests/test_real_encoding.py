@@ -48,7 +48,7 @@ def queue_job(preset=None, **changes) -> QueueJob:
     values = dict(
         id="job-test-1", media_id="file-test-1", scope="movie", name="Fixture movie",
         backend="cpu", preset=preset, preserve_audio=True, requested_preserve_audio=True,
-        preserve_subtitles=True, source_size=400_000_000, estimated_output_size=None,
+        preserve_subtitles_and_metadata=True, source_size=400_000_000, estimated_output_size=None,
         estimated_saving=None, source_codec="h264", execution_mode="real",
         source_file_id="file-test-1", source_revision_id="revision-1",
         source_reference=SourceReference(file_id="file-test-1", revision_id="revision-1",
@@ -1451,7 +1451,7 @@ def test_data_streams_are_not_mapped_or_expected_in_the_matroska_output(probe_fa
     # MP4/MOV timecode tracks probe as data; the Matroska muxer rejects them.
     timecode = StreamFacts(index=len(probe_facts.streams), kind="data", codec="bin_data")
     source = probe_facts.model_copy(update={"streams": [*probe_facts.streams, timecode]})
-    job = queue_job(preserve_subtitles=True)
+    job = queue_job(preserve_subtitles_and_metadata=True)
     command = FFmpegEncoder.build_command("/usr/bin/ffmpeg", job, Path("/read-only/Film.mkv"),
                                           tmp_path / "Fixture.kompressor.partial.mkv", source)
     assert f"0:{timecode.index}" not in command

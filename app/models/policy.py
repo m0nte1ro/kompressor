@@ -23,7 +23,7 @@ class EligibilityResult(BaseModel):
     estimated_saving_percent: float | None
 
     preserve_audio: bool
-    preserve_subtitles: bool
+    preserve_subtitles_and_metadata: bool
     estimated_output_size_low: int | None = None
     estimated_output_size_high: int | None = None
     estimated_saving_low: int | None = None
