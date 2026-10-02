@@ -1,4 +1,4 @@
-import {$, duration, escapeHTML as esc, label, size} from './common.js';
+import {$, bitrate, duration, escapeHTML as esc, label, size} from './common.js';
 
 function planningSaving(job) {
   return job.planning_saving ?? job.estimated_saving ?? 0;
@@ -194,7 +194,7 @@ export function renderHistory(queue) {
       data-sort-finished="${job.finished_at ? new Date(job.finished_at).getTime() : 0}">
     <th scope="row">${esc(job.name)}${(job.reasons ?? []).map(reason => `<small class="reason">${esc(reason)}</small>`).join('')}${error}</th>
     <td><span class="badge ${job.status === 'completed' ? 'green' : job.status === 'failed' ? 'red' : 'blue'}">${esc(job.status)}</span></td>
-    <td>${esc(job.preset.name)}<small>${isReal ? (job.source_replaced ? 'Source replaced' : 'Source kept') : 'Simulation · source unchanged'}</small><small>${esc(label(job.backend))}</small></td>
+    <td>${esc(job.preset.name)}<small>${isReal ? (job.source_replaced ? 'Source replaced' : 'Source kept') : 'Simulation · source unchanged'}</small><small>${esc(label(job.backend))}</small>${job.chosen_video_bitrate ? `<small>Video bitrate ${esc(bitrate(job.chosen_video_bitrate))} · chosen for this file</small>` : ''}</td>
     <td>${esc(size(job.source_size))}</td>
     <td>${actualOutput ? esc(size(job.output_size)) : job.status === 'completed' ? job.estimate_basis === 'planning_range' ? `${esc(size(job.estimated_output_size_low))} – ${esc(size(job.estimated_output_size_high))} planning` : `~${esc(size(job.estimated_output_size))} estimate` : '—'}${outputPath}</td>
     <td class="${actualSaving ? savingClass(job) : 'saving'}">${savingText}</td>

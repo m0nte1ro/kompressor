@@ -101,6 +101,20 @@ export function compressionModal(scope, refreshQueue) {
     $('#preserve-audio-text').textContent = movieAudioForced ? 'Preserve Audio · required by this Movie preset' : 'Preserve Audio · copy every audio track';
   }
 
+  // Bit/s for files whose size is outside the preset's bitrate table, or null.
+  function chosenBitrate() {
+    const mbps = Number($('#video-bitrate').value);
+    return $('#video-bitrate').value !== '' && mbps >= 0.1 && mbps <= 200 ? Math.round(mbps * 1e6) : null;
+  }
+
+  function bitrateField(preset) {
+    const needing = results.filter(r => r.video_bitrate_required);
+    $('#video-bitrate-field').hidden = !needing.length;
+    if (!needing.length) return;
+    const table = Object.entries(preset.qvbr_bitrates_by_resolution ?? {}).map(([resolution, rate]) => `${resolution} ${bitrate(rate)}`).join(' · ');
+    $('#video-bitrate-note').textContent = `${needing.length === 1 ? '1 selected file has a size' : `${needing.length} selected files have sizes`} outside this preset's bitrate table (${table}). This bitrate applies only to ${needing.length === 1 ? 'that file' : 'those files'}.`;
+  }
+
   async function evaluate() {
     const revision = ++evaluation;
     const session = generation;
@@ -114,7 +128,7 @@ export function compressionModal(scope, refreshQueue) {
     $('#eligibility').textContent = 'Checking eligibility…';
     ['estimated-output', 'estimated-saving', 'estimated-percent'].forEach(id => $(`#${id}`).textContent = '—');
     const overrides = {preserve_audio: $('#preserve-audio').checked, preserve_subtitles: $('#preserve-subtitles').checked,
-      replace_source: $('#replace-source').value === 'true'};
+      replace_source: $('#replace-source').value === 'true', video_bitrate: chosenBitrate()};
     try {
       const [evaluated, queue] = await Promise.all([
         mapLimit(selected, async row => ({row, ...await api('/api/eligibility', {
@@ -125,6 +139,7 @@ export function compressionModal(scope, refreshQueue) {
       const pending = new Set(pendingJobs(queue).filter(j => j.scope === scope).map(j => j.media_id));
       results = evaluated.map(result => ({...result, excluded: !result.eligible || pending.has(result.row.dataset.id),
         reasons: [...result.reasons, ...(pending.has(result.row.dataset.id) ? ['Already queued or active.'] : [])]}));
+      bitrateField(preset);
       const included = results.filter(r => !r.excluded);
       const total = key => included.reduce((sum, r) => sum + (r[key] ?? 0), 0);
       $('#estimated-output').textContent = included.length ? `${size(total('estimated_output_size_low'))} – ${size(total('estimated_output_size_high'))}` : '—';
@@ -162,6 +177,7 @@ export function compressionModal(scope, refreshQueue) {
   $('#preserve-audio').addEventListener('change', () => {preserveAudioTouched = true; evaluate();});
   $('#preserve-subtitles').addEventListener('change', evaluate);
   $('#replace-source').addEventListener('change', evaluate);
+  $('#video-bitrate').addEventListener('change', evaluate);
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
@@ -176,7 +192,7 @@ export function compressionModal(scope, refreshQueue) {
       const response = await api('/api/queue', {method: 'POST', body: JSON.stringify({
         media_ids: selected.map(row => row.dataset.id), scope, preset_id: $('#preset').value,
         preserve_audio: $('#preserve-audio').checked, preserve_subtitles: $('#preserve-subtitles').checked,
-        replace_source: $('#replace-source').value === 'true',
+        replace_source: $('#replace-source').value === 'true', video_bitrate: chosenBitrate(),
       })});
       const exclusions = response.excluded.map(item => {
         const row = selected.find(r => r.dataset.id === item.media_id);
@@ -223,6 +239,8 @@ export function compressionModal(scope, refreshQueue) {
     preserveAudioTouched = false;
     $('#preserve-subtitles').checked = true;
     $('#replace-source').value = 'true';
+    $('#video-bitrate').value = '';
+    $('#video-bitrate-field').hidden = true;
     outputHandling();
     dialog.showModal();
 
