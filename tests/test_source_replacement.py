@@ -2,6 +2,7 @@
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -332,15 +333,37 @@ class Stopping:
         return self.stopped
 
 
-def test_a_locked_database_is_retried_until_the_job_state_is_written():
-    import sqlite3
+def sqlite_error(tmp_path, kind: str) -> sqlite3.OperationalError:
+    """The OperationalError SQLite itself raises, carrying its real error code."""
+    path = tmp_path / f"{kind}.sqlite3"
+    setup = sqlite3.connect(path)
+    setup.execute("CREATE TABLE t (x)")
+    setup.commit()
+    if kind == "locked":
+        setup.execute("BEGIN IMMEDIATE")  # Another process is mid-write.
+        connection = sqlite3.connect(path, timeout=0)
+    else:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        connection.execute("INSERT INTO t VALUES (1)")
+    except sqlite3.OperationalError as error:
+        return error
+    finally:
+        connection.close()
+        setup.close()
+    raise AssertionError(f"SQLite raised no {kind} error")
+
+
+def test_a_locked_database_is_retried_until_the_job_state_is_written(tmp_path):
     from app.workers import real
+    locked = sqlite_error(tmp_path, "locked")
+    assert locked.sqlite_errorname == "SQLITE_BUSY"
     attempts = []
 
     def locked_for_a_while():
         attempts.append(1)
         if len(attempts) < 40:  # Far beyond the old five-attempt limit.
-            raise sqlite3.OperationalError("database is locked")
+            raise locked
         return True
 
     stopping = Stopping()
@@ -348,8 +371,7 @@ def test_a_locked_database_is_retried_until_the_job_state_is_written():
     assert max(stopping.waits) == 30  # Backs off, capped.
 
 
-def test_other_write_errors_give_up_and_shutdown_ends_lock_retries():
-    import sqlite3
+def test_other_write_errors_give_up_and_shutdown_ends_lock_retries(tmp_path):
     from app.workers import real
     attempts = []
 
@@ -359,8 +381,21 @@ def test_other_write_errors_give_up_and_shutdown_ends_lock_retries():
 
     assert real.persist("record", broken, Stopping()) is None and len(attempts) == real.PERSIST_ATTEMPTS
 
+    # Same exception class as a lock, but no amount of waiting makes it writable.
+    read_only = sqlite_error(tmp_path, "read-only")
+    assert read_only.sqlite_errorname == "SQLITE_READONLY"
+    attempts.clear()
+
+    def read_only_write():
+        attempts.append(1)
+        raise read_only
+
+    assert real.persist("record", read_only_write, Stopping()) is None and len(attempts) == real.PERSIST_ATTEMPTS
+
+    locked_error = sqlite_error(tmp_path, "locked")
+
     def locked():
-        raise sqlite3.OperationalError("database is locked")
+        raise locked_error
 
     stopping = Stopping()
     stopping.stopped = True
@@ -368,7 +403,6 @@ def test_other_write_errors_give_up_and_shutdown_ends_lock_retries():
 
 
 def test_a_failed_progress_write_does_not_end_the_encode(tmp_path, monkeypatch, probe_facts):
-    import sqlite3
     application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts, hevc_output(probe_facts),
                                           output_size=1_000_000)
     with TestClient(application):

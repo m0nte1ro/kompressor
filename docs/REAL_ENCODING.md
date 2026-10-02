@@ -85,9 +85,11 @@ A lane never waits forever on its active job. An encode whose output position an
 frame count stop advancing for 15 minutes (a wedged GPU, a hung mount) is killed and
 failed; ffmpeg keeps printing progress while hung, so only real advancement counts.
 A job's state changes (completed, failed, stopped) are retried for as long as SQLite
-reports itself locked, because the lane cannot claim its next job until that write
-lands; other write errors are logged after five attempts and left to restart
-recovery. A failed progress write is only logged and never ends a healthy encode.
+reports the database locked by another connection (`SQLITE_BUSY`/`SQLITE_LOCKED`),
+because the lane cannot claim its next job until that write lands; any other write
+error, including a read-only or failing database, is logged after five attempts and
+left to restart recovery. A failed progress write is only logged and never ends a
+healthy encode.
 
 A library root that cannot be listed, or is empty (unmounted), is an outage, not a
 verdict on its jobs. Queued jobs on it stay queued: revalidation skips them instead of

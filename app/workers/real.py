@@ -39,13 +39,25 @@ def _primary_video(item: MediaItem):
     return next((s for s in item.probe.streams if s.kind == "video" and not s.dispositions.get("attached_pic")), None)
 
 
+def database_busy(error: BaseException) -> bool:
+    """Another connection holds SQLite's lock (SQLITE_BUSY or SQLITE_LOCKED).
+
+    Only that frees itself. A read-only, unreadable or failing database raises
+    the same OperationalError class with another code. Extended codes such as
+    SQLITE_BUSY_SNAPSHOT keep the primary code in their low byte.
+    """
+    code = getattr(error, "sqlite_errorcode", None) if isinstance(error, sqlite3.OperationalError) else None
+    return code is not None and code & 0xFF in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+
+
 def persist(what: str, action: Callable[[], T], stopping: Event) -> T | None:
     """Write a job's state change, retrying while SQLite is locked.
 
     Until this write lands the job still looks active, and the lane will not
-    claim anything else. A locked database (the web process mid-scan, say) is
-    therefore retried until it frees up or the worker shuts down, when restart
-    recovery takes over. Other errors are retried a few times, then logged.
+    claim anything else. A database locked by another connection (the web
+    process mid-scan, say) is therefore retried until it frees up or the worker
+    shuts down, when restart recovery takes over. Every other error, including
+    a read-only or failing database, is retried a few times, then logged.
     Never raises: an escaped error would end the lane thread.
     """
     attempt = 0
@@ -53,17 +65,17 @@ def persist(what: str, action: Callable[[], T], stopping: Event) -> T | None:
         attempt += 1
         try:
             return action()
-        except sqlite3.OperationalError:
-            if stopping.is_set():
+        except Exception as error:
+            if not database_busy(error):
+                if attempt >= PERSIST_ATTEMPTS:
+                    log.exception("Could not %s after %d attempts; restart recovery will resolve the job.",
+                                  what, attempt)
+                    return None
+            elif stopping.is_set():
                 log.exception("Could not %s before shutdown; restart recovery will resolve the job.", what)
                 return None
-            if attempt == PERSIST_ATTEMPTS:
+            elif attempt == PERSIST_ATTEMPTS:
                 log.warning("Could not %s yet (database busy); retrying until it succeeds.", what)
-        except Exception:
-            if attempt >= PERSIST_ATTEMPTS:
-                log.exception("Could not %s after %d attempts; restart recovery will resolve the job.",
-                              what, attempt)
-                return None
         stopping.wait(min(attempt, 30))
 
 
