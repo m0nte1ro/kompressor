@@ -19,10 +19,13 @@ resolved binary paths, whether `libx265` and `hevc_vaapi` are available, the con
 device, workspace writability, active encoder mode, supported backends, and lane
 availability. Binary and
 workspace configuration changes require an application restart. Runtime lane
-availability is different: the WebUI refreshes its CPU/GPU capability snapshot
-on request (cached for 30 seconds), so a GPU render device that appears after
-WebUI startup can become eligible without a WebUI restart. This refresh reports
-capabilities, not a guarantee that the standalone worker service is running.
+availability is different: when a GPU lane is unavailable, the WebUI
+schedules a runtime capability check on a **background daemon thread** at most
+once every 30 seconds. Request handling returns the last known capability
+immediately; a successful later check becomes visible on the next UI poll,
+without restarting the WebUI. An already healthy render node is checked cheaply
+without repeatedly performing smoke encodes during active GPU jobs. This status
+describes local encoding capability, not proof the separate worker service runs.
 
 The GPU worker runs a real Main10/QVBR smoke test on startup. If a render device
 disappears, the worker holds queued GPU jobs and periodically retries a VA-API
