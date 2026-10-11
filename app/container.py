@@ -79,6 +79,13 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
             capabilities={"cpu": CPUEncodeCapability(), "gpu": GPUEncodeCapability()},
             probe=ffprobe,
         )
+        if process_role == "web":
+            # The GPU service may start after the WebUI (e.g. render node/driver
+            # still coming up after LXC boot). Refresh capabilities on demand
+            # rather than freezing a boot-time failure until the web restarts.
+            worker.availability_probe = lambda: capability_status(
+                config.ffmpeg_binary, config.ffprobe_binary, config.workspace_root,
+                roots(), config.gpu_device, frozenset({"cpu", "gpu"}))
         media_repository = FilesystemMediaRepository(
             inventory_repository, roots, encoding_enabled=bool(supported))
         discovery = LibraryDiscoveryService(FilesystemScanner(), ffprobe, reconciliation, roots, db_path)
