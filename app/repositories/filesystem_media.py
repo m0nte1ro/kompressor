@@ -145,12 +145,12 @@ class FilesystemMediaRepository:
                 name = relative.parts[0] if len(relative.parts) > 1 else relative.stem[:match.start()]
                 show_id = 'filesystem:' + str(uuid5(NAMESPACE_URL, f'{record.root_id}:show:{name}'))
                 show = shows.setdefault(show_id, Show(id=show_id, name=display_name(name)))
-                number = int(match[1])
+                number = int(match.group("s") or match.group("x"))
                 season = next((s for s in show.seasons if s.season == number), None)
                 if season is None:
                     season = Season(season=number)
                     show.seasons.append(season)
-                season.episodes.append(Episode(season=number, episode=int(match[2]),
+                season.episodes.append(Episode(season=number, episode=int(match.group("e")),
                                                title=display_name(relative.stem), **fields))
         library.shows = sorted(shows.values(), key=lambda s: s.name.casefold())
         library.movies.sort(key=lambda m: m.name.casefold())
