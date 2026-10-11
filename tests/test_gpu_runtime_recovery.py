@@ -1,6 +1,8 @@
 """GPU lane runtime regressions (no physical GPU required)."""
 from pathlib import Path
 from types import SimpleNamespace
+from threading import Event, Lock
+from time import monotonic, sleep
 
 from app.workers.real import RealEncoderWorker
 from app.workers.ffmpeg import FFmpegError
@@ -13,23 +15,50 @@ def bare_worker():
     worker.enabled = True
     worker.unavailable_reason = "GPU unavailable"
     worker._availability_checked = 0.0
+    worker._availability_lock = Lock()
+    worker._availability_running = False
+    worker.latest_runtime = None
     worker.availability_probe = None
     worker._gpu_degraded = False
     worker._gpu_retry_at = 0.0
     return worker
 
 
+def wait_for_backend(worker, expected):
+    deadline = monotonic() + 2.0
+    while monotonic() < deadline:
+        if worker.supported_backends == expected:
+            return
+        sleep(0.01)
+    assert worker.supported_backends == expected
+
+
 def test_web_runtime_refresh_tracks_gpu_recovery_and_loss():
     worker = bare_worker()
+    # The initial request must not block on a smoke encode.
+    started, release = Event(), Event()
     status = {"supported_backends": ["cpu", "gpu"], "unavailable_reason": None}
-    worker.availability_probe = lambda: status
-    assert worker.refresh_availability() == frozenset({"cpu", "gpu"})
-    assert worker.unavailable_reason is None
-    # Requests inside the 30-second cache window cannot run repeated smoke tests.
-    status = {"supported_backends": ["cpu"], "unavailable_reason": "GPU unavailable"}
-    assert worker.refresh_availability() == frozenset({"cpu", "gpu"})
-    worker._availability_checked = 0.0
+    def probe():
+        started.set()
+        assert release.wait(1.0)
+        return status
+    worker.availability_probe = probe
+    worker.encoder = SimpleNamespace(
+        gpu_device=Path("/dev/dri/renderD128"),
+        gpu_device_check=lambda path: (False, None))
     assert worker.refresh_availability() == frozenset({"cpu"})
+    assert started.wait(1.0)
+    assert worker.refresh_availability() == frozenset({"cpu"})
+    release.set()
+    wait_for_backend(worker, frozenset({"cpu", "gpu"}))
+    assert worker.unavailable_reason is None
+
+    # Render node loss triggers the next asynchronous probe, not an HTTP
+    # blocking probe. A fresh healthy device avoids repeated smoke tests.
+    status = {"supported_backends": ["cpu"], "unavailable_reason": "GPU unavailable"}
+    worker._availability_checked = 0.0
+    assert worker.refresh_availability() == frozenset({"cpu", "gpu"})
+    wait_for_backend(worker, frozenset({"cpu"}))
     assert worker.unavailable_reason == "GPU unavailable"
 
 
