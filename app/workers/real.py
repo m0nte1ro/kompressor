@@ -156,6 +156,7 @@ class RealEncoderWorker:
         # In the web process, probe again when a formerly unavailable GPU comes up.
         self.availability_probe: Callable[[], dict] | None = None
         self._availability_checked = 0.0
+        self.latest_runtime: dict | None = None
         self._gpu_degraded = False
         self._gpu_retry_at = 0.0
 
@@ -167,6 +168,7 @@ class RealEncoderWorker:
             self._availability_checked = time.monotonic()
             try:
                 status = self.availability_probe()
+                self.latest_runtime = status
                 self.supported_backends = frozenset(status["supported_backends"])
                 self.enabled = bool(self.supported_backends)
                 self.unavailable_reason = status.get("unavailable_reason")
