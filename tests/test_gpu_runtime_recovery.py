@@ -57,7 +57,10 @@ def test_web_runtime_refresh_tracks_gpu_recovery_and_loss():
     # blocking probe. A fresh healthy device avoids repeated smoke tests.
     status = {"supported_backends": ["cpu"], "unavailable_reason": "GPU unavailable"}
     worker._availability_checked = 0.0
-    assert worker.refresh_availability() == frozenset({"cpu", "gpu"})
+    # The background thread may finish before the request returns; both
+    # snapshots are valid, but the final state must converge to CPU-only.
+    assert worker.refresh_availability() in (
+        frozenset({"cpu", "gpu"}), frozenset({"cpu"}))
     wait_for_backend(worker, frozenset({"cpu"}))
     assert worker.unavailable_reason == "GPU unavailable"
 
