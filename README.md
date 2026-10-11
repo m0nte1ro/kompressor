@@ -97,8 +97,9 @@ Movies/Shows while it runs: names appear first, technical details follow. Saved
 paths override environment defaults, including saved empty paths. Missing
 ffprobe leaves files listed with unknown metadata and reported errors.
 
-Series naming currently requires a series directory and `SxxExx` episode names;
-unsupported names are reported, not resolved through external metadata. The scanner
+Series discovery requires a series directory and a recognizable season/episode
+marker: `S01E05`, `S01 E05`, or `01x05` (including `20x01`). Unsupported
+names are reported, never guessed from external metadata. The scanner
 never writes to the media roots. Only a replace job's worker writes there, and only
 into the source's own directory (a job-named hidden copy and backup next to the
 source, both removed afterwards). There is no authentication; use the intended
