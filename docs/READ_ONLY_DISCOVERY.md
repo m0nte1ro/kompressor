@@ -83,11 +83,20 @@ physically discovered file into a missing file. Stat facts are checked again aft
 probing; facts from a file changed during the probe are discarded and reported.
 
 Unchanged sources reuse persisted probe facts. Basic filesystem-derived naming is
-intentional: movies use filenames; shows use the series directory and `SxxExx`
-filename notation. Unrecognized episode names are reported rather than guessed.
+intentional: movies use filenames; shows use the series directory plus `S01E05`, `S01 E05`, or `01x05`/`20x01`
+filename notation. The patterns resolve to the same semantic episode ID;
+original filenames are not renamed. Unrecognized episode names are reported rather than guessed.
 Other naming schemes, edition/multi-episode semantics, arbitrary series-folder
 renames and manual identity resolution are not added in this milestone. Existing
 same-path/unique physical-identity matches preserve their semantic IDs.
+
+**Ambiguous relocation** is different from an unrecognized name: if a scanned
+path looks like a previously indexed episode but the filesystem identity changed
+and there is insufficient unique content evidence, reconciliation deliberately
+holds the candidate unresolved rather than assigning another file's tags/history.
+A full, complete scan is necessary but not proof on its own; check whether the
+file was renamed/replaced externally or whether duplicate releases exist. The
+scan never automatically assigns a guessed identity or deletes the source.
 
 ## Probe facts and limitations
 
