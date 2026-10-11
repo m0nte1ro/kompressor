@@ -156,6 +156,8 @@ class RealEncoderWorker:
         # In the web process, probe again when a formerly unavailable GPU comes up.
         self.availability_probe: Callable[[], dict] | None = None
         self._availability_checked = 0.0
+        self._gpu_degraded = False
+        self._gpu_retry_at = 0.0
 
     def refresh_availability(self) -> frozenset[str]:
         """Refresh the WebUI's cached capability snapshot at most every 30 s."""
@@ -300,6 +302,27 @@ class RealEncoderWorker:
             except Exception:
                 log.exception("%s worker control loop iteration failed", backend.upper())
 
+    def _gpu_usable(self) -> bool:
+        """After device loss, verify actual VA-API encoding before claiming work."""
+        device = self.encoder.gpu_device
+        if device is None or not self.encoder.gpu_device_check(device)[0]:
+            self._gpu_degraded = True
+        if not self._gpu_degraded:
+            return True
+        if time.monotonic() < self._gpu_retry_at:
+            return False
+        self._gpu_retry_at = time.monotonic() + 30.0
+        if device is None:
+            return False
+        ready, reason = self.encoder.vaapi_runtime_check(
+            self.encoder.binary, device, self.probe.binary, self.encoder.workspace_root)
+        if ready:
+            self._gpu_degraded = False
+            log.info("GPU VA-API recovered; resuming queued work.")
+        else:
+            log.warning("GPU VA-API unavailable, queued jobs remain waiting: %s", reason)
+        return ready
+
     def _run(self) -> None:
         backend = self.backend
         if backend is None:
@@ -307,9 +330,7 @@ class RealEncoderWorker:
         while not self._stop.is_set():
             queue = self.queue
             if backend == "gpu":
-                device = self.encoder.gpu_device
-                ready = device is not None and self.encoder.gpu_device_check(device)[0]
-                if not ready:
+                if not self._gpu_usable():
                     self._wake.wait(1.0)
                     self._wake.clear()
                     continue
@@ -342,6 +363,9 @@ class RealEncoderWorker:
                 if not self._stop.is_set() and queue:
                     owner = queue
                     self._persist("record the stop", lambda: owner.cancelled_real_job(job_id))
+            elif (job.backend == "gpu" and isinstance(error, FFmpegError)
+                  and self._gpu_failed_after_error(job, error)):
+                self.encoder.cleanup(job_id, remove_final=True)
             elif self._requeue_after_outage(job, error):
                 self.encoder.cleanup(job_id, remove_final=True)
             else:
@@ -360,6 +384,24 @@ class RealEncoderWorker:
                 self._active.discard(job_id)
                 self._cancelled.discard(job_id)
             self._wake.set()
+
+    def _gpu_failed_after_error(self, job: QueueJob, error: Exception) -> bool:
+        """Distinguish a transient dead VA-API backend from a bad source."""
+        queue = self.queue
+        device = self.encoder.gpu_device
+        if queue is None or device is None:
+            return False
+        ready, reason = self.encoder.vaapi_runtime_check(
+            self.encoder.binary, device, self.probe.binary, self.encoder.workspace_root)
+        if ready:
+            return False
+        self._gpu_degraded = True
+        self._gpu_retry_at = time.monotonic() + 30.0
+        saved = self._persist("requeue GPU job after hardware failure", lambda:
+            queue.requeue_real_job(job.id, "Requeued: GPU VA-API unavailable; waiting for recovery."))
+        if saved:
+            log.warning("GPU backend failed during job %s (%s): %s", job.id, reason, error)
+        return bool(saved)
 
     def _requeue_after_outage(self, job: QueueJob, error: Exception) -> bool:
         """Requeue a job that failed because its library root dropped away mid-job."""
