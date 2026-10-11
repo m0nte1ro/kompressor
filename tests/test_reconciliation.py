@@ -179,10 +179,16 @@ def test_strong_evidence_survives_cheap_rescan(inventory, snapshot):
 def test_multiple_identical_missing_candidates_are_not_arbitrarily_merged(inventory, snapshot):
     old = changed(snapshot.files[0], fingerprints={'full_scheme': 'sha256', 'full': 'same'})
     other = changed(old, relative_path='other.mkv', inode=222)
-    inventory.reconcile(scan(snapshot, 1, [old, other]))
+    previous_ids = inventory.reconcile(scan(snapshot, 1, [old, other])).created
     result = inventory.reconcile(scan(snapshot, 2, [changed(old, relative_path='new.mkv', inode=333)]))
-    assert result.issues and not result.moved and not result.created
-    assert len(inventory.repository.load().files) == 2
+    # Neither old identity may be selected arbitrarily. The new observed file
+    # has a fresh record; both old histories remain but their paths are missing.
+    assert len(result.created) == 1 and not result.moved and not result.issues
+    assert set(result.missing) == set(previous_ids)
+    state = inventory.repository.load()
+    assert len(state.files) == 3
+    assert state.files[result.created[0]].relative_path == 'new.mkv'
+    assert all(state.files[i].presence == 'missing' for i in previous_ids)
 
 
 def test_swap_paths_uses_identity_not_scan_order(inventory, snapshot):
