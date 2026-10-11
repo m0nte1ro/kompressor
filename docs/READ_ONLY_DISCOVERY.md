@@ -90,13 +90,20 @@ Other naming schemes, edition/multi-episode semantics, arbitrary series-folder
 renames and manual identity resolution are not added in this milestone. Existing
 same-path/unique physical-identity matches preserve their semantic IDs.
 
-**Ambiguous relocation** is different from an unrecognized name: if a scanned
-path looks like a previously indexed episode but the filesystem identity changed
-and there is insufficient unique content evidence, reconciliation deliberately
-holds the candidate unresolved rather than assigning another file's tags/history.
-A full, complete scan is necessary but not proof on its own; check whether the
-file was renamed/replaced externally or whether duplicate releases exist. The
-scan never automatically assigns a guessed identity or deletes the source.
+**Relocation without proof** is different from an unrecognized episode name.
+When a complete scan sees an episode at a new path/device/inode that looks like
+an old episode but has no matching physical identity or available content hash,
+the observed file is registered as a **new file ID**. The old unobserved path
+becomes missing; its historical file record remains. This avoids hiding the new
+episode or guessing that its bytes are identical to the old file. Semantic tags
+tied to the same show/season/episode media ID continue to apply. A verified
+physical match or unique matching full hash still preserves the old file ID.
+
+If usable fingerprints exist but do not prove a unique match, or a scan is
+partial, reconciliation still reports **Ambiguous relocation** and keeps that
+candidate unresolved. Such a warning calls for investigation (duplicate release,
+external rename/replacement, partial mount, insufficient content evidence); it is
+not an ffprobe or codec failure. The scanner never renames or deletes sources.
 
 ## Probe facts and limitations
 
