@@ -1,6 +1,7 @@
 import io
 import json
 import subprocess
+import threading
 from typing import cast
 from pathlib import Path
 
@@ -47,7 +48,7 @@ def queue_job(preset=None, **changes) -> QueueJob:
     values = dict(
         id="job-test-1", media_id="file-test-1", scope="movie", name="Fixture movie",
         backend="cpu", preset=preset, preserve_audio=True, requested_preserve_audio=True,
-        preserve_subtitles=True, source_size=400_000_000, estimated_output_size=None,
+        preserve_subtitles_and_metadata=True, source_size=400_000_000, estimated_output_size=None,
         estimated_saving=None, source_codec="h264", execution_mode="real",
         source_file_id="file-test-1", source_revision_id="revision-1",
         source_reference=SourceReference(file_id="file-test-1", revision_id="revision-1",
@@ -405,7 +406,8 @@ def test_output_validation_reports_codec_resolution_duration_and_stream_loss(pro
 class FakeProcess:
     def __init__(self, command, *, exit_code=0, output_size=100_000_000, stderr=""):
         self.command = command
-        self.stdout = io.StringIO("out_time_us=60000000\nprogress=continue\nout_time_us=120500000\nprogress=end\n")
+        self.stdout = io.StringIO("frame=1440\nout_time_us=60000000\nprogress=continue\n"
+                                  "frame=2892\nout_time_us=120500000\nprogress=end\n")
         self.stderr = io.StringIO(stderr)
         self.returncode = exit_code
         # Output to stdout ("-") means an unpatched helper such as audio hashing.
@@ -468,6 +470,8 @@ def build_real_app(tmp_path, monkeypatch, source_probe, output_probe=None, *, ex
         hashed.append((Path(path), list(selectors)))
         return [f"track-{ordinal}" for ordinal in range(len(selectors))]
     monkeypatch.setattr(FFmpegEncoder, "packet_hashes", packet_hashes)
+    # Outputs decode cleanly unless a test says otherwise.
+    monkeypatch.setattr(FFmpegEncoder, "decode_errors", lambda self, job_id, path, **frames: [])
     spawned = []
     def popen(command, **kwargs):
         assert isinstance(command, list)
@@ -730,7 +734,10 @@ def test_web_restart_does_not_recover_or_stop_active_real_job(tmp_path, monkeypa
         assert active["status"] == "encoding"
 
 
-def test_gpu_worker_claims_validates_and_completes_show_job(tmp_path, monkeypatch, probe_facts):
+def build_gpu_show_processor(tmp_path, monkeypatch, probe_facts):
+    """Worker-process GPU lane over one show episode probed as probe_facts.
+
+    Returns the processor and the list of spawned fake ffmpeg processes."""
     shows_root = tmp_path / "shows"
     series = shows_root / "Fixture Show"
     series.mkdir(parents=True)
@@ -783,6 +790,7 @@ def test_gpu_worker_claims_validates_and_completes_show_job(tmp_path, monkeypatc
     monkeypatch.setattr(FFprobeService, "inspect", inspect)
     monkeypatch.setattr(FFmpegEncoder, "packet_hashes",
                         lambda self, job_id, path, selectors: [f"track-{i}" for i in range(len(selectors))])
+    monkeypatch.setattr(FFmpegEncoder, "decode_errors", lambda self, job_id, path, **frames: [])
     spawned = []
 
     def popen(command, **kwargs):
@@ -793,6 +801,11 @@ def test_gpu_worker_claims_validates_and_completes_show_job(tmp_path, monkeypatc
     monkeypatch.setattr("app.workers.ffmpeg.subprocess.Popen", popen)
 
     processor = build_media_processor(config, process_role="worker", worker_backend="gpu")
+    return processor, spawned
+
+
+def test_gpu_worker_claims_validates_and_completes_show_job(tmp_path, monkeypatch, probe_facts):
+    processor, spawned = build_gpu_show_processor(tmp_path, monkeypatch, probe_facts)
     assert processor.queue.supported_backends == frozenset({"gpu"})
     assert isinstance(processor.queue.worker, RealEncoderWorker)
     assert processor.queue.worker.supported_backends == frozenset({"gpu"})
@@ -947,6 +960,403 @@ def test_stop_terminates_only_owned_process_and_removes_partial(tmp_path):
     assert final.read_bytes() == b"already-promoted"
 
 
+class HungProcess:
+    """ffmpeg that is wedged: progress blocks keep coming, the position never moves."""
+    pid = 4242
+
+    def __init__(self, command):
+        self.returncode = None
+        self.terminated = threading.Event()
+        self.stdout = self._progress()
+        self.stderr = io.StringIO("")
+        if command[-1] != "-":  # Verification runs write to stdout, encodes to a file.
+            Path(command[-1]).touch()
+
+    def _progress(self):
+        yield "frame=10\n"
+        yield "out_time_us=400000\n"
+        yield "progress=continue\n"
+        while not self.terminated.wait(0.01):
+            yield "frame=10\n"
+            yield "out_time_us=400000\n"
+            yield "progress=continue\n"
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        self.terminated.wait()
+        return self.returncode
+
+    def terminate(self):
+        self.returncode = 255
+        self.terminated.set()
+
+    def kill(self):
+        self.terminate()
+
+
+def test_a_hung_encode_is_killed_and_failed_so_the_lane_moves_on(tmp_path, monkeypatch, probe_facts):
+    spawned = []
+
+    def popen(command, **kwargs):
+        spawned.append(HungProcess(command))
+        return spawned[-1]
+
+    monkeypatch.setattr("app.workers.ffmpeg.subprocess.Popen", popen)
+    encoder = FFmpegEncoder("ffmpeg", tmp_path / "workspace", stall_seconds=0.1)
+    with pytest.raises(FFmpegError, match="made no progress"):
+        encoder.encode(queue_job(), Path("/media/Film.mkv"), probe_facts, lambda percent, elapsed: None)
+    assert spawned[0].terminated.is_set()
+    assert not encoder._processes
+
+
+def test_an_unkillable_ffmpeg_does_not_escape_termination(caplog):
+    class Unkillable:
+        pid = 4243
+        returncode = None
+        def poll(self): return None
+        def terminate(self): pass
+        def kill(self): pass
+        def wait(self, timeout=None): raise subprocess.TimeoutExpired("ffmpeg", timeout or 0)
+
+    encoder = FFmpegEncoder("ffmpeg", Path("/unused"), stop_grace_seconds=0.01)
+    with caplog.at_level("ERROR", logger="app.workers.ffmpeg"):
+        encoder._terminate(cast(subprocess.Popen[str], Unkillable()))
+    assert "has not exited" in caplog.text
+
+
+@pytest.fixture
+def no_outage_caching(monkeypatch):
+    from app.services import queue as queue_module
+    from app.workers import real
+    monkeypatch.setattr(real, "ROOT_CHECK_SECONDS", -1.0)
+    monkeypatch.setattr(queue_module, "OUTAGE_BACKOFF_SECONDS", 0.0)
+
+
+def test_an_empty_mount_point_is_not_scanned_as_a_library_with_every_file_gone(tmp_path, monkeypatch, probe_facts):
+    application, source, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        processor.scan_library()
+        movie = processor.get_library().movies[0]
+        aside = tmp_path / "aside.mkv"
+        source.rename(aside)  # The pool is unmounted: its mount point is empty.
+        processor.scan_library()
+        # Still present, so its tags, history and queued jobs keep their file identity.
+        assert [m.id for m in processor.get_library().movies] == [movie.id]
+        aside.rename(source)
+        processor.scan_library()
+        assert [m.id for m in processor.get_library().movies] == [movie.id]
+
+
+def test_queued_jobs_wait_out_an_unreachable_library_root(
+        tmp_path, monkeypatch, probe_facts, no_outage_caching, caplog):
+    from app.services.queue import WAITING_FOR_ROOT
+    application, source, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application), caplog.at_level("INFO", logger="app.services.queue"):
+        processor = application.state.media_processor
+        processor.scan_library()
+        movie = processor.get_library().movies[0]
+        added = processor.queue_encode(EnqueueRequest(
+            media_ids=[movie.id], scope="movie", preset_id="movie-streaming-quality", replace_source=True))["added"]
+        root = source.parent
+        root.rename(tmp_path / "unmounted")
+        # Neither claimed (it would fail) nor blocked (that is final): it waits, and says why.
+        assert processor.queue.claim_next("cpu") is None
+        assert processor.queue.claim_next("cpu") is None
+        processor.queue.revalidate()
+        waiting = processor.queue._find(added[0]["id"])
+        assert waiting.status == "queued" and waiting.reasons == [WAITING_FOR_ROOT]
+        (tmp_path / "unmounted").rename(root)
+        job = processor.queue.claim_next("cpu")
+        assert job is not None and job.id == added[0]["id"] and job.reasons == []
+    # One line when the lane starts waiting and one when it resumes, not one per poll.
+    messages = [record.getMessage() for record in caplog.records if record.name == "app.services.queue"]
+    assert sum("waiting" in message for message in messages) == 1
+    assert sum("reachable again" in message for message in messages) == 1
+
+
+def test_an_emptied_root_whose_files_were_recorded_missing_blocks_its_jobs(
+        tmp_path, monkeypatch, probe_facts, no_outage_caching):
+    from app.services.queue import WAITING_FOR_ROOT
+    application, source, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        notes = source.parent / "notes.txt"  # Not media, but keeps the root non-empty.
+        notes.write_text("")
+        _, job_id = queue_movie(processor)
+        source.unlink()
+        processor.scan_library()  # The root is reachable, so the file is recorded missing.
+        notes.unlink()  # Empty now, yet the inventory expects nothing there: not an outage.
+        assert processor.queue.claim_next("cpu") is None
+        blocked = processor.queue._find(job_id)
+    assert blocked.status == "blocked" and blocked.reasons and WAITING_FOR_ROOT not in blocked.reasons
+
+
+def test_a_fresh_source_observation_carries_only_what_the_stat_shows(tmp_path, monkeypatch, probe_facts):
+    import os
+    from app.models.inventory import Fingerprints
+    application, source, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        processor.scan_library()
+        movie = processor.get_library().movies[0]
+        worker = processor.queue.worker
+        record = worker.source.inventory.get_file(movie.id)
+        # Evidence a stored record may hold, which a stat can never confirm.
+        worker.source.inventory.store_file(record.model_copy(update={"observation": record.observation.model_copy(
+            update={"fingerprints": Fingerprints(full_scheme="sha256", full="stored")})}))
+        fresh = worker.source.observe(record.root_id, record.relative_path)
+        reference = worker.source.reference_for(movie.id, record.revision_id)
+        worker.guard.before_replacement(reference)
+        info = source.stat()
+        os.utime(source, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
+        with pytest.raises(Conflict, match="changed since"):
+            worker.guard.before_replacement(reference)
+    assert fresh.fingerprints == Fingerprints() and fresh.probe is None and fresh.generation is None
+    assert (fresh.inode, fresh.size, fresh.mtime_ns, fresh.hardlinks) == (info.st_ino, info.st_size, info.st_mtime_ns, 1)
+
+
+def test_lane_polling_and_job_updates_never_read_the_whole_history(tmp_path, monkeypatch, probe_facts):
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        _, job_id = queue_movie(processor)
+        queue = processor.queue
+
+        def everything():
+            raise AssertionError("the whole jobs table, history included, was read")
+        monkeypatch.setattr(queue.repository, "get_all", everything)
+        job = queue.claim_next("cpu")
+        assert job is not None and job.id == job_id
+        assert queue.cancel_requested(job_id) is False  # Polled every 0.5 s per active job.
+        queue.update_real_progress(job_id, 50.0, 10.0)
+        assert queue.set_real_validating(job_id, str(tmp_path / "output.mkv"))
+
+
+def test_progress_is_written_at_most_once_per_refresh(tmp_path, monkeypatch, probe_facts):
+    import time
+    from app.workers import real
+    monkeypatch.setattr(real, "PROGRESS_WRITE_SECONDS", 0.2)
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        writes = []
+        monkeypatch.setattr(processor.queue, "update_real_progress",
+                            lambda job_id, percent, elapsed: writes.append(percent))
+        worker = processor.queue.worker
+        for percent in (10.0, 20.0, 30.0):  # ffmpeg reports every 0.5 s; these arrive at once.
+            worker._report_progress("job", percent, 1.0)
+        time.sleep(0.25)
+        worker._report_progress("job", 40.0, 1.0)
+    assert writes == [10.0, 40.0]
+
+
+def queue_movie(processor, **request):
+    processor.scan_library()
+    movie = processor.get_library().movies[0]
+    added = processor.queue_encode(EnqueueRequest(
+        media_ids=[movie.id], scope="movie", preset_id="movie-streaming-quality", **request))["added"]
+    return movie, added[0]["id"]
+
+
+def lock_probe(database_path, results):
+    """Record, from inside a storage check, whether another process could write now."""
+    import sqlite3
+
+    def probe():
+        other = sqlite3.connect(database_path, timeout=0)
+        try:
+            other.execute("BEGIN IMMEDIATE")
+            other.rollback()
+            results.append(True)
+        except sqlite3.OperationalError:
+            results.append(False)
+        finally:
+            other.close()
+    return probe
+
+
+def test_library_storage_is_never_checked_while_the_queue_holds_the_write_lock(
+        tmp_path, monkeypatch, probe_facts, no_outage_caching):
+    from app.models.tags import TagTarget, TagUpdate
+    from app.workers import real
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        source = processor.queue.worker.source
+        listed, checked = [], []
+        list_root, check_source = source.root_available, real.replacement_reasons
+        probe_listing, probe_check = lock_probe(tmp_path / "state.sqlite3", listed), lock_probe(
+            tmp_path / "state.sqlite3", checked)
+
+        def root_available(root_id):
+            probe_listing()  # A hung mount blocks right here.
+            return list_root(root_id)
+
+        def replacement_reasons(path):
+            probe_check()  # statvfs/access of the source's folder.
+            return check_source(path)
+
+        monkeypatch.setattr(source, "root_available", root_available)
+        monkeypatch.setattr(real, "replacement_reasons", replacement_reasons)
+        movie, job_id = queue_movie(processor, replace_source=True)  # WebUI.
+        processor.queue.recover(backends={"cpu"})  # Worker startup.
+        processor.update_tags(TagUpdate(targets=[TagTarget(kind="movie", id=movie.id)],
+                                        tags=["Preserve Audio"]))  # WebUI.
+        job = processor.queue.claim_next("cpu")  # Lane.
+    assert job is not None and job.id == job_id
+    assert checked == [True] * 4  # Each step checked the replace job's source, unlocked.
+    assert listed and all(listed)
+
+
+def test_a_hung_library_mount_times_out_and_its_jobs_wait(tmp_path, monkeypatch, probe_facts, no_outage_caching):
+    import time
+    from app.workers import real
+    monkeypatch.setattr(real, "ROOT_LIST_TIMEOUT_SECONDS", 0.05)
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts)
+    with TestClient(application):
+        processor = application.state.media_processor
+        _, job_id = queue_movie(processor, replace_source=True)
+        source = processor.queue.worker.source
+        list_root = source.root_available
+        answered, listings = threading.Event(), []
+
+        def hung(root_id):
+            listings.append(root_id)
+            answered.wait()  # os.scandir on a hung NFS/CIFS mount.
+            return list_root(root_id)
+
+        monkeypatch.setattr(source, "root_available", hung)
+        try:
+            assert processor.queue.claim_next("cpu") is None
+            assert processor.queue.claim_next("cpu") is None
+            # The hung listing is waited out once, then reused rather than joined by more threads.
+            assert len(listings) == 1
+            assert processor.queue._find(job_id).status == "queued"
+        finally:
+            answered.set()
+        deadline = time.monotonic() + 5
+        while (job := processor.queue.claim_next("cpu")) is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+    assert job is not None and job.id == job_id
+
+
+def test_an_encode_interrupted_by_a_dropped_mount_is_requeued_not_failed(
+        tmp_path, monkeypatch, probe_facts, no_outage_caching):
+    application, source, workspace, _ = build_real_app(tmp_path, monkeypatch, probe_facts, exit_code=1)
+    with TestClient(application):
+        processor, job = claimed_movie_job(application)
+        worker = processor.queue.worker
+        root = source.parent
+        original_progress = processor.queue.update_real_progress
+
+        def progress(job_id, percent, elapsed):
+            original_progress(job_id, percent, elapsed)
+            if root.exists():
+                root.rename(tmp_path / "unmounted")  # ffmpeg then fails with an I/O error.
+        processor.queue.update_real_progress = progress
+        worker._run_job(job)
+        current = processor.queue._find(job.id)
+        assert current.status == "queued" and current.error_message is None
+        assert current.reasons[-1] == "Requeued: the library root became unavailable while this job ran."
+        assert not list((workspace / "jobs" / job.id).glob("*.mkv"))
+        (tmp_path / "unmounted").rename(root)
+        assert processor.queue.claim_next("cpu").id == job.id
+
+
+def test_an_encode_failure_with_the_library_reachable_still_fails(tmp_path, monkeypatch, probe_facts):
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts, exit_code=1)
+    with TestClient(application):
+        processor, job = claimed_movie_job(application)
+        processor.queue.worker._run_job(job)
+        saved = history_entry(processor, job.id)
+    assert saved["status"] == "failed" and saved["ffmpeg_exit_code"] == 1
+
+
+def test_stop_request_survives_until_the_jobs_own_cleanup(tmp_path):
+    encoder = FFmpegEncoder("ffmpeg", tmp_path / "workspace")
+    encoder.stop("job-stop")
+    # The encode thread checks this after ffmpeg exits; stop() must not clear it.
+    assert "job-stop" in encoder._cancelled
+    encoder.cleanup("job-stop")
+    assert "job-stop" not in encoder._cancelled
+
+
+def claimed_movie_job(application, preset_id="movie-streaming-quality"):
+    processor = application.state.media_processor
+    processor.scan_library()
+    movie = processor.get_library().movies[0]
+    result = processor.queue_encode(EnqueueRequest(media_ids=[movie.id], scope="movie", preset_id=preset_id))
+    job = processor.queue.claim_next("cpu")
+    assert job is not None and job.id == result["added"][0]["id"]
+    return processor, job
+
+
+def history_entry(processor, job_id):
+    return next(item for item in processor.get_queue()["history"] if item["id"] == job_id)
+
+
+def test_stop_during_encode_is_skipped_although_ffmpeg_exits_with_an_error(tmp_path, monkeypatch, probe_facts):
+    # SIGTERM makes ffmpeg exit 255; that exit status is the stop, not a failure.
+    application, source, workspace, _ = build_real_app(tmp_path, monkeypatch, probe_facts, exit_code=255)
+    with TestClient(application):
+        processor, job = claimed_movie_job(application)
+        worker = processor.queue.worker
+        original_progress = processor.queue.update_real_progress
+
+        def progress(job_id, percent, elapsed):
+            original_progress(job_id, percent, elapsed)
+            if not worker.cancelled_by_request(job_id):
+                processor.queue.skip(job_id)  # Web process: persisted request.
+                worker.stop(job_id)           # Worker control loop observes it.
+        processor.queue.update_real_progress = progress
+        worker._run_job(job)
+        saved = history_entry(processor, job.id)
+    assert saved["status"] == "skipped", saved
+    assert "Stopped by user." in saved["reasons"]
+    assert saved["error_message"] is None and saved["ffmpeg_exit_code"] is None
+    assert not list((workspace / "jobs" / job.id).glob("*.mkv"))
+    assert source.stat().st_size == 400_000_000
+
+
+def test_stop_during_output_validation_is_skipped_not_failed(tmp_path, monkeypatch, probe_facts):
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts, probe_facts)
+    with TestClient(application):
+        processor, job = claimed_movie_job(application)
+        worker = processor.queue.worker
+
+        def inspect(self, path):
+            # Stop & Skip removes the partial while ffprobe is reading it.
+            processor.queue.skip(job.id)
+            worker.stop(job.id)
+            raise Conflict("Output file is missing.")
+        monkeypatch.setattr(FFprobeService, "inspect", inspect)
+        worker._run_job(job)
+        saved = history_entry(processor, job.id)
+    assert saved["status"] == "skipped", saved
+    assert saved["error_message"] is None and saved["validation_errors"] == []
+
+
+def test_worker_shutdown_mid_encode_leaves_the_job_for_restart_recovery(tmp_path, monkeypatch, probe_facts):
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts, exit_code=255)
+    with TestClient(application):
+        processor, job = claimed_movie_job(application)
+        worker = processor.queue.worker
+        original_progress = processor.queue.update_real_progress
+
+        def progress(job_id, percent, elapsed):
+            original_progress(job_id, percent, elapsed)
+            worker._stop.set()  # As shutdown() does before stopping owned ffmpeg.
+            worker.encoder.stop(job_id)
+        processor.queue.update_real_progress = progress
+        worker._run_job(job)
+        current = processor.queue._find(job.id)
+    # Not failed: the next worker start requeues it from zero.
+    assert current.status == "encoding" and current.error_message is None
+
+
 def test_filesystem_enqueue_returns_runtime_error_when_encoder_prerequisites_fail(tmp_path, monkeypatch, probe_facts):
     application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts,
         runtime_available=False)
@@ -1092,7 +1502,7 @@ def test_data_streams_are_not_mapped_or_expected_in_the_matroska_output(probe_fa
     # MP4/MOV timecode tracks probe as data; the Matroska muxer rejects them.
     timecode = StreamFacts(index=len(probe_facts.streams), kind="data", codec="bin_data")
     source = probe_facts.model_copy(update={"streams": [*probe_facts.streams, timecode]})
-    job = queue_job(preserve_subtitles=True)
+    job = queue_job(preserve_subtitles_and_metadata=True)
     command = FFmpegEncoder.build_command("/usr/bin/ffmpeg", job, Path("/read-only/Film.mkv"),
                                           tmp_path / "Fixture.kompressor.partial.mkv", source)
     assert f"0:{timecode.index}" not in command

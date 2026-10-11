@@ -3,11 +3,12 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+import logging
 import os
 import re
 import stat
 import subprocess
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from time import monotonic
 
 from app.workers import vaapi
@@ -16,22 +17,103 @@ from app.models.queue import QueueJob
 from app.services.encoding_capability import SUPPORTED_PIXEL_FORMATS
 from app.services.estimation import plan_audio_tracks
 
+log = logging.getLogger(__name__)
+
 
 # mkvmerge track statistics describe the source bitstream; they are stale once a
 # stream is re-encoded. Keys may carry a language suffix, e.g. BPS-eng.
 MKV_STATISTICS_TAGS = {"BPS", "DURATION", "NUMBER_OF_FRAMES", "NUMBER_OF_BYTES",
                        "_STATISTICS_WRITING_APP", "_STATISTICS_WRITING_DATE_UTC", "_STATISTICS_TAGS"}
+# Applications that write track statistics, and the mark each leaves in the
+# muxing application of a file it wrote (ffprobe's format "encoder" tag).
+STATISTICS_WRITERS = {"mkvmerge": "libmatroska", "mkvpropedit": "libmatroska", "makemkv": "makemkv"}
+
+
+def statistics_name(key: str) -> str:
+    """The tag name without its language suffix: BPS-eng is BPS."""
+    base, separator, suffix = key.rpartition("-")
+    return (base if separator and re.fullmatch(r"[A-Za-z]{2,3}", suffix) else key).upper()
 
 
 def stale_statistics_args(stream: StreamFacts, specifier: str) -> list[str]:
     """Empty -metadata values delete the copied key from the re-encoded output stream."""
     args = []
     for key in stream.metadata:
-        base, separator, suffix = key.rpartition("-")
-        name = base if separator and re.fullmatch(r"[A-Za-z]{2,3}", suffix) else key
-        if name.upper() in MKV_STATISTICS_TAGS:
+        if statistics_name(key) in MKV_STATISTICS_TAGS:
             args.extend([f"-metadata:s:{specifier}", f"{key}="])
     return args
+
+
+def source_frame_count(probe: MediaProbeResult, stream: StreamFacts | None) -> int | None:
+    """The source's frame count from its track statistics, when they are current.
+
+    ffmpeg and the tools built on it copy mkvmerge's statistics unchanged when
+    they remux, so after a trim the count describes frames that are gone. It
+    counts only when the application that wrote the statistics also wrote the
+    file: its mark (libmatroska for MKVToolNix) is in the file's muxing application.
+    """
+    if stream is None:
+        return None
+    tags = {statistics_name(key): str(value).strip() for key, value in stream.metadata.items()}
+    writer = tags.get("_STATISTICS_WRITING_APP", "").split(maxsplit=1)
+    mark = STATISTICS_WRITERS.get(writer[0].lower()) if writer else None
+    muxer = next((str(value) for key, value in probe.metadata.items() if key.lower() == "encoder"), "")
+    if mark is None or mark not in muxer.lower():
+        return None
+    try:
+        count = int(tags.get("NUMBER_OF_FRAMES", ""))
+    except ValueError:
+        return None
+    return count if count > 0 else None
+
+
+class _StallWatch:
+    """Reads ffmpeg's -progress output and kills the process once it stops advancing.
+
+    ffmpeg keeps printing progress blocks while hung (a wedged GPU, a stalled
+    mount), so only an advancing output position or frame count counts.
+    """
+
+    def __init__(self, terminate: Callable[[], None], seconds: float, name: str):
+        self.seconds = seconds
+        self.output_us = 0
+        self.frames: int | None = None
+        self.stalled = Event()
+        self._terminate = terminate
+        self._finished = Event()
+        self._advanced = monotonic()
+        Thread(target=self._watch, name=name, daemon=True).start()
+
+    def _watch(self) -> None:
+        while not self._finished.wait(min(5.0, self.seconds)):
+            if monotonic() - self._advanced > self.seconds:
+                self.stalled.set()
+                self._terminate()
+                return
+
+    def feed(self, line: str) -> str | None:
+        """Take one stdout line; returns its progress key, None if it has none."""
+        key, separator, value = line.strip().partition("=")
+        if not separator:
+            return None
+        if key in {"out_time_us", "out_time_ms"}:
+            try:
+                position = int(value)
+            except ValueError:
+                return key
+            if position > self.output_us:
+                self.output_us, self._advanced = position, monotonic()
+        elif key == "frame":
+            try:
+                count = int(value)
+            except ValueError:
+                return key
+            if self.frames is None or count > self.frames:
+                self.frames, self._advanced = count, monotonic()
+        return key
+
+    def finish(self) -> None:
+        self._finished.set()
 
 
 class FFmpegError(RuntimeError):
@@ -50,6 +132,8 @@ class FFmpegOutput:
     final_path: Path
     exit_code: int
     stderr: str
+    # Video frames ffmpeg reported writing; None when its progress never said.
+    frames: int | None = None
 
 
 class FFmpegEncoder:
@@ -99,10 +183,13 @@ class FFmpegEncoder:
         return vaapi.smoke_check(binary, device, ffprobe, workspace)
 
     def __init__(self, binary: str, workspace_root: Path, stop_grace_seconds: float = 5.0,
-                 gpu_device: Path | None = None):
+                 gpu_device: Path | None = None, stall_seconds: float = 900.0):
         self.binary = binary
         self.workspace_root = workspace_root.expanduser().absolute()
         self.stop_grace_seconds = stop_grace_seconds
+        # An encode or verification run whose progress does not advance for this
+        # long is hung (e.g. a wedged GPU) and is killed, so the lane can move on.
+        self.stall_seconds = stall_seconds
         self.gpu_device = gpu_device.expanduser().absolute() if gpu_device else None
         self._lock = Lock()
         self._processes: dict[str, subprocess.Popen[str]] = {}
@@ -163,7 +250,7 @@ class FFmpegEncoder:
             raise FFmpegError("Source has no primary video stream.")
         if primary.pixel_format not in SUPPORTED_PIXEL_FORMATS:
             raise FFmpegError(f"Unsupported or unknown source pixel format: {primary.pixel_format or 'unknown'}.")
-        kinds = mapped_kinds(job.preserve_subtitles)
+        kinds = mapped_kinds(job.preserve_subtitles_and_metadata)
         streams = [s for s in probe.streams if s.kind in kinds]
         ordered = [primary, *(s for s in streams if s.index != primary.index)]
 
@@ -185,8 +272,8 @@ class FFmpegEncoder:
         # A bare "-map_metadata -1" also drops per-stream tags, wiping every audio
         # track's language and title. Opting out of metadata only drops the global
         # container tags; stream tags always follow their stream.
-        command.extend(["-map_metadata", "0"] if job.preserve_subtitles else ["-map_metadata:g", "-1"])
-        command.extend(["-map_chapters", "0" if job.preserve_subtitles else "-1", "-c", "copy"])
+        command.extend(["-map_metadata", "0"] if job.preserve_subtitles_and_metadata else ["-map_metadata:g", "-1"])
+        command.extend(["-map_chapters", "0" if job.preserve_subtitles_and_metadata else "-1", "-c", "copy"])
 
         assumed = assumed_sdr_colours(primary)
         # ffmpeg 7.1 takes primaries/transfer from the frames and negotiates
@@ -213,7 +300,7 @@ class FFmpegEncoder:
         elif job.backend == "gpu":
             source_resolution = f"{primary.resolution_class}p" if primary.resolution_class else "unknown"
             try:
-                nominal_bitrate = job.preset.video_bitrate_for(source_resolution)
+                nominal_bitrate = job.chosen_video_bitrate or job.preset.video_bitrate_for(source_resolution)
                 command.extend(vaapi.video_args(
                     job.preset.output_bit_depth, job.preset.rate_control,
                     job.preset.quality_value, nominal_bitrate,
@@ -264,32 +351,13 @@ class FFmpegEncoder:
                    "-protocol_whitelist", "file,pipe", "-i", str(path)]
         for selector in selectors:
             command.extend(["-map", selector])
-        command.extend(["-c", "copy", "-f", "streamhash", "-hash", "sha256", "-"])
-        try:
-            process = subprocess.Popen(command, shell=False, stdin=subprocess.DEVNULL,
-                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        except OSError as error:
-            raise FFmpegError(f"Could not run ffmpeg to verify audio: {error}") from error
-        with self._lock:
-            cancelled = job_id in self._cancelled
-            if not cancelled:
-                self._processes[job_id] = process
-        try:
-            if cancelled:
-                self._terminate(process)
-                raise EncodingCancelled("Audio verification was stopped.")
-            stdout, stderr = process.communicate()
-        finally:
-            if process.poll() is None:
-                self._terminate(process)
-            with self._lock:
-                self._processes.pop(job_id, None)
-                cancelled = job_id in self._cancelled
-        if cancelled:
-            raise EncodingCancelled("Audio verification was stopped.")
-        if process.returncode:
-            raise FFmpegError(f"Audio verification failed: {(stderr or '').strip()[-2000:]}",
-                              process.returncode)
+        # Progress shares stdout with the hash report; the parser below skips it.
+        command.extend(["-c", "copy", "-progress", "pipe:1", "-nostats",
+                        "-f", "streamhash", "-hash", "sha256", "-"])
+        stdout, stderr, returncode = self._run_owned(
+            job_id, command, "verify audio", "Audio verification was stopped.")
+        if returncode:
+            raise FFmpegError(f"Audio verification failed: {stderr.strip()[-2000:]}", returncode)
         hashes: dict[int, str] = {}
         for line in stdout.splitlines():
             match = re.fullmatch(r"(\d+),a,SHA256=([0-9a-f]{64})", line.strip())
@@ -298,6 +366,93 @@ class FFmpegEncoder:
         if sorted(hashes) != list(range(len(selectors))):
             raise FFmpegError("Audio verification returned an unexpected hash report.")
         return [hashes[index] for index in range(len(selectors))]
+
+    def _run_owned(self, job_id: str, command: list[str], what: str,
+                   stopped: str) -> tuple[str, str, int]:
+        """Run a helper ffmpeg owned like an encode: Stop & Skip, shutdown and the
+        stall watchdog end it. The command must write -progress to stdout."""
+        try:
+            process = subprocess.Popen(command, shell=False, stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        except OSError as error:
+            raise FFmpegError(f"Could not run ffmpeg to {what}: {error}") from error
+        with self._lock:
+            cancelled = job_id in self._cancelled
+            if not cancelled:
+                self._processes[job_id] = process
+        if cancelled:
+            self._terminate(process)
+            raise EncodingCancelled(stopped)
+        assert process.stdout is not None and process.stderr is not None
+        stdout: list[str] = []
+        stderr: list[str] = []
+        errors = process.stderr
+        reader = Thread(target=lambda: stderr.extend(errors), name=f"ffmpeg-stderr-{job_id}", daemon=True)
+        reader.start()
+        watch = _StallWatch(lambda: self._terminate(process), self.stall_seconds, f"ffmpeg-watchdog-{job_id}")
+        try:
+            for line in process.stdout:
+                stdout.append(line)
+                watch.feed(line)
+            process.wait()
+            reader.join()
+        finally:
+            watch.finish()
+            if process.poll() is None:
+                self._terminate(process)
+            with self._lock:
+                self._processes.pop(job_id, None)
+                cancelled = job_id in self._cancelled
+        if cancelled:
+            raise EncodingCancelled(stopped)
+        if watch.stalled.is_set():
+            raise FFmpegError(f"ffmpeg made no progress for {self.stall_seconds / 60:g} minutes "
+                              f"while trying to {what}, and was stopped.", process.returncode)
+        return "".join(stdout), "".join(stderr), process.returncode
+
+    def decode_errors(self, job_id: str, path: Path, *, encoded_frames: int | None = None,
+                      source_frames: int | None = None) -> list[str]:
+        """Decode the output's video in full before anything trusts it.
+
+        ffprobe validation reads headers and the first frames only, so damage
+        further in (dropped or corrupt frames while ffmpeg still exits 0) would
+        otherwise reach the source path. Any decoder error fails, and so does a
+        frame count that differs from what the encoder wrote, or clearly from the
+        source's own track statistics.
+        """
+        # build_command maps the primary video first, so 0:v:0 is it, never cover
+        # art, and the encoder's reported frame count is that stream's count too.
+        command = [self.binary, "-hide_banner", "-nostdin", "-v", "error",
+                   "-protocol_whitelist", "file,pipe", "-i", str(path), "-map", "0:v:0",
+                   "-progress", "pipe:1", "-nostats", "-f", "null", "-"]
+        stdout, stderr, returncode = self._run_owned(
+            job_id, command, "decode the output", "Output decoding was stopped.")
+        problems = [line for line in stderr.strip().splitlines() if line.strip()]
+        if returncode:
+            detail = "; ".join(problems[:5]) or f"ffmpeg exited with status {returncode}"
+            return [f"The output could not be decoded in full: {detail}"]
+        if problems:
+            more = f" (+{len(problems) - 5} more)" if len(problems) > 5 else ""
+            return [f"Decoding the output reported errors: {'; '.join(problems[:5])}{more}"]
+        frames = None
+        for line in stdout.splitlines():
+            key, separator, value = line.strip().partition("=")
+            if separator and key == "frame":
+                try:
+                    frames = int(value)
+                except ValueError:
+                    continue
+        if not frames:
+            return ["Decoding the output produced no video frames."]
+        errors = []
+        if encoded_frames is not None and frames != encoded_frames:
+            errors.append(f"The output decodes to {frames} video frames; the encoder wrote {encoded_frames}.")
+        # Even current statistics can differ slightly from what ffmpeg decodes;
+        # only a clear difference (above 0.1%) means frames were lost while encoding.
+        if source_frames is not None and abs(frames - source_frames) > max(2, source_frames // 1000):
+            errors.append(f"The output has {frames} video frames; the source's track statistics "
+                          f"list {source_frames}.")
+        return errors
 
     def copied_audio_mismatches(self, job: QueueJob, source_path: Path, source_probe: MediaProbeResult,
                                 output_path: Path, output_probe: MediaProbeResult) -> list[str]:
@@ -332,10 +487,10 @@ class FFmpegEncoder:
             gpu_device=self.gpu_device if job.backend == "gpu" else None,
         )
         started = monotonic()
-        output_us = 0
         stderr_tail: deque[str] = deque()
         stderr_lock = Lock()
         process: subprocess.Popen[str] | None = None
+        watch: _StallWatch | None = None
         try:
             if before_start is not None:
                 before_start()
@@ -358,19 +513,14 @@ class FFmpegEncoder:
                             stderr_tail.popleft()
             stderr_thread = Thread(target=read_stderr, name=f"ffmpeg-stderr-{job.id}", daemon=True)
             stderr_thread.start()
+            owned = process
+            watch = _StallWatch(lambda: self._terminate(owned), self.stall_seconds, f"ffmpeg-watchdog-{job.id}")
             assert process.stdout is not None
             for line in process.stdout:
-                key, separator, value = line.strip().partition("=")
-                if not separator:
-                    continue
-                if key in {"out_time_us", "out_time_ms"}:
-                    try:
-                        output_us = max(output_us, int(value))
-                    except ValueError:
-                        continue
-                elif key == "progress":
+                if watch.feed(line) == "progress":
                     duration = probe.duration_seconds
-                    percent = min(99.0, output_us / (duration * 1_000_000) * 100) if duration and duration > 0 else None
+                    percent = (min(99.0, watch.output_us / (duration * 1_000_000) * 100)
+                               if duration and duration > 0 else None)
                     progress_callback(percent, monotonic() - started)
             exit_code = process.wait()
             stderr_thread.join(timeout=1)
@@ -378,11 +528,14 @@ class FFmpegEncoder:
                 cancelled = job.id in self._cancelled
             if cancelled:
                 raise EncodingCancelled("Encoding was stopped.")
+            if watch.stalled.is_set():
+                raise FFmpegError(f"ffmpeg made no progress for {self.stall_seconds / 60:g} minutes "
+                                  "and was stopped.", exit_code)
             with stderr_lock:
                 error_text = "\n".join(stderr_tail)[-16_384:]
             if exit_code != 0:
                 raise FFmpegError(error_text or f"ffmpeg exited with status {exit_code}.", exit_code)
-            return FFmpegOutput(partial, final, exit_code, error_text)
+            return FFmpegOutput(partial, final, exit_code, error_text, watch.frames)
         except FileNotFoundError as error:
             partial.unlink(missing_ok=True)
             raise FFmpegError(f"ffmpeg executable not found: {self.binary}") from error
@@ -390,11 +543,12 @@ class FFmpegEncoder:
             partial.unlink(missing_ok=True)
             raise FFmpegError(f"Could not run ffmpeg: {error}") from error
         finally:
+            if watch is not None:
+                watch.finish()
             if process is not None and process.poll() is None:
                 self._terminate(process)
             with self._lock:
                 self._processes.pop(job.id, None)
-                self._cancelled.discard(job.id)
 
     def promote(self, job_id: str, output: FFmpegOutput) -> Path:
         with self._lock:
@@ -432,10 +586,15 @@ class FFmpegEncoder:
                     continue
 
     def cleanup(self, job_id: str, remove_final: bool = False) -> None:
+        """End of a job: forget its stop request and remove its outputs."""
         with self._lock:
-            # Runs at the end of every job; a stop that arrived after encode()
-            # (e.g. during audio verification) must not linger.
+            # A stop that arrived after encode() (e.g. during audio verification)
+            # must not linger into a later job with the same ID.
             self._cancelled.discard(job_id)
+        self._remove_outputs(job_id, remove_final)
+
+    def _remove_outputs(self, job_id: str, remove_final: bool = False) -> None:
+        with self._lock:
             paths = self._paths.get(job_id)
         if not paths:
             return
@@ -460,7 +619,12 @@ class FFmpegEncoder:
                 process.kill()
             except OSError:
                 pass
-            process.wait(timeout=2)
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                # Stuck in uninterruptible I/O (e.g. a hung mount); it exits when
+                # the kernel lets it. Raising here would skip the caller's cleanup.
+                log.error("ffmpeg (pid %s) has not exited 2 s after SIGKILL.", process.pid)
 
     def stop(self, job_id: str) -> None:
         with self._lock:
@@ -468,7 +632,10 @@ class FFmpegEncoder:
             process = self._processes.get(job_id)
         if process is not None:
             self._terminate(process)
-        self.cleanup(job_id)
+        # The stop request stays set until the job's own cleanup(): the encode
+        # thread checks it after ffmpeg exits, and clearing it here raced that
+        # check, so a stopped encode's exit status 255 was recorded as a failure.
+        self._remove_outputs(job_id)
 
     def stop_all(self) -> None:
         with self._lock:

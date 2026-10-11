@@ -20,8 +20,11 @@ class InventoryRepository(Protocol):
     def files(self, *, root_id: str | None = None, roots: list[str] | None = None,
               present: bool = False, scope: str | None = None, show_id: str | None = None,
               file_id: str | None = None, path: str | None = None) -> list[LibraryFile]: ...
+    def has_present_files(self, root_id: str) -> bool: ...
+    def scan_sequence(self, root_id: str) -> int: ...
     def root_state(self, root_id: str, candidates=None) -> InventoryState: ...
-    def apply(self, state: InventoryState, snapshot: ScanSnapshot, result: ReconciliationResult) -> None: ...
+    def apply(self, state: InventoryState, snapshot: ScanSnapshot, result: ReconciliationResult,
+              seen: set[str] | frozenset[str] = frozenset()) -> None: ...
     def get_artifact(self, artifact_id: str) -> OutputArtifact | None: ...
     def artifacts(self, root_id: str | None = None, job_id: str | None = None) -> list[OutputArtifact]: ...
     def store_artifact(self, artifact: OutputArtifact) -> None: ...
@@ -84,11 +87,22 @@ class SQLiteInventoryRepository:
         rows = self.files(file_id=file_id)
         return rows[0] if rows else None
 
+    def has_present_files(self, root_id: str) -> bool:
+        with self.database.read() as connection:
+            return connection.execute(
+                "SELECT 1 FROM library_files WHERE root_id=? AND presence='present' LIMIT 1", (root_id,)
+            ).fetchone() is not None
+
     def get_revision(self, revision_id: str) -> FileRevision | None:
         with self.database.read() as connection:
             row = connection.execute('SELECT * FROM file_revisions WHERE revision_id=?', (revision_id,)).fetchone()
             return FileRevision(revision_id=revision_id, file_id=row['file_id'],
                                 observation=observations(connection, [row['observation_id']])[row['observation_id']]) if row else None
+
+    def scan_sequence(self, root_id: str) -> int:
+        with self.database.read() as connection:
+            return connection.execute('SELECT MAX(sequence) FROM scan_runs WHERE root_id=?',
+                                      (root_id,)).fetchone()[0] or 0
 
     def root_state(self, root_id: str, candidates=None) -> InventoryState:
         with self.database.read() as connection:
@@ -136,10 +150,15 @@ class SQLiteInventoryRepository:
             connection.execute('INSERT INTO file_revisions(revision_id,file_id,observation_id) VALUES (?,?,?)',
                                (revision.revision_id, revision.file_id, key))
 
-    def apply(self, state: InventoryState, snapshot: ScanSnapshot, result: ReconciliationResult) -> None:
+    def apply(self, state: InventoryState, snapshot: ScanSnapshot, result: ReconciliationResult,
+              seen: set[str] | frozenset[str] = frozenset()) -> None:
+        """Write one reconciled scan. Files in seen are unchanged but for their scan sequence."""
         with self.database.transaction() as connection:
+            connection.executemany('UPDATE library_files SET last_seen_sequence=? WHERE file_id=?',
+                                   [(snapshot.sequence, key) for key in seen])
             # Release paths together so path swaps obey the unique present-path constraint.
-            touched = list(dict.fromkeys(result.created + result.revised + result.moved + result.unchanged + result.missing))
+            touched = [key for key in dict.fromkeys(result.created + result.revised + result.moved
+                                                    + result.unchanged + result.missing) if key not in seen]
             connection.executemany("UPDATE library_files SET presence='missing' WHERE file_id=?", [(key,) for key in touched])
             for revision in state.revisions.values():
                 self.store_revision(revision)

@@ -14,14 +14,7 @@ from tests.test_source_replacement import hevc_output, run_one
 def execute(processor, job_id):
     job = processor.queue.claim_next("cpu")
     assert job is not None and job.id == job_id
-    worker = processor.queue.worker
-    try:
-        worker._execute(job)
-    except Exception as error:
-        processor.queue.fail_real_job(job.id, str(error))
-        worker.encoder.cleanup(job.id, remove_final=True)
-    finally:
-        worker.encoder.cleanup(job.id)
+    processor.queue.worker._run_job(job)
     return processor.queue._find(job.id)
 
 
@@ -157,3 +150,22 @@ def test_deleting_a_history_entry_removes_its_kept_output_but_never_the_source(
         assert all(job["id"] != original["id"] for job in client.get("/api/queue").json()["history"])
         assert not output.exists()
         assert source.stat().st_ino == before.st_ino and source.stat().st_size == before.st_size
+
+
+def test_history_replace_checks_the_source_before_taking_the_write_lock(tmp_path, monkeypatch, probe_facts):
+    from app.workers import real
+    from tests.test_real_encoding import lock_probe
+    application, _, _ = kept(tmp_path, monkeypatch, probe_facts, output_size=1_000_000)
+    with TestClient(application):
+        processor = application.state.media_processor
+        original = run_one(processor, replace_source=False)
+        checked = []
+        probe, check_source = lock_probe(tmp_path / "state.sqlite3", checked), real.replacement_reasons
+
+        def replacement_reasons(path):
+            probe()
+            return check_source(path)
+
+        monkeypatch.setattr(real, "replacement_reasons", replacement_reasons)
+        processor.replace_with_kept_output(original["id"])
+    assert checked == [True]

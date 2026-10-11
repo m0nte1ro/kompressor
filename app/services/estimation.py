@@ -40,7 +40,8 @@ def audio_plan(item, preset: CompressionPreset, preserve_audio: bool) -> list[di
     return plan_audio_tracks(item.audio, preset, preserve_audio)
 
 
-def estimate(item, preset: CompressionPreset, preserve_audio: bool) -> dict:
+def estimate(item, preset: CompressionPreset, preserve_audio: bool,
+             video_bitrate: int | None = None) -> dict:
     plan = audio_plan(item, preset, preserve_audio)
     duration = item.duration_seconds
     if duration is None or item.video_bitrate is None:
@@ -55,7 +56,7 @@ def estimate(item, preset: CompressionPreset, preserve_audio: bool) -> dict:
     residual = max(0, item.size - source_video - known_audio)
     audio_bytes = sum(t["bitrate"] or 0 for t in plan) * duration / 8
     if preset.rate_control == "qvbr" and preset.qvbr_bitrates_by_resolution:
-        nominal = preset.video_bitrate_for(spatial_resolution(item))
+        nominal = video_bitrate or preset.video_bitrate_for(spatial_resolution(item))
         if nominal is None:
             low, high = preset.planning_video_bitrate_low, preset.planning_video_bitrate_high
         else:

@@ -38,7 +38,8 @@ Matching bytes alone does not merge files that are simultaneously present.
 
 Each root has a monotonic scan sequence. Applying an older/already-applied sequence
 fails without writes; rescanning with a new sequence is idempotent for inventory
-identity. All changes commit in one repository transaction.
+identity. All changes commit in one repository transaction, after reconciling on a
+read snapshot; a scan of the same root applied in between rejects it.
 
 1. Unchanged paths are reserved before rename matching.
 2. Unique displaced physical identities with unchanged content evidence identify
@@ -88,9 +89,11 @@ subtitle discovery and interpretation of real ffprobe output remain future work.
 `SourceGuard.before_processing(reference)` and
 `SourceGuard.before_replacement(reference)` independently obtain a fresh
 observation through `ObservationSource`. Both require the captured revision to
-remain current, the source to be present, matching identity/stat evidence and
-exactly one known hardlink. Hash conflicts also invalidate the check. The second
-check never reuses an earlier successful result.
+remain current, the source to be present, exactly one known hardlink, and the
+freshly observed physical identity (device and inode, plus generation where the
+source reports one), size and mtime to match. The filesystem source only stats the
+file: nothing is hashed, so an in-place edit that keeps size and mtime is not
+detected. The second check never reuses an earlier successful result.
 
 `ArtifactService` is an isolated fixture lifecycle: plan an output, run the
 pre-processing guard and mark the artifact simulated. Before any replacement

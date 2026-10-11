@@ -1,7 +1,7 @@
 from app.models.preset import CompressionPreset
-from app.models.queue import QueueJob
+from app.models.queue import PENDING_STATUSES, QueueJob
 from app.models.tags import TagAssignment
-from app.repositories.database import Database
+from app.repositories.database import JOB_STATUS, Database
 
 
 class SQLitePresetRepository:
@@ -72,6 +72,19 @@ class SQLiteQueueRepository:
         with self.database.read() as connection:
             return [QueueJob.model_validate_json(row[0]) for row in
                     connection.execute("SELECT payload FROM jobs ORDER BY rowid")]
+
+    def get(self, job_id: str) -> QueueJob | None:
+        with self.database.read() as connection:
+            row = connection.execute("SELECT payload FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        return QueueJob.model_validate_json(row[0]) if row else None
+
+    def pending(self) -> list[QueueJob]:
+        """Unfinished jobs through the status index; history is never parsed."""
+        statuses = sorted(PENDING_STATUSES)
+        with self.database.read() as connection:
+            return [QueueJob.model_validate_json(row[0]) for row in connection.execute(
+                f"SELECT payload FROM jobs WHERE {JOB_STATUS} IN ({','.join('?' * len(statuses))}) "
+                "ORDER BY rowid", statuses)]
 
     def add(self, job: QueueJob) -> None:
         with self.database.transaction() as connection:

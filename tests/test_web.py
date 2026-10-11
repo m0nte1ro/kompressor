@@ -44,6 +44,12 @@ def test_compression_modal_does_not_fetch_full_library(client):
     assert "loadPresets().catch" in script.text
 
 
+def test_video_bitrate_is_rechecked_while_typing_not_only_on_blur(client):
+    script = client.get("/static/compression.js").text
+    assert "$('#video-bitrate').addEventListener('input'" in script
+    assert "$('#video-bitrate').addEventListener('change'" not in script
+
+
 def test_blocking_reasons_are_visible(client):
     html = client.get("/movies").text
     assert "Dune: Part Two" in html

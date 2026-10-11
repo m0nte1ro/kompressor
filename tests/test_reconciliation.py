@@ -127,23 +127,31 @@ def test_cross_device_move_uses_full_hash_only_on_ambiguous_candidates(inventory
     assert inventory.capture(file_id) == reference
 
 
-def test_partial_fingerprint_only_requests_stronger_evidence(inventory, snapshot):
+def test_unverified_complete_relocation_with_sample_hash_gets_fresh_file_id(inventory, snapshot):
     hashes = {'sample_scheme': 'sample-v1', 'sample': 'same-sample'}
     old = changed(snapshot.files[0], fingerprints=hashes)
     file_id = inventory.reconcile(scan(snapshot, 1, [old])).created[0]
     moved = changed(old, relative_path='candidate.mkv', inode=999)
     result = inventory.reconcile(scan(snapshot, 2, [moved]))
-    assert not result.created and not result.moved and not result.missing
-    assert result.issues[0].fingerprint_needed == 'full'
-    assert inventory.capture(file_id)
+    assert len(result.created) == 1 and result.missing == [file_id]
+    assert not result.moved and not result.issues
+    assert inventory.repository.load().files[file_id].presence == 'missing'
+    assert inventory.repository.load().files[result.created[0]].relative_path == 'candidate.mkv'
 
 
-def test_cheap_ambiguous_candidate_requests_sample_not_full_hash(inventory, snapshot):
-    inventory.reconcile(snapshot)
+def test_cheap_unverified_relocation_is_indexed_with_a_new_identity(inventory, snapshot):
+    old_id = inventory.reconcile(snapshot).created[0]
     moved = changed(snapshot.files[0], relative_path='candidate.mkv', inode=999)
     result = inventory.reconcile(scan(snapshot, 2, [moved]))
-    assert result.issues[0].fingerprint_needed == 'sample'
-    assert not result.created
+    # Without hashes, identical size/media name is not proof of the same bytes.
+    # Keep the old record/history, mark its path missing, and show the new file.
+    assert len(result.created) == 1 and result.created[0] != old_id
+    assert result.missing == [old_id]
+    assert not result.moved and not result.issues
+    state = inventory.repository.load()
+    assert state.files[old_id].presence == 'missing'
+    assert state.files[result.created[0]].relative_path == 'candidate.mkv'
+    assert state.files[result.created[0]].media_id == state.files[old_id].media_id
 
 
 def test_same_sample_cannot_hide_content_change(inventory, snapshot):
@@ -171,10 +179,16 @@ def test_strong_evidence_survives_cheap_rescan(inventory, snapshot):
 def test_multiple_identical_missing_candidates_are_not_arbitrarily_merged(inventory, snapshot):
     old = changed(snapshot.files[0], fingerprints={'full_scheme': 'sha256', 'full': 'same'})
     other = changed(old, relative_path='other.mkv', inode=222)
-    inventory.reconcile(scan(snapshot, 1, [old, other]))
+    previous_ids = inventory.reconcile(scan(snapshot, 1, [old, other])).created
     result = inventory.reconcile(scan(snapshot, 2, [changed(old, relative_path='new.mkv', inode=333)]))
-    assert result.issues and not result.moved and not result.created
-    assert len(inventory.repository.load().files) == 2
+    # Neither old identity may be selected arbitrarily. The new observed file
+    # has a fresh record; both old histories remain but their paths are missing.
+    assert len(result.created) == 1 and not result.moved and not result.issues
+    assert set(result.missing) == set(previous_ids)
+    state = inventory.repository.load()
+    assert len(state.files) == 3
+    assert state.files[result.created[0]].relative_path == 'new.mkv'
+    assert all(state.files[i].presence == 'missing' for i in previous_ids)
 
 
 def test_swap_paths_uses_identity_not_scan_order(inventory, snapshot):
@@ -204,8 +218,8 @@ def test_stale_scan_rejected_without_state_change(inventory, snapshot):
 
 def test_atomic_reconciliation_rollback(inventory, snapshot, monkeypatch):
     save = inventory.repository.apply
-    def fail_after_save(*args):
-        save(*args)
+    def fail_after_save(*args, **kwargs):
+        save(*args, **kwargs)
         raise RuntimeError('storage failure')
     monkeypatch.setattr(inventory.repository, 'apply', fail_after_save)
     with pytest.raises(RuntimeError):
@@ -248,3 +262,60 @@ def test_rename_plus_replacement_is_independent_of_scan_order(inventory, snapsho
     assert not result.revised
     assert inventory.capture(file_id) == reference
     assert inventory.repository.load().files[file_id].relative_path == moved.relative_path
+
+
+def test_a_rescan_rewrites_only_what_changed(inventory, snapshot):
+    first = changed(snapshot.files[0], relative_path='A/first.mkv', media_id='movie-a', inode=1)
+    second = changed(snapshot.files[0], relative_path='B/second.mkv', media_id='movie-b', inode=2)
+    created = inventory.reconcile(scan(snapshot, 1, [first, second])).created
+    stored = []
+    store_file = inventory.repository.store_file
+    inventory.repository.store_file = lambda record: (stored.append(record.file_id), store_file(record))
+    # Same identity, size and mtime: both unchanged. Only the second one's hardlink count
+    # (which eligibility reads) moved, so only it needs its row and observation rewritten.
+    result = inventory.reconcile(scan(snapshot, 2, [first, changed(second, hardlinks=2)]))
+    assert sorted(result.unchanged) == sorted(created)
+    assert stored == [created[1]]
+    files = inventory.repository.load().files
+    assert files[created[1]].observation.hardlinks == 2
+    assert {record.last_seen_sequence for record in files.values()} == {2}
+    assert files[created[0]].observation.probe is not None  # Kept, not rewritten without it.
+
+
+def test_reconciliation_holds_the_write_lock_only_to_write(inventory, snapshot, tmp_path):
+    import sqlite3
+    root_state = inventory.repository.root_state
+    writable = []
+
+    def reading(*args, **kwargs):
+        other = sqlite3.connect(tmp_path / 'inventory.sqlite3', timeout=0)
+        try:
+            other.execute('BEGIN IMMEDIATE')
+            other.rollback()
+            writable.append(True)
+        except sqlite3.OperationalError:
+            writable.append(False)
+        finally:
+            other.close()
+        return root_state(*args, **kwargs)
+
+    inventory.repository.root_state = reading
+    inventory.reconcile(snapshot)
+    assert writable == [True]
+
+
+def test_a_scan_applied_while_another_was_reconciled_is_rejected(inventory, snapshot):
+    file_id = inventory.reconcile(snapshot).created[0]
+    root_state = inventory.repository.root_state
+
+    def raced(*args, **kwargs):
+        state = root_state(*args, **kwargs)
+        inventory.repository.root_state = root_state
+        inventory.reconcile(scan(snapshot, 2, snapshot.files))  # Lands between read and write.
+        return state
+
+    inventory.repository.root_state = raced
+    with pytest.raises(Conflict, match='meanwhile'):
+        inventory.reconcile(scan(snapshot, 3, [changed(snapshot.files[0], size=1)]))
+    current = inventory.repository.load()
+    assert current.scan_sequences[snapshot.root_id] == 2 and current.files[file_id].observation.size != 1

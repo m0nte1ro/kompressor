@@ -31,7 +31,7 @@ are excluded from Git. Tests use isolated databases in temporary directories.
 
 Set `KOMPRESSOR_MEDIA_BACKEND=filesystem` and configure movie/show roots in Settings
 (or `KOMPRESSOR_MOVIES_ROOT` / `KOMPRESSOR_SHOWS_ROOT` as defaults). Roots default to
-unconfigured. Use **Settings → Scan library** to discover and probe actual files;
+unconfigured. Use **Settings → Rescan library** to discover and probe actual files;
 scans run in the background and results update automatically without reloading the
 page. Seed mode still needs no media tools and keeps its deterministic fake queue.
 
@@ -41,8 +41,9 @@ FastAPI, so restarting or stopping the WebUI does not terminate its ffmpeg subpr
 Both real lanes accept only confirmed SDR progressive sources and keep resolution.
 Each job writes a validated MKV under the workspace, then either keeps it there
 (keep original) or swaps it in place of an MKV source (replace, the WebUI default).
-Replacement happens only after output validation, a bit-exact check of every copied
-audio track and the preset's minimum measured saving; the original stays as a hidden
+Replacement happens only after output validation, a full decode of the output's
+video, a bit-exact check of every copied audio track and the preset's minimum
+measured saving; the original stays as a hidden
 backup until the replaced file is verified. Audio is copied untouched unless the
 job explicitly unticks Preserve Audio; CPU always copies audio, and GPU can then
 apply the Efficient Audio rules. HDR is not enabled.
@@ -91,13 +92,14 @@ visible at `/dev/dri/renderD128`, also install/enable
 `kompressor-worker-gpu.service`. The services share SQLite state but have
 independent lifecycles and lane-scoped recovery.
 
-Open Settings, verify/save the paths, and click **Scan library**. Navigate to
+Open Settings, verify/save the paths, and click **Rescan library**. Navigate to
 Movies/Shows while it runs: names appear first, technical details follow. Saved
 paths override environment defaults, including saved empty paths. Missing
 ffprobe leaves files listed with unknown metadata and reported errors.
 
-Series naming currently requires a series directory and `SxxExx` episode names;
-unsupported names are reported, not resolved through external metadata. The scanner
+Series discovery requires a series directory and a recognizable season/episode
+marker: `S01E05`, `S01 E05`, or `01x05` (including `20x01`). Unsupported
+names are reported, never guessed from external metadata. The scanner
 never writes to the media roots. Only a replace job's worker writes there, and only
 into the source's own directory (a job-named hidden copy and backup next to the
 source, both removed afterwards). There is no authentication; use the intended
@@ -106,34 +108,40 @@ private homelab network.
 See the [full Settings audit](docs/SETTINGS_AUDIT.md) and
 [schema, migration and scale report](docs/INVENTORY_STORAGE.md).
 
-## Seed workflows
+## Workflows
 
-- Movies and Shows display the existing JSON inventory. Episode tables are flat,
-  with season separators, search, filters and mass selection.
+These apply in both modes unless marked **Seed** or **Filesystem**.
+
+- Movies and Shows list the library: the JSON inventory in seed mode, the scanned
+  inventory in filesystem mode. Episode tables are flat, with season separators,
+  search, filters and mass selection.
 - Review opens scoped presets and reads `/api/eligibility` for each selected item.
-  Technical settings are read-only. Preserve Audio (ticked by default), container
-  metadata and output handling (replace by default) are the only per-job options;
-  the backend applies inherited protection tags. Show rows suggest an eligible GPU
+  Technical settings are read-only. The per-job options are Preserve Audio (ticked
+  by default), Preserve subtitles / chapters / attachments / metadata (ticked by
+  default), output handling (replace by default) and, only when a selected file's
+  size is outside the preset's bitrate table, a video bitrate for those files. The
+  backend applies inherited protection tags. Show rows suggest an eligible GPU
   preset first; movies keep their CPU presets.
 - Queue submissions re-evaluate every item. Blocked, missing or already pending
   items are excluded individually. Encoder settings are copied from the preset,
   never accepted as client overrides.
-- In seed mode, CPU and GPU are independent fake lanes. Each starts its next job
-  on the next one-second scheduler tick. Encoding takes 180 simulated seconds,
-  followed by five seconds of validation. Filesystem mode uses independent real CPU and GPU lanes when their runtime
-  prerequisites are available. Completed/failed/skipped/blocked jobs appear in
-  History. A completed keep-original real encode offers **Replace source**, which
-  re-validates the kept output and swaps it in on its worker lane; **Compare**,
-  which writes random side-by-side screenshots to `<workspace>/compare/`; and
-  **Benchmark**, which scores a chosen number of seconds with VMAF.
+- CPU and GPU are independent lanes. **Seed:** fake lanes; each starts its next job
+  on the next one-second scheduler tick, encoding takes 180 simulated seconds and
+  validation five more. **Filesystem:** a real CPU and a real GPU worker, each when
+  its runtime prerequisites are available.
+- Completed, failed, skipped and blocked jobs appear in History. **Filesystem:** a
+  completed keep-original encode offers **Replace source**, which re-validates the
+  kept output and swaps it in on its worker lane; **Compare**, which writes random
+  side-by-side screenshots to `<workspace>/compare/`; and **Benchmark**, which
+  scores a chosen number of seconds with VMAF.
 - Default order is estimated bytes saved, descending. Manual priority overrides
   this order; Move next overrides priority within the same lane. Changing a job’s
   priority clears its Move next override. Active jobs require Stop & Skip.
-- Queue/history survive restarts. Interrupted seed simulations reset to zero and
-  revalidate. Restarting the WebUI does not touch an active real encode. If the
-  encoder worker itself is interrupted, it requeues the job from zero after stale
-  workspace output is removed. Real measured savings are separate from estimates;
-  seed simulations never change media or inventory.
+- Queue and history survive restarts. **Seed:** interrupted simulations reset to
+  zero and revalidate; simulations never change media or inventory.
+  **Filesystem:** restarting the WebUI does not touch an active encode; an
+  interrupted encoder worker requeues its job from zero after removing stale
+  workspace output. Measured savings are recorded separately from estimates.
 - Worker pause state and quiet hours are persisted in SQLite. Manual pause prevents
   new claims without killing the current job. At quiet-hours start, known progress
   at or below the configured cutoff is stopped; only progress above the cutoff and
@@ -142,17 +150,16 @@ See the [full Settings audit](docs/SETTINGS_AUDIT.md) and
   duplicating and enabling/disabling every preset. The initial presets are copied
   from the seed JSON once. Subsequent startups do not overwrite user edits.
   Preset details are collapsed by default. The Settings page also persists the
-  Movies and Shows library paths in SQLite; these paths are currently stored for
-  the filesystem scanner; saving alone does not trigger a scan.
-  Built-in display names are user-owned: Just convert to HEVC, Tone it down a bit + HEVC,
-  and Tone it down a bit + HEVC + Efficient Audio. Intent is stored
-    separately from those names. All preserve source resolution. Existing jobs keep
-    a complete preset snapshot, even if that preset is later edited, moved to
-    another scope or disabled. Disable affects new submissions. The catalogue
-    upgrade inserts missing current presets and disables untouched legacy defaults
-    once; user edits and queued snapshots are preserved. Legacy custom presets
-    retain explicit source applicability rules, while target resolution is
-    configured separately.
+  Movies and Shows library paths in SQLite for the filesystem scanner; saving alone
+  does not trigger a scan. Built-in display names are user-owned: Just convert to
+  HEVC, Tone it down a bit + HEVC, and Tone it down a bit + HEVC + Efficient Audio.
+  Intent is stored separately from those names. All preserve source resolution.
+  Existing jobs keep a complete preset snapshot, even if that preset is later
+  edited, moved to another scope or disabled. Disable affects new submissions. The
+  catalogue upgrade inserts missing current presets and disables untouched legacy
+  defaults once; user edits and queued snapshots are preserved. Legacy custom
+  presets retain explicit source applicability rules, while target resolution is
+  configured separately.
 - Movies and episodes have Manage tags; episode pages also expose series and
   season tags. Select multiple rows to add/remove tags without replacing unrelated
   direct tags. The editor shows direct tags, inherited tags and their origin.
@@ -224,8 +231,12 @@ and scheduler. Server-rendered estimates use the first eligible scoped preset,
 falling back to the first enabled preset to expose blockers. The modal opens the
 suggested preset and calls the eligibility API again when inputs change.
 
-`QueueService` coordinates ordering, state transitions and duplicate prevention
-under a lock. SQLite repositories own persisted state; `FakeEncoderWorker` advances
+`QueueService` (`services/queue.py`) coordinates ordering, claiming, revalidation and
+duplicate prevention under a lock. Its other parts sit beside it: the real lanes' job
+lifecycle (`queue_lifecycle.py`), startup recovery (`queue_recovery.py`), worker
+controls and quiet hours (`queue_controls.py`) and History actions (`queue_history.py`).
+Every status change goes through `QueueJob.move_to`, which allows only the changes in
+`JOB_TRANSITIONS` (`models/queue.py`). SQLite repositories own persisted state; `FakeEncoderWorker` advances
 progress independently of browser polling through the application lifespan.
 Repository, scanner, probe and encoder protocols provide the adapter boundaries.
 `FakeEncoder` implements encode/progress/stop without touching files; the fake

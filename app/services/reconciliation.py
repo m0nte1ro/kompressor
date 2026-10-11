@@ -28,18 +28,34 @@ class ReconciliationService:
         return SourceReference(file_id=file_id, revision_id=record.revision_id)
 
     def reconcile(self, snapshot: ScanSnapshot) -> ReconciliationResult:
+        """Apply one root scan atomically, holding SQLite's write lock only to write it.
+
+        Loading and reconciling a large root takes seconds, which would stall every
+        other writer (workers, the WebUI). It runs on a read snapshot instead. Scans
+        are the only writers of a root's files and run one at a time; the sequence
+        re-check inside the transaction rejects one that raced this scan.
+        """
+        state = self.repository.root_state(snapshot.root_id, snapshot.files if snapshot.status != "complete" else None)
+        loaded = state.scan_sequences.get(snapshot.root_id, 0)
+        if snapshot.sequence <= loaded:
+            raise Conflict("Stale or already applied scan sequence.")
+        before = dict(state.files)  # _apply replaces the records it changes.
+        result = self._apply(state, snapshot)
+        state.scan_sequences[snapshot.root_id] = snapshot.sequence
+        # Most files of a rescan are unchanged: they only need their sequence bumped.
+        seen = {file_id for file_id in result.unchanged if file_id in before and before[file_id]
+                .model_copy(update={"last_seen_sequence": snapshot.sequence}) == state.files[file_id]}
         with self.repository.transaction():
-            state = self.repository.root_state(snapshot.root_id, snapshot.files if snapshot.status != "complete" else None)
-            if snapshot.sequence <= state.scan_sequences.get(snapshot.root_id, 0):
-                raise Conflict("Stale or already applied scan sequence.")
-            result = self._apply(state, snapshot)
-            state.scan_sequences[snapshot.root_id] = snapshot.sequence
-            self.repository.apply(state, snapshot, result)
-            return result
+            if self.repository.scan_sequence(snapshot.root_id) != loaded:
+                raise Conflict("Another scan of this root was applied meanwhile; scan again.")
+            self.repository.apply(state, snapshot, result, seen=seen)
+        return result
 
     def _apply(self, state: InventoryState, snapshot: ScanSnapshot) -> ReconciliationResult:
         result = ReconciliationResult()
-        records = [r.model_copy(deep=True) for r in state.files.values() if r.root_id == snapshot.root_id]
+        # Records are changed by reassigning fields and observations are frozen, so a
+        # shallow copy keeps the loaded state intact (a deep copy cost seconds per root).
+        records = [r.model_copy() for r in state.files.values() if r.root_id == snapshot.root_id]
         observations = {item.relative_path: item for item in snapshot.files}
         claimed: set[str] = set()
         unresolved: set[str] = set()
@@ -94,7 +110,9 @@ class ReconciliationService:
                 confirmed = [r for r in plausible if full_match(r.observation, item) is True]
                 if snapshot.status == "complete" and len(plausible) == len(confirmed) == 1:
                     record = confirmed[0]
-                elif plausible:
+                elif plausible and snapshot.status != "complete":
+                    # A partial scan cannot establish that the old path is gone.
+                    # Do not introduce a second file ID until the root is complete.
                     tier = "full" if any(sample_match(r.observation, item) is True or
                                          r.observation.fingerprints.full or item.fingerprints.full
                                          for r in plausible) else "sample"
@@ -105,6 +123,13 @@ class ReconciliationService:
                     ))
                     unresolved.update(r.file_id for r in plausible)
                     continue
+                # A complete scan with no unique strong match means this observed
+                # path is a NEW physical file, not a verified relocation. Create
+                # its own file ID below, mark the old absent path missing, and
+                # retain the older revision and history without reassignment.
+                # This is safe even when the old record had a fingerprint and the
+                # new candidate did not: never assume equal bytes based on name
+                # and size. Semantic episode tags remain on the common media ID.
             if record is not None and not self._same_media(record, item):
                 result.issues.append(ReconciliationIssue(path=item.relative_path,
                                                          reason="Media reassignment requires explicit confirmation."))

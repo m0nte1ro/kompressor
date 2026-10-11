@@ -1,4 +1,5 @@
 """Fresh, read-only source stat observations for SourceGuard."""
+import os
 import stat
 from pathlib import Path, PurePosixPath
 from collections.abc import Callable
@@ -41,6 +42,26 @@ class FilesystemObservationSource:
         except OSError:
             return None
 
+    def root_available(self, root_id: str) -> bool | None:
+        """Whether a configured root can be listed and is not an unmounted mount point.
+
+        An unmounted mount point is an empty directory. As in the scanner, an empty
+        root is unavailable only while the inventory still lists files on it; once
+        the scans have recorded them missing it is simply empty, and jobs on it are
+        judged normally. None when no configured root has this ID: removing a root
+        is a setting, not an outage.
+        """
+        root = self._root(root_id)
+        if root is None:
+            return None
+        try:
+            with os.scandir(root) as entries:
+                if next(entries, None) is not None:
+                    return True
+        except OSError:
+            return False
+        return not self.inventory.has_present_files(root_id)
+
     def reference_for(self, file_id: str, revision_id: str) -> SourceReference | None:
         record = self.inventory.get_file(file_id)
         if record is None or record.revision_id != revision_id or record.presence != "present":
@@ -64,6 +85,13 @@ class FilesystemObservationSource:
         return self._safe_path(root, record.relative_path) if root else None
 
     def observe(self, root_id: str, relative_path: str) -> FileObservation | None:
+        """A fresh stat of a present library file, and nothing it did not see.
+
+        Device, inode, size, mtime, ctime and hardlink count are observed. The file
+        is not read, so it has no fingerprints or probe, and Linux reports no inode
+        generation (scans record none either). Root, path, media ID and scope only
+        name the inventory entry that was looked at.
+        """
         root = self._root(root_id)
         if root is None:
             return None
@@ -78,8 +106,9 @@ class FilesystemObservationSource:
             info = path.stat(follow_symlinks=False)
         except OSError:
             return None
-        return record.observation.model_copy(update={
-            "filesystem_id": str(info.st_dev), "inode": info.st_ino,
-            "size": info.st_size, "mtime_ns": info.st_mtime_ns,
-            "ctime_ns": info.st_ctime_ns, "hardlinks": info.st_nlink,
-        })
+        return FileObservation(
+            root_id=record.root_id, relative_path=record.relative_path,
+            media_id=record.media_id, scope=record.scope,
+            filesystem_id=str(info.st_dev), inode=info.st_ino,
+            size=info.st_size, mtime_ns=info.st_mtime_ns,
+            ctime_ns=info.st_ctime_ns, hardlinks=info.st_nlink)

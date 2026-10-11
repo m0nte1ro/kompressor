@@ -9,7 +9,8 @@ WorkingDirectory=/root/kompressor
 EnvironmentFile=/etc/kompressor/kompressor.env
 ExecStart=/root/kompressor/.venv/bin/python -m app.worker_main cpu
 Restart=on-failure
-RestartPreventExitStatus=2
+# 2 = configuration error, 4 = another worker already owns the CPU lane.
+RestartPreventExitStatus=2 4
 RestartSec=2
 # Send SIGTERM only to the Python owner first; it performs bounded ffmpeg
 # termination itself. If that graceful path hangs, systemd kills the full cgroup.

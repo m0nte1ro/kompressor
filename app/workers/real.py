@@ -1,7 +1,8 @@
 """Standalone real encoder worker with one owned backend lane per process."""
 import logging
+import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import TYPE_CHECKING, Literal, TypeVar
@@ -14,7 +15,7 @@ from app.services.analysis import AnalysisTarget
 from app.services.errors import Conflict
 from app.services.source_guard import SourceGuard
 from app.services.filesystem_source import FilesystemObservationSource
-from app.workers.ffmpeg import EncodingCancelled, FFmpegEncoder, FFmpegError
+from app.workers.ffmpeg import EncodingCancelled, FFmpegEncoder, FFmpegError, source_frame_count
 from app.workers.replacement import ReplacementError, SourceReplacer, replacement_reasons
 
 if TYPE_CHECKING:
@@ -26,13 +27,91 @@ if TYPE_CHECKING:
 Backend = Literal["cpu", "gpu"]
 T = TypeVar("T")
 PERSIST_ATTEMPTS = 5
+# A finished root listing is reused for this long.
+ROOT_CHECK_SECONDS = 2.0
+# A root listing still running after this long is a hung mount: the root counts as
+# unavailable meanwhile.
+ROOT_LIST_TIMEOUT_SECONDS = 5.0
+# ffmpeg reports progress every 0.5 s and the WebUI refreshes every 2 s; writing it
+# more often only adds write transactions.
+PROGRESS_WRITE_SECONDS = 2.0
+
+
+log = logging.getLogger(__name__)
 
 
 def _primary_video(item: MediaItem):
     if item.probe is None:
         return None
     return next((s for s in item.probe.streams if s.kind == "video" and not s.dispositions.get("attached_pic")), None)
-log = logging.getLogger(__name__)
+
+
+class _RootListing:
+    """One listing of a library root, run in a daemon thread.
+
+    os.scandir on a hung network mount can block for minutes. Callers wait at
+    most ROOT_LIST_TIMEOUT_SECONDS from the listing's start, and a listing that
+    is still running is reused rather than joined by another.
+    """
+
+    def __init__(self, list_root: Callable[[], bool | None]):
+        self.started = time.monotonic()
+        self.finished: float | None = None
+        self.available: bool | None = None
+        self._done = Event()
+        Thread(target=self._run, args=(list_root,), name="kompressor-root-check", daemon=True).start()
+
+    def _run(self, list_root: Callable[[], bool | None]) -> None:
+        try:
+            self.available = list_root()
+        finally:
+            self.finished = time.monotonic()
+            self._done.set()
+
+    def result(self) -> bool | None:
+        """The listing's answer, or False while it hangs past the timeout."""
+        remaining = self.started + ROOT_LIST_TIMEOUT_SECONDS - time.monotonic()
+        return self.available if self._done.wait(max(0.0, remaining)) else False
+
+
+def database_busy(error: BaseException) -> bool:
+    """Another connection holds SQLite's lock (SQLITE_BUSY or SQLITE_LOCKED).
+
+    Only that frees itself. A read-only, unreadable or failing database raises
+    the same OperationalError class with another code. Extended codes such as
+    SQLITE_BUSY_SNAPSHOT keep the primary code in their low byte.
+    """
+    code = getattr(error, "sqlite_errorcode", None) if isinstance(error, sqlite3.OperationalError) else None
+    return code is not None and code & 0xFF in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+
+
+def persist(what: str, action: Callable[[], T], stopping: Event) -> T | None:
+    """Write a job's state change, retrying while SQLite is locked.
+
+    Until this write lands the job still looks active, and the lane will not
+    claim anything else. A database locked by another connection (the web
+    process mid-scan, say) is therefore retried until it frees up or the worker
+    shuts down, when restart recovery takes over. Every other error, including
+    a read-only or failing database, is retried a few times, then logged.
+    Never raises: an escaped error would end the lane thread.
+    """
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return action()
+        except Exception as error:
+            if not database_busy(error):
+                if attempt >= PERSIST_ATTEMPTS:
+                    log.exception("Could not %s after %d attempts; restart recovery will resolve the job.",
+                                  what, attempt)
+                    return None
+            elif stopping.is_set():
+                log.exception("Could not %s before shutdown; restart recovery will resolve the job.", what)
+                return None
+            elif attempt == PERSIST_ATTEMPTS:
+                log.warning("Could not %s yet (database busy); retrying until it succeeds.", what)
+        stopping.wait(min(attempt, 30))
 
 
 class RealEncoderWorker:
@@ -71,6 +150,55 @@ class RealEncoderWorker:
         self._control_thread: Thread | None = None
         self._cancelled: set[str] = set()
         self._active: set[str] = set()
+        self._root_lock = Lock()
+        self._root_listings: dict[str, _RootListing] = {}
+        self._progress_written: dict[str, float] = {}
+        # In the web process, probe again when a formerly unavailable GPU comes up.
+        self.availability_probe: Callable[[], dict] | None = None
+        self._availability_checked = time.monotonic()
+        self._availability_lock = Lock()
+        self._availability_running = False
+        self.latest_runtime: dict | None = None
+        self._gpu_degraded = False
+        self._gpu_retry_at = 0.0
+
+    def _probe_availability(self) -> None:
+        """The WebUI must never perform a GPU smoke encode in an HTTP request."""
+        try:
+            assert self.availability_probe is not None
+            status = self.availability_probe()
+            self.latest_runtime = status
+            self.supported_backends = frozenset(status["supported_backends"])
+            self.enabled = bool(self.supported_backends)
+            self.unavailable_reason = status.get("unavailable_reason")
+        except Exception:
+            log.exception("Runtime capability refresh failed; retaining previous state")
+        finally:
+            with self._availability_lock:
+                self._availability_running = False
+
+    def refresh_availability(self) -> frozenset[str]:
+        """Cheap WebUI check; probe unavailable GPU asynchronously every 30 s.
+
+        Re-running a real GPU smoke encode on each browser poll (or every
+        30 seconds during a long encode) would waste the render device and
+        block HTTP for up to 30 seconds. A healthy visible render node keeps
+        the last validated startup/recovery capability until it disappears.
+        """
+        if self.availability_probe is None:
+            return self.supported_backends
+        if "gpu" in self.supported_backends:
+            device = self.encoder.gpu_device
+            if device is not None and self.encoder.gpu_device_check(device)[0]:
+                return self.supported_backends
+        with self._availability_lock:
+            if (not self._availability_running and
+                    time.monotonic() - self._availability_checked >= 30.0):
+                self._availability_checked = time.monotonic()
+                self._availability_running = True
+                Thread(target=self._probe_availability,
+                       name="kompressor-web-capability-check", daemon=True).start()
+        return self.supported_backends
 
     def diagnostics(self, runtime: dict) -> dict:
         supported = list(runtime.get("supported_backends", self.supported_backends))
@@ -92,7 +220,12 @@ class RealEncoderWorker:
             raise Conflict(f"No real execution capability is registered for {backend.upper()}.")
         return capability
 
-    def enqueue_reasons(self, item: MediaItem, job: QueueJob) -> list[str]:
+    def enqueue_reasons(self, item: MediaItem, job: QueueJob, replacement: list[str] | None = None) -> list[str]:
+        """Why the job cannot run here.
+
+        replacement is replacement_check() for a replace job, gathered before the
+        caller opened a transaction; without it the check runs here, on the disk.
+        """
         reasons = self._capability(job.backend).reasons(item, job)
         reference = job.source_reference
         revision_id = item.revision_id
@@ -103,12 +236,41 @@ class RealEncoderWorker:
         elif reference is not None:
             reasons.append("Source revision changed after the job was queued.")
         if job.replace_source and reference is not None:
-            path = self.source.path_for(reference)
-            if path is None:
-                reasons.append("Current source path is unavailable.")
-            else:
-                reasons.extend(replacement_reasons(path))
+            reasons.extend(self.replacement_check(reference) if replacement is None else replacement)
         return list(dict.fromkeys(reasons))
+
+    def replacement_check(self, reference: SourceReference) -> list[str]:
+        """Whether the source at this reference can be replaced: a stat of its path
+        and its mount. Blocks while that mount hangs, so never inside a transaction."""
+        if reference.root_id is not None and self.unavailable_roots({reference.root_id}):
+            return ["The library root holding this source is unavailable (unmounted or unreachable)."]
+        path = self.source.path_for(reference)
+        if path is None:
+            return ["Current source path is unavailable."]
+        return replacement_reasons(path)
+
+    def unavailable_roots(self, root_ids: Iterable[str]) -> frozenset[str]:
+        """The library roots among these that cannot be listed right now.
+
+        An unmounted or unreachable root is an outage, not a verdict on its jobs:
+        the queue keeps such jobs waiting instead of blocking or failing them.
+        Listing a hung mount can block for minutes, so callers run this before
+        opening a transaction, and a hung listing counts as unavailable after
+        ROOT_LIST_TIMEOUT_SECONDS.
+        """
+        # Start every listing before waiting on any, so hung roots time out together.
+        listings = {root_id: self._root_listing(root_id) for root_id in set(root_ids)}
+        return frozenset(root_id for root_id, listing in listings.items() if listing.result() is False)
+
+    def _root_listing(self, root_id: str) -> _RootListing:
+        # One claim revalidates every queued job: list each root once, not per job.
+        with self._root_lock:
+            listing = self._root_listings.get(root_id)
+            if listing is None or (listing.finished is not None
+                                   and time.monotonic() - listing.finished > ROOT_CHECK_SECONDS):
+                listing = self._root_listings[root_id] = _RootListing(
+                    lambda: self.source.root_available(root_id))
+            return listing
 
     def recover_replacement(self, job: QueueJob) -> tuple[str, str]:
         """Resolve a replacement interrupted by a worker crash or kill.
@@ -166,6 +328,28 @@ class RealEncoderWorker:
             except Exception:
                 log.exception("%s worker control loop iteration failed", backend.upper())
 
+    def _gpu_usable(self) -> bool:
+        """After device loss, verify actual VA-API encoding before claiming work."""
+        device = self.encoder.gpu_device
+        device_ready = device is not None and self.encoder.gpu_device_check(device)[0]
+        if not device_ready:
+            self._gpu_degraded = True
+        if not self._gpu_degraded:
+            return True
+        if time.monotonic() < self._gpu_retry_at:
+            return False
+        self._gpu_retry_at = time.monotonic() + 30.0
+        if not device_ready:
+            return False
+        ready, reason = self.encoder.vaapi_runtime_check(
+            self.encoder.binary, device, self.probe.binary, self.encoder.workspace_root)
+        if ready:
+            self._gpu_degraded = False
+            log.info("GPU VA-API recovered; resuming queued work.")
+        else:
+            log.warning("GPU VA-API unavailable, queued jobs remain waiting: %s", reason)
+        return ready
+
     def _run(self) -> None:
         backend = self.backend
         if backend is None:
@@ -173,9 +357,7 @@ class RealEncoderWorker:
         while not self._stop.is_set():
             queue = self.queue
             if backend == "gpu":
-                device = self.encoder.gpu_device
-                ready = device is not None and self.encoder.gpu_device_check(device)[0]
-                if not ready:
+                if not self._gpu_usable():
                     self._wake.wait(1.0)
                     self._wake.clear()
                     continue
@@ -190,45 +372,93 @@ class RealEncoderWorker:
                 self._wake.wait(0.5)
                 self._wake.clear()
                 continue
-            job_id = job.id
-            with self._lock:
-                self._active.add(job_id)
-            try:
-                self._execute(job)
-            except EncodingCancelled:
+            self._run_job(job)
+
+    def _run_job(self, job: QueueJob) -> None:
+        """Execute one claimed job and record how it ended."""
+        queue = self.queue
+        job_id = job.id
+        with self._lock:
+            self._active.add(job_id)
+        try:
+            self._execute(job)
+        except Exception as error:
+            # A stop terminates ffmpeg or removes the partial being validated, so
+            # whatever error follows a stop request is the stop, not a failure.
+            if isinstance(error, EncodingCancelled) or self.cancelled_by_request(job_id) or self._stop.is_set():
+                # Worker shutdown leaves the job for restart recovery, which requeues it.
                 if not self._stop.is_set() and queue:
                     owner = queue
                     self._persist("record the stop", lambda: owner.cancelled_real_job(job_id))
-            except Exception as error:
+            elif (job.backend == "gpu" and isinstance(error, FFmpegError)
+                  and self._gpu_failed_after_error(job, error)):
+                self.encoder.cleanup(job_id, remove_final=True)
+            elif self._requeue_after_outage(job, error):
+                self.encoder.cleanup(job_id, remove_final=True)
+            else:
                 if queue:
                     owner = queue
                     self._persist("record the failure", lambda: owner.fail_real_job(
                         job_id, str(error), getattr(error, "exit_code", None)))
-                self.encoder.cleanup(job.id, remove_final=True)
-            finally:
-                self.encoder.cleanup(job.id)
-                with self._lock:
-                    self._active.discard(job.id)
-                    self._cancelled.discard(job.id)
-                self._wake.set()
+                # After an unresolved replacement nothing more is deleted: the
+                # MANUAL CHECK message names the files, as in restart recovery.
+                if getattr(error, "outcome", None) != "manual":
+                    self.encoder.cleanup(job_id, remove_final=True)
+        finally:
+            self.encoder.cleanup(job_id)
+            self._progress_written.pop(job_id, None)
+            with self._lock:
+                self._active.discard(job_id)
+                self._cancelled.discard(job_id)
+            self._wake.set()
 
-    @staticmethod
-    def _persist(what: str, action: Callable[[], T]) -> T | None:
-        """Retry a job-state write (e.g. SQLite briefly locked by the web process).
+    def _gpu_failed_after_error(self, job: QueueJob, error: Exception) -> bool:
+        """Distinguish a transient dead VA-API backend from a bad source."""
+        queue = self.queue
+        device = self.encoder.gpu_device
+        if queue is None or device is None:
+            return False
+        ready, reason = self.encoder.vaapi_runtime_check(
+            self.encoder.binary, device, self.probe.binary, self.encoder.workspace_root)
+        if ready:
+            return False
+        self._gpu_degraded = True
+        self._gpu_retry_at = time.monotonic() + 30.0
+        saved = self._persist("requeue GPU job after hardware failure", lambda:
+            queue.requeue_real_job(job.id, "Requeued: GPU VA-API unavailable; waiting for recovery."))
+        if saved:
+            log.warning("GPU backend failed during job %s (%s): %s", job.id, reason, error)
+        return bool(saved)
 
-        Never raises: an escaped error here would end the lane thread and leave
-        the job active until a restart, which then recovers it.
-        """
-        for attempt in range(1, PERSIST_ATTEMPTS + 1):
-            try:
-                return action()
-            except Exception:
-                if attempt == PERSIST_ATTEMPTS:
-                    log.exception("Could not %s after %d attempts; restart recovery will resolve the job.",
-                                  what, attempt)
-                    return None
-                time.sleep(attempt)
-        return None
+    def _requeue_after_outage(self, job: QueueJob, error: Exception) -> bool:
+        """Requeue a job that failed because its library root dropped away mid-job."""
+        queue = self.queue
+        reference = job.source_reference
+        if (queue is None or reference is None or reference.root_id is None
+                or not self.unavailable_roots({reference.root_id})):
+            return False
+        requeued = self._persist("requeue the job", lambda: queue.requeue_real_job(
+            job.id, "Requeued: the library root became unavailable while this job ran."))
+        if requeued:
+            log.warning("The library root of job %s became unavailable; it was requeued: %s", job.id, error)
+        return bool(requeued)
+
+    def _persist(self, what: str, action: Callable[[], T]) -> T | None:
+        return persist(what, action, self._stop)
+
+    def _report_progress(self, job_id: str, percent: float | None, elapsed: float) -> None:
+        """Progress is informational: a failed write must not end a healthy encode."""
+        queue = self.queue
+        if queue is None:
+            return
+        written = time.monotonic()
+        if written - self._progress_written.get(job_id, float("-inf")) < PROGRESS_WRITE_SECONDS:
+            return
+        self._progress_written[job_id] = written
+        try:
+            queue.update_real_progress(job_id, percent, elapsed)
+        except Exception:
+            log.warning("Could not record progress for job %s; the encode continues.", job_id, exc_info=True)
 
     def _execute(self, job: QueueJob) -> None:
         queue = self.queue
@@ -252,7 +482,8 @@ class RealEncoderWorker:
         if catalog is None:
             raise RuntimeError("Real worker catalog is not bound.")
         entry = catalog.find(job.media_id, job.scope)
-        result = catalog.evaluate(entry, job.preset, job.requested_preserve_audio, job.preserve_subtitles)
+        result = catalog.evaluate(entry, job.preset, job.requested_preserve_audio, job.preserve_subtitles_and_metadata,
+                                  job.chosen_video_bitrate)
         if not result.eligible:
             raise Conflict("Policy changed before execution: " + "; ".join(result.reasons))
         if result.preserve_audio != job.preserve_audio:
@@ -274,7 +505,7 @@ class RealEncoderWorker:
 
         output = self.encoder.encode(
             job, source_path, item.probe,
-            lambda percent, elapsed: queue.update_real_progress(job.id, percent, elapsed),
+            lambda percent, elapsed: self._report_progress(job.id, percent, elapsed),
             before_start=lambda: self.guard.before_processing(reference),
         )
         if not queue.set_real_validating(job.id, str(output.final_path)):
@@ -291,6 +522,10 @@ class RealEncoderWorker:
             # bit-identical, or the job fails and nothing is promoted or replaced.
             errors = self.encoder.copied_audio_mismatches(
                 job, source_path, item.probe, output.partial_path, output_probe)
+        if not errors:
+            errors = self.encoder.decode_errors(
+                job.id, output.partial_path, encoded_frames=output.frames,
+                source_frames=source_frame_count(item.probe, _primary_video(item)))
         if errors:
             queue.record_validation_errors(job.id, errors)
             raise Conflict("Output validation failed: " + "; ".join(errors))
@@ -324,6 +559,9 @@ class RealEncoderWorker:
         errors = capability.validate_output(item, job, output_probe, output)
         if not errors:
             errors = self.encoder.copied_audio_mismatches(job, source_path, item.probe, output, output_probe)
+        if not errors:
+            errors = self.encoder.decode_errors(
+                job.id, output, source_frames=source_frame_count(item.probe, _primary_video(item)))
         if errors:
             queue.record_validation_errors(job.id, errors)
             raise Conflict("Kept output failed validation: " + "; ".join(errors))
@@ -393,12 +631,22 @@ class RealEncoderWorker:
                 before_swap=lambda: self.guard.before_replacement(reference),
                 verify=verify, save=lambda state: queue.update_replacement(job.id, state),
                 should_abort=self._stop.is_set)
-        except ReplacementError:
+        except ReplacementError as error:
             if self._stop.is_set():
                 # The original is untouched or restored. Leave the job "replacing"
                 # so restart recovery keeps the validated output (see QueueService).
                 raise EncodingCancelled("Worker stopped during source replacement.")
-            raise
+            if reused or error.outcome not in {"untouched", "restored"}:
+                raise
+            # The original is intact, and the encode is validated work that a full
+            # disk or a probe timeout says nothing about. Keep it, as restart
+            # recovery does, so History can swap it in later.
+            reason = (f"Source replacement failed, so the source was kept: {error} "
+                      "The validated output was kept; use Replace source in History.")
+            if not self._persist("keep the validated output",
+                                 lambda: queue.keep_real_output(job.id, str(output_path), size, reason)):
+                raise
+            return
         # The source is replaced now; failing the job would misreport it.
         completed = self._persist("record the completed replacement", lambda: queue.complete_real_job(
             job.id, str(source_path), size, source_replaced=True, notes=notes))

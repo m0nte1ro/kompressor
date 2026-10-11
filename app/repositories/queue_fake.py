@@ -3,7 +3,7 @@ import json
 from contextlib import nullcontext
 from pathlib import Path
 
-from app.models.queue import QueueJob
+from app.models.queue import PENDING_STATUSES, QueueJob
 
 
 class FakeQueueRepository:
@@ -13,6 +13,12 @@ class FakeQueueRepository:
 
     def get_all(self) -> list[QueueJob]:
         return self.jobs
+
+    def get(self, job_id: str) -> QueueJob | None:
+        return next((job for job in self.jobs if job.id == job_id), None)
+
+    def pending(self) -> list[QueueJob]:
+        return [job for job in self.jobs if job.status in PENDING_STATUSES]
 
     def add(self, job: QueueJob) -> None:
         self.jobs.append(job)

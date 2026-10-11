@@ -6,6 +6,7 @@ export function compressionModal(scope, refreshQueue) {
   let selected = [], presets = [], results = [];
   let presetsRequest = null;
   let generation = 0, evaluation = 0, submitting = false, preserveAudioTouched = false;
+  let bitrateTyping = 0;
   const errorBox = $('#modal-error');
   const submit = $('#add-to-queue');
 
@@ -62,7 +63,7 @@ export function compressionModal(scope, refreshQueue) {
     if (replace && !$('#preserve-audio').checked) {
       warnings.push('Preserve Audio is off: tracks listed as "convert" below are permanently re-encoded in the replaced file.');
     }
-    if (replace && !$('#preserve-subtitles').checked) {
+    if (replace && !$('#preserve-subtitles-and-metadata').checked) {
       warnings.push('Subtitles, chapters, attachments and container metadata will be permanently removed from the replaced file.');
     }
     $('#replace-warnings').textContent = warnings.join(' ');
@@ -101,6 +102,20 @@ export function compressionModal(scope, refreshQueue) {
     $('#preserve-audio-text').textContent = movieAudioForced ? 'Preserve Audio · required by this Movie preset' : 'Preserve Audio · copy every audio track';
   }
 
+  // Bit/s for files whose size is outside the preset's bitrate table, or null.
+  function chosenBitrate() {
+    const mbps = Number($('#video-bitrate').value);
+    return $('#video-bitrate').value !== '' && mbps >= 0.1 && mbps <= 200 ? Math.round(mbps * 1e6) : null;
+  }
+
+  function bitrateField(preset) {
+    const needing = results.filter(r => r.video_bitrate_required);
+    $('#video-bitrate-field').hidden = !needing.length;
+    if (!needing.length) return;
+    const table = Object.entries(preset.qvbr_bitrates_by_resolution ?? {}).map(([resolution, rate]) => `${resolution} ${bitrate(rate)}`).join(' · ');
+    $('#video-bitrate-note').textContent = `${needing.length === 1 ? '1 selected file has a size' : `${needing.length} selected files have sizes`} outside this preset's bitrate table (${table}). This bitrate applies only to ${needing.length === 1 ? 'that file' : 'those files'}.`;
+  }
+
   async function evaluate() {
     const revision = ++evaluation;
     const session = generation;
@@ -113,8 +128,8 @@ export function compressionModal(scope, refreshQueue) {
     outputHandling();
     $('#eligibility').textContent = 'Checking eligibility…';
     ['estimated-output', 'estimated-saving', 'estimated-percent'].forEach(id => $(`#${id}`).textContent = '—');
-    const overrides = {preserve_audio: $('#preserve-audio').checked, preserve_subtitles: $('#preserve-subtitles').checked,
-      replace_source: $('#replace-source').value === 'true'};
+    const overrides = {preserve_audio: $('#preserve-audio').checked, preserve_subtitles_and_metadata: $('#preserve-subtitles-and-metadata').checked,
+      replace_source: $('#replace-source').value === 'true', video_bitrate: chosenBitrate()};
     try {
       const [evaluated, queue] = await Promise.all([
         mapLimit(selected, async row => ({row, ...await api('/api/eligibility', {
@@ -125,6 +140,7 @@ export function compressionModal(scope, refreshQueue) {
       const pending = new Set(pendingJobs(queue).filter(j => j.scope === scope).map(j => j.media_id));
       results = evaluated.map(result => ({...result, excluded: !result.eligible || pending.has(result.row.dataset.id),
         reasons: [...result.reasons, ...(pending.has(result.row.dataset.id) ? ['Already queued or active.'] : [])]}));
+      bitrateField(preset);
       const included = results.filter(r => !r.excluded);
       const total = key => included.reduce((sum, r) => sum + (r[key] ?? 0), 0);
       $('#estimated-output').textContent = included.length ? `${size(total('estimated_output_size_low'))} – ${size(total('estimated_output_size_high'))}` : '—';
@@ -150,6 +166,7 @@ export function compressionModal(scope, refreshQueue) {
     if (submitting) return;
     ++generation;
     ++evaluation;
+    window.clearTimeout(bitrateTyping);
     dialog.close();
   }
   $$('[data-close]', dialog).forEach(button => button.addEventListener('click', close));
@@ -160,8 +177,13 @@ export function compressionModal(scope, refreshQueue) {
   });
   $('#preset').addEventListener('change', evaluate);
   $('#preserve-audio').addEventListener('change', () => {preserveAudioTouched = true; evaluate();});
-  $('#preserve-subtitles').addEventListener('change', evaluate);
+  $('#preserve-subtitles-and-metadata').addEventListener('change', evaluate);
   $('#replace-source').addEventListener('change', evaluate);
+  // Re-check while typing, once the value settles: each check asks the API about every file.
+  $('#video-bitrate').addEventListener('input', () => {
+    window.clearTimeout(bitrateTyping);
+    bitrateTyping = window.setTimeout(evaluate, 400);
+  });
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
@@ -175,8 +197,8 @@ export function compressionModal(scope, refreshQueue) {
     try {
       const response = await api('/api/queue', {method: 'POST', body: JSON.stringify({
         media_ids: selected.map(row => row.dataset.id), scope, preset_id: $('#preset').value,
-        preserve_audio: $('#preserve-audio').checked, preserve_subtitles: $('#preserve-subtitles').checked,
-        replace_source: $('#replace-source').value === 'true',
+        preserve_audio: $('#preserve-audio').checked, preserve_subtitles_and_metadata: $('#preserve-subtitles-and-metadata').checked,
+        replace_source: $('#replace-source').value === 'true', video_bitrate: chosenBitrate(),
       })});
       const exclusions = response.excluded.map(item => {
         const row = selected.find(r => r.dataset.id === item.media_id);
@@ -221,8 +243,10 @@ export function compressionModal(scope, refreshQueue) {
     $('#preserve-audio').disabled = false;
     $('#preserve-audio-text').textContent = 'Preserve Audio · copy every audio track';
     preserveAudioTouched = false;
-    $('#preserve-subtitles').checked = true;
+    $('#preserve-subtitles-and-metadata').checked = true;
     $('#replace-source').value = 'true';
+    $('#video-bitrate').value = '';
+    $('#video-bitrate-field').hidden = true;
     outputHandling();
     dialog.showModal();
 

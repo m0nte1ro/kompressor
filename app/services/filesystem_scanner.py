@@ -12,7 +12,9 @@ from app.models.inventory import FileObservation, InventoryState, ScanSnapshot
 from app.models.media import MediaScope
 
 SUPPORTED_EXTENSIONS = {'.mkv', '.mp4', '.m4v', '.avi', '.mov', '.ts', '.m2ts', '.mpg', '.mpeg', '.webm'}
-EPISODE = re.compile(r'(?i)(?<![a-z0-9])S(\d{1,3})E(\d{1,4})(?!\d)')
+# Standard S01E02, spaced S01 E02, and common 01x02/20x01 releases.
+# Boundaries prevent matching numbers embedded in unrelated titles or IDs.
+EPISODE = re.compile(r'(?i)(?<![a-z0-9])(?:S(?P<s>\d{1,3})[ ._-]*E|(?P<x>\d{1,3})x)(?P<e>\d{1,4})(?!\d)')
 
 
 def root_identity(scope: MediaScope, root: Path) -> str:
@@ -27,7 +29,7 @@ def semantic_key(scope: MediaScope, relative: str) -> str | None:
     if match is None:
         return None
     show = path.parts[0] if len(path.parts) > 1 else path.stem[:match.start()].strip(' .-_')
-    return f'{show}:S{int(match[1])}E{int(match[2])}'
+    return f'{show}:S{int(match.group("s") or match.group("x"))}E{int(match.group("e"))}'
 
 
 class FilesystemScanner:
@@ -53,8 +55,14 @@ class FilesystemScanner:
             if not root.is_dir() or root.is_symlink():
                 raise OSError(f'Root is unavailable or a symlink: {root}')
             # Explicitly test enumeration; os.walk otherwise reports a missing root ambiguously.
-            with os.scandir(root):
-                pass
+            with os.scandir(root) as entries:
+                empty = next(entries, None) is None
+            # An unmounted mount point is an empty directory. Scanning it as complete
+            # would mark every file missing and block their queued jobs.
+            present = sum(f.presence == 'present' for f in existing)
+            if empty and present:
+                raise OSError(f'Root is empty but held {present} files at the last scan; '
+                              f'it may be unmounted: {root}')
         except OSError as error:
             snapshot.status = 'unavailable'
             return snapshot, [str(error)]

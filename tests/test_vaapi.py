@@ -244,9 +244,10 @@ def test_legacy_gpu_device_variable_is_read_only_when_the_new_one_is_unset(tmp_p
     assert Settings().gpu_device == Path('/dev/dri/renderD130')
 
 
-def test_gpu_worker_accepts_the_legacy_qsv_argument(monkeypatch):
+def test_gpu_worker_accepts_the_legacy_qsv_argument(monkeypatch, tmp_path):
     from types import SimpleNamespace
     from app import worker_main
+    monkeypatch.setattr(worker_main, 'settings', SimpleNamespace(database_path=tmp_path / 'state.sqlite3'))
     requested = []
     def fake_processor(settings, *, process_role, worker_backend):
         requested.append(worker_backend)
@@ -256,6 +257,29 @@ def test_gpu_worker_accepts_the_legacy_qsv_argument(monkeypatch):
     assert worker_main.run('qsv') == 2 and worker_main.run('gpu') == 2
     assert requested == ['gpu', 'gpu']
     assert worker_main.run('nvenc') == 2 and requested == ['gpu', 'gpu']
+
+
+def test_a_second_worker_for_the_same_lane_exits_before_recovery(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from app import worker_main
+    monkeypatch.setattr(worker_main, 'settings', SimpleNamespace(database_path=tmp_path / 'state.sqlite3'))
+    built = []
+    monkeypatch.setattr(worker_main, 'build_media_processor', lambda *args, **kwargs: built.append(1))
+    # A running GPU worker holds its lane (an old qsv unit is the same lane).
+    owner = worker_main.acquire_lane(tmp_path / 'state.sqlite3', 'gpu')
+    assert owner is not None
+    assert worker_main.run('qsv') == worker_main.EXIT_LANE_OWNED
+    assert worker_main.run('gpu') == worker_main.EXIT_LANE_OWNED
+    # Recovery (inside build_media_processor) never ran for the duplicate.
+    assert built == []
+    # The CPU lane is independent, and the lane frees up when its owner exits.
+    cpu = worker_main.acquire_lane(tmp_path / 'state.sqlite3', 'cpu')
+    assert cpu is not None
+    owner.close()
+    again = worker_main.acquire_lane(tmp_path / 'state.sqlite3', 'gpu')
+    assert again is not None
+    again.close()
+    cpu.close()
 
 
 def test_no_legacy_encoder_implementation():

@@ -1,7 +1,9 @@
 """Source replacement, bit-exact audio verification and safe audio/lane defaults."""
+import io
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -16,10 +18,10 @@ from app.services.errors import Conflict
 from app.services.estimation import plan_audio_tracks
 from app.services.policy import PolicyEngine
 from app.workers import replacement
-from app.workers.ffmpeg import FFmpegEncoder, FFmpegError
+from app.workers.ffmpeg import FFmpegEncoder, FFmpegError, source_frame_count
 from app.workers.replacement import ReplacementError, SourceReplacer, replacement_reasons
-from tests.test_real_encoding import (build_real_app, movie_item, probe_facts, gpu_preset,  # noqa: F401
-                                      queue_job)
+from tests.test_real_encoding import (HungProcess, build_real_app, movie_item, probe_facts,  # noqa: F401
+                                      gpu_preset, queue_job)
 from fastapi.testclient import TestClient
 
 
@@ -37,21 +39,14 @@ def audio_tracks(probe):
 
 
 def run_one(processor, **request):
-    """Queue, claim and execute one movie job the way the worker loop does."""
+    """Queue, claim and run one movie job through the worker loop's own handling."""
     processor.scan_library()
     movie = processor.get_library().movies[0]
     result = processor.queue_encode(EnqueueRequest(
         media_ids=[movie.id], scope="movie", preset_id="movie-streaming-quality", **request))
     assert result["added"], result["excluded"]
     job = processor.queue.claim_next("cpu")
-    worker = processor.queue.worker
-    try:
-        worker._execute(job)
-    except Exception as error:
-        processor.queue.fail_real_job(job.id, str(error))
-        worker.encoder.cleanup(job.id, remove_final=True)
-    finally:
-        worker.encoder.cleanup(job.id)
+    processor.queue.worker._run_job(job)
     return next(item for item in processor.get_queue()["history"] if item["id"] == job.id)
 
 
@@ -131,13 +126,49 @@ def test_replace_rolls_back_when_the_file_at_the_source_path_fails_validation(
     before = source.stat()
     with TestClient(application):
         saved = run_one(application.state.media_processor, replace_source=True)
-    assert saved["status"] == "failed" and saved["source_replaced"] is False
-    assert "final validation" in saved["error_message"]
-    assert "original restored" in saved["error_message"]
+    # The original is restored; the validated encode is kept rather than thrown away.
+    assert saved["status"] == "completed" and saved["source_replaced"] is False
+    assert saved["replace_source"] is False
+    assert "final validation" in saved["reasons"][-1] and "original restored" in saved["reasons"][-1]
+    assert "use Replace source in History" in saved["reasons"][-1]
     after = source.stat()
     assert (after.st_ino, after.st_size, after.st_mtime_ns) == (before.st_ino, before.st_size, before.st_mtime_ns)
     assert sorted(source.parent.iterdir()) == [source]
-    assert not workspace_outputs(workspace)
+    assert [Path(saved["output_path"])] == workspace_outputs(workspace)
+
+
+def test_a_full_media_disk_keeps_the_validated_output_for_a_later_replace(tmp_path, monkeypatch, probe_facts):
+    application, source, workspace, _ = build_real_app(
+        tmp_path, monkeypatch, probe_facts, hevc_output(probe_facts), output_size=1_000_000)
+    real_usage = replacement.shutil.disk_usage
+    monkeypatch.setattr(replacement.shutil, "disk_usage",
+                        lambda path: real_usage(path)._replace(free=1024))
+    before = source.stat()
+    with TestClient(application):
+        processor = application.state.media_processor
+        saved = run_one(processor, replace_source=True)
+        assert saved["status"] == "completed" and saved["source_replaced"] is False, saved
+        assert "Not enough free space" in saved["reasons"][-1]
+        assert saved["measured_saving"] == 400_000_000 - 1_000_000
+        assert source.stat().st_ino == before.st_ino and sorted(source.parent.iterdir()) == [source]
+        assert [Path(saved["output_path"])] == workspace_outputs(workspace)
+        # Once there is room, History swaps it in without encoding again.
+        assert processor.replace_with_kept_output(saved["id"])["replaces_job_id"] == saved["id"]
+
+
+def test_an_unresolved_replacement_fails_and_deletes_nothing(tmp_path, monkeypatch, probe_facts):
+    application, source, workspace, _ = build_real_app(
+        tmp_path, monkeypatch, probe_facts, hevc_output(probe_facts), output_size=1_000_000)
+
+    def unresolved(self, journal, output, **kwargs):
+        raise ReplacementError("Rename failed. MANUAL CHECK REQUIRED: an unknown file is at the source path.",
+                               "manual")
+    monkeypatch.setattr(SourceReplacer, "replace", unresolved)
+    with TestClient(application):
+        saved = run_one(application.state.media_processor, replace_source=True)
+    assert saved["status"] == "failed" and "MANUAL CHECK REQUIRED" in saved["error_message"]
+    # Like restart recovery, nothing else is removed while the state is unknown.
+    assert len(workspace_outputs(workspace)) == 1
 
 
 def test_replace_keeps_source_when_measured_saving_is_below_the_preset_minimum(
@@ -288,23 +319,101 @@ def test_restart_after_a_stop_before_the_swap_keeps_the_validated_output(
         assert processor.replace_with_kept_output(job.id)["replaces_job_id"] == job.id
 
 
-def test_lane_survives_a_briefly_locked_database_when_recording_a_failure(monkeypatch):
+class Stopping:
+    """threading.Event stand-in whose waits return at once."""
+
+    def __init__(self):
+        self.stopped = False
+        self.waits = []
+
+    def is_set(self):
+        return self.stopped
+
+    def wait(self, seconds):
+        self.waits.append(seconds)
+        return self.stopped
+
+
+def sqlite_error(tmp_path, kind: str) -> sqlite3.OperationalError:
+    """The OperationalError SQLite itself raises, carrying its real error code."""
+    path = tmp_path / f"{kind}.sqlite3"
+    setup = sqlite3.connect(path)
+    setup.execute("CREATE TABLE t (x)")
+    setup.commit()
+    if kind == "locked":
+        setup.execute("BEGIN IMMEDIATE")  # Another process is mid-write.
+        connection = sqlite3.connect(path, timeout=0)
+    else:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        connection.execute("INSERT INTO t VALUES (1)")
+    except sqlite3.OperationalError as error:
+        return error
+    finally:
+        connection.close()
+        setup.close()
+    raise AssertionError(f"SQLite raised no {kind} error")
+
+
+def test_a_locked_database_is_retried_until_the_job_state_is_written(tmp_path):
     from app.workers import real
-    monkeypatch.setattr(real.time, "sleep", lambda seconds: None)
+    locked = sqlite_error(tmp_path, "locked")
+    assert locked.sqlite_errorname == "SQLITE_BUSY"
     attempts = []
 
-    def flaky():
+    def locked_for_a_while():
         attempts.append(1)
-        if len(attempts) < 3:
-            raise RuntimeError("database is locked")
+        if len(attempts) < 40:  # Far beyond the old five-attempt limit.
+            raise locked
         return True
 
-    assert real.RealEncoderWorker._persist("record", flaky) is True and len(attempts) == 3
+    stopping = Stopping()
+    assert real.persist("record", locked_for_a_while, stopping) is True and len(attempts) == 40
+    assert max(stopping.waits) == 30  # Backs off, capped.
+
+
+def test_other_write_errors_give_up_and_shutdown_ends_lock_retries(tmp_path):
+    from app.workers import real
+    attempts = []
 
     def broken():
-        raise RuntimeError("database is locked")
+        attempts.append(1)
+        raise RuntimeError("unexpected")
 
-    assert real.RealEncoderWorker._persist("record", broken) is None
+    assert real.persist("record", broken, Stopping()) is None and len(attempts) == real.PERSIST_ATTEMPTS
+
+    # Same exception class as a lock, but no amount of waiting makes it writable.
+    read_only = sqlite_error(tmp_path, "read-only")
+    assert read_only.sqlite_errorname == "SQLITE_READONLY"
+    attempts.clear()
+
+    def read_only_write():
+        attempts.append(1)
+        raise read_only
+
+    assert real.persist("record", read_only_write, Stopping()) is None and len(attempts) == real.PERSIST_ATTEMPTS
+
+    locked_error = sqlite_error(tmp_path, "locked")
+
+    def locked():
+        raise locked_error
+
+    stopping = Stopping()
+    stopping.stopped = True
+    assert real.persist("record", locked, stopping) is None and stopping.waits == []
+
+
+def test_a_failed_progress_write_does_not_end_the_encode(tmp_path, monkeypatch, probe_facts):
+    application, _, _, _ = build_real_app(tmp_path, monkeypatch, probe_facts, hevc_output(probe_facts),
+                                          output_size=1_000_000)
+    with TestClient(application):
+        processor = application.state.media_processor
+
+        def locked(*args):
+            raise sqlite3.OperationalError("database is locked")
+        processor.queue.update_real_progress = locked
+        saved = run_one(processor, replace_source=False)
+    assert saved["status"] == "completed", saved
 
 # --- SourceReplacer: failure paths and crash recovery on real files ----------------------
 
@@ -437,7 +546,7 @@ def test_audio_is_preserved_unless_the_job_explicitly_opts_out(probe_facts):
 
     def evaluate(preserve_audio, tags=()):
         return PolicyEngine().evaluate(item=item, scope="show", preset=preset, effective_tags=list(tags),
-                                       preserve_audio=preserve_audio, preserve_subtitles=True)
+                                       preserve_audio=preserve_audio, preserve_subtitles_and_metadata=True)
 
     default = evaluate(None)
     assert default.preserve_audio is True and {t["action"] for t in default.audio_plan} == {"copy"}
@@ -479,7 +588,7 @@ def test_command_audio_options_come_from_the_shared_plan(probe_facts, tmp_path):
 
 
 def test_metadata_opt_out_drops_only_global_tags_not_audio_languages(probe_facts, tmp_path):
-    job = queue_job(preserve_subtitles=False)
+    job = queue_job(preserve_subtitles_and_metadata=False)
     command = FFmpegEncoder.build_command("/usr/bin/ffmpeg", job, Path("/media/Film.mkv"), tmp_path / "out.mkv",
                                           probe_facts)
     # A bare "-map_metadata -1" would also wipe every stream's language and title.
@@ -505,23 +614,142 @@ def test_only_copied_tracks_are_hashed_and_mismatches_are_reported(probe_facts, 
     assert errors == ["Copied audio track 2 (aac, por) is not bit-identical to the source."]
 
 
+class HelperProcess:
+    """A finished verification ffmpeg: its stdout and stderr, then its exit status."""
+
+    def __init__(self, stdout="", stderr="", returncode=0):
+        self.stdout, self.stderr, self.returncode = io.StringIO(stdout), io.StringIO(stderr), returncode
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
 def test_packet_hash_report_is_parsed_strictly(tmp_path, monkeypatch):
-    class Process:
-        def __init__(self, stdout, returncode=0):
-            self.stdout, self.returncode = stdout, returncode
+    progress = "out_time_us=1000000\nprogress=continue\n"  # Shares stdout with the report.
+    reports = iter([f"{progress}0,a,SHA256={'a' * 64}\n1,a,SHA256={'b' * 64}\nprogress=end\n",
+                    f"{progress}0,a,SHA256={'a' * 64}\nprogress=end\n"])
+    commands = []
 
-        def communicate(self):
-            return self.stdout, ""
+    def popen(command, **options):
+        commands.append(command)
+        return HelperProcess(next(reports))
 
-        def poll(self):
-            return self.returncode
-
-    reports = iter([f"0,a,SHA256={'a' * 64}\n1,a,SHA256={'b' * 64}\n", f"0,a,SHA256={'a' * 64}\n"])
-    monkeypatch.setattr("app.workers.ffmpeg.subprocess.Popen", lambda *a, **k: Process(next(reports)))
+    monkeypatch.setattr("app.workers.ffmpeg.subprocess.Popen", popen)
     encoder = FFmpegEncoder("ffmpeg", tmp_path)
     assert encoder.packet_hashes("job", tmp_path / "x.mkv", ["0:1", "0:2"]) == ["a" * 64, "b" * 64]
+    assert commands[0][commands[0].index("-progress") + 1] == "pipe:1"
     with pytest.raises(FFmpegError, match="unexpected hash report"):
         encoder.packet_hashes("job", tmp_path / "x.mkv", ["0:1", "0:2"])
+
+
+@pytest.mark.parametrize("run, what", [
+    (lambda encoder, path: encoder.packet_hashes("job", path, ["0:1"]), "verify audio"),
+    (lambda encoder, path: encoder.decode_errors("job", path), "decode the output"),
+])
+def test_a_hung_verification_run_is_killed_so_the_lane_moves_on(tmp_path, monkeypatch, run, what):
+    spawned = []
+
+    def popen(command, **options):
+        spawned.append(HungProcess(command))
+        return spawned[-1]
+
+    monkeypatch.setattr("app.workers.ffmpeg.subprocess.Popen", popen)
+    encoder = FFmpegEncoder("ffmpeg", tmp_path, stall_seconds=0.1)
+    with pytest.raises(FFmpegError, match=f"made no progress .* while trying to {what}"):
+        run(encoder, tmp_path / "out.mkv")
+    assert spawned[0].terminated.is_set()
+    assert not encoder._processes
+
+
+
+def decode_progress(frames):
+    return f"frame=100\nprogress=continue\nframe={frames}\nprogress=end\n"
+
+
+@pytest.mark.parametrize("process, kwargs, expected", [
+    (HelperProcess(decode_progress(2892)), {"encoded_frames": 2892, "source_frames": 2892}, []),
+    # mkvmerge statistics may be a little off; within 0.1% (at least two frames) passes.
+    (HelperProcess(decode_progress(2890)), {"source_frames": 2892}, []),
+    (HelperProcess(decode_progress(2892), stderr="[hevc @ 0x1] Could not find ref with POC 12\n"), {},
+     ["Decoding the output reported errors: [hevc @ 0x1] Could not find ref with POC 12"]),
+    (HelperProcess(decode_progress(10), stderr="Invalid data found\n", returncode=1), {},
+     ["The output could not be decoded in full: Invalid data found"]),
+    (HelperProcess("progress=end\n"), {}, ["Decoding the output produced no video frames."]),
+    (HelperProcess(decode_progress(2880)), {"encoded_frames": 2892},
+     ["The output decodes to 2880 video frames; the encoder wrote 2892."]),
+    (HelperProcess(decode_progress(2600)), {"source_frames": 2892},
+     ["The output has 2600 video frames; the source's track statistics list 2892."]),
+])
+def test_output_is_decoded_in_full_and_frame_counts_must_match(tmp_path, monkeypatch, process, kwargs, expected):
+    commands = []
+
+    def popen(command, **options):
+        commands.append(command)
+        return process
+
+    monkeypatch.setattr("app.workers.ffmpeg.subprocess.Popen", popen)
+    encoder = FFmpegEncoder("ffmpeg", tmp_path)
+    assert encoder.decode_errors("job", tmp_path / "out.mkv", **kwargs) == expected
+    command = commands[0]
+    assert command[command.index("-map") + 1] == "0:v:0"
+    assert command[-3:] == ["-f", "null", "-"]
+
+
+MKVTOOLNIX_MUXER = "libebml v1.4.5 + libmatroska v1.7.1"
+
+
+def test_source_frame_count_trusts_only_statistics_written_with_the_file(probe_facts):
+    video = next(stream for stream in probe_facts.streams if stream.kind == "video")
+
+    def frames(statistics, muxer):
+        probe = probe_facts.model_copy(update={"metadata": {"encoder": muxer} if muxer else {}})
+        return source_frame_count(probe, video.model_copy(update={"metadata": statistics}))
+
+    mkvmerge = {"NUMBER_OF_FRAMES-eng": "2892", "_STATISTICS_WRITING_APP-eng": "mkvmerge v81.0 ('Hello Ivy') 64-bit"}
+    assert frames(mkvmerge, MKVTOOLNIX_MUXER) == 2892
+    assert frames({**mkvmerge, "NUMBER_OF_FRAMES-eng": "n/a"}, MKVTOOLNIX_MUXER) is None
+    assert frames({}, MKVTOOLNIX_MUXER) is None
+    # ffmpeg remuxed (and perhaps trimmed) the file, copying mkvmerge's statistics unchanged.
+    assert frames(mkvmerge, "Lavf60.16.100") is None
+    assert frames(mkvmerge, None) is None
+    assert frames({"NUMBER_OF_FRAMES": "2892"}, MKVTOOLNIX_MUXER) is None  # Writer unknown.
+    makemkv = {"NUMBER_OF_FRAMES": "2892", "_STATISTICS_WRITING_APP": "MakeMKV v1.17.7 linux(x64-release)"}
+    assert frames(makemkv, "libmakemkv v1.17.7 (1.3.10/1.5.2) linux(x64-release)") == 2892
+
+
+@pytest.mark.parametrize("muxer, source_frames", [
+    (None, None),  # No statistics at all.
+    (MKVTOOLNIX_MUXER, 60551),  # mkvmerge wrote the file and its statistics.
+    ("Lavf58.76.100", None),  # ffmpeg remuxed it and copied them unchanged.
+])
+def test_output_that_does_not_decode_cleanly_never_replaces_the_source(
+        tmp_path, monkeypatch, probe_facts, muxer, source_frames):
+    from tests.test_real_encoding import with_statistics
+    source_probe = probe_facts if muxer is None else with_statistics(probe_facts).model_copy(
+        update={"metadata": {"encoder": muxer}})
+    application, source, workspace, _ = build_real_app(
+        tmp_path, monkeypatch, source_probe, hevc_output(probe_facts), output_size=1_000_000)
+    calls = []
+
+    def decode_errors(self, job_id, path, **frames):
+        calls.append((Path(path).name, frames))
+        return ["Decoding the output reported errors: corrupt frame"]
+
+    monkeypatch.setattr(FFmpegEncoder, "decode_errors", decode_errors)
+    before = source.stat()
+    with TestClient(application):
+        saved = run_one(application.state.media_processor, replace_source=True)
+    assert saved["status"] == "failed" and saved["source_replaced"] is False
+    assert saved["validation_errors"] == ["Decoding the output reported errors: corrupt frame"]
+    # The partial is decoded before promotion, with the frame count ffmpeg reported writing.
+    assert calls == [("Fixture.kompressor.partial.mkv", {"encoded_frames": 2892, "source_frames": source_frames})]
+    after = source.stat()
+    assert (after.st_ino, after.st_size, after.st_mtime_ns) == (before.st_ino, before.st_size, before.st_mtime_ns)
+    assert sorted(source.parent.iterdir()) == [source]
+    assert not workspace_outputs(workspace)
 
 
 @pytest.mark.parametrize("change, message", [
@@ -594,7 +822,7 @@ def test_real_cpu_command_copies_every_audio_track_bit_exact(tmp_path, preserve_
         StreamFacts(index=2, kind="audio", codec="ac3", channels=6, bitrate=448_000, language="por",
                     title="Surround"),
     ])
-    job = queue_job(preserve_subtitles=preserve_metadata,
+    job = queue_job(preserve_subtitles_and_metadata=preserve_metadata,
                     preset=queue_job().preset.model_copy(update={"encoder_preset": "fast"}))
     output = tmp_path / "out.mkv"
     command = FFmpegEncoder.build_command(ffmpeg, job, source, output, probe)

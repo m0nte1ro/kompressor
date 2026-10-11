@@ -194,6 +194,16 @@ def test_unsignalled_scan_type_is_resolved_from_name_and_resolution(probe_payloa
     assert video.scan_type == scan and video.scan_type_inferred
 
 
+def test_unsignalled_scan_of_a_size_outside_the_classes_is_resolved_too(probe_payload):
+    facts = unsignalled_scan(probe_payload)
+    odd = facts.model_copy(update={'streams': [
+        s.model_copy(update={'width': 2560, 'height': 1440, 'resolution_class': None}) if s.kind == 'video' else s
+        for s in facts.streams]})
+    for name, scan in (('Film.2020.mkv', 'progressive'), ('Film.2020.1080i.mkv', 'interlaced')):
+        video = next(s for s in with_inferred_scan_type(odd, name).streams if s.kind == 'video')
+        assert video.scan_type == scan and video.scan_type_inferred
+
+
 def test_signalled_scan_type_is_never_overridden_by_the_name():
     from app.models.probe import with_inferred_scan_type
     facts = fixture('interlaced')

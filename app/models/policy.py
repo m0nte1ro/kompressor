@@ -23,7 +23,7 @@ class EligibilityResult(BaseModel):
     estimated_saving_percent: float | None
 
     preserve_audio: bool
-    preserve_subtitles: bool
+    preserve_subtitles_and_metadata: bool
     estimated_output_size_low: int | None = None
     estimated_output_size_high: int | None = None
     estimated_saving_low: int | None = None
@@ -33,3 +33,6 @@ class EligibilityResult(BaseModel):
     planning_saving: int | None = None
     planning_saving_percent: float | None = None
     audio_plan: list[dict] = Field(default_factory=list)
+    # The source size is outside the preset's per-resolution bitrate table, so the
+    # job needs a video bitrate chosen by the user.
+    video_bitrate_required: bool = False

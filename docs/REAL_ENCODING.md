@@ -9,7 +9,7 @@ remains deterministic simulation. No encode runs inside an HTTP request.
 Configure the existing filesystem roots and output workspace for both processes.
 Start the WebUI with `.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1`,
 the CPU encoder with `.venv/bin/python -m app.worker_main cpu`, and, after the render
-device is available, the GPU encoder with `.venv/bin/python -m app.worker_main qsv`.
+device is available, the GPU encoder with `.venv/bin/python -m app.worker_main gpu`.
 The processes share the same SQLite database and environment configuration.
 Restarting or stopping the WebUI leaves active ffmpeg processes alone; each worker
 owns only its own lane. Example systemd units live in `deploy/systemd/`.
@@ -18,7 +18,21 @@ The workspace must already contain a writable `jobs/` directory. Settings shows 
 resolved binary paths, whether `libx265` and `hevc_vaapi` are available, the configured GPU render
 device, workspace writability, active encoder mode, supported backends, and lane
 availability. Binary and
-workspace changes require an application restart. Library roots cannot overlap
+workspace configuration changes require an application restart. Runtime lane
+availability is different: when a GPU lane is unavailable, the WebUI
+schedules a runtime capability check on a **background daemon thread** at most
+once every 30 seconds. Request handling returns the last known capability
+immediately; a successful later check becomes visible on the next UI poll,
+without restarting the WebUI. An already healthy render node is checked cheaply
+without repeatedly performing smoke encodes during active GPU jobs. This status
+describes local encoding capability, not proof the separate worker service runs.
+
+The GPU worker runs a real Main10/QVBR smoke test on startup. If a render device
+disappears, the worker holds queued GPU jobs and periodically retries a VA-API
+smoke test (30-second backoff). After an FFmpeg failure, it smoke-tests the GPU:
+if VA-API itself is unavailable, the current job is requeued and subsequent
+claims wait until recovery; if VA-API is healthy, normal source/job failure
+handling applies. The CPU lane continues independently. Library roots cannot overlap
 one another, the database, or the output workspace.
 
 The supported slice remains conservative: HEVC, confirmed SDR, progressive video,
@@ -43,7 +57,15 @@ revision, root/path, physical identity and stat evidence immediately before
 starting FFmpeg. After FFmpeg succeeds, ffprobe validates codec, dimensions, progressive scan,
 requested bit depth, SDR signalling, known source colour range, duration,
 preserved stream/chapter counts, stream order and every audio track (see
-[Audio safety](#audio-safety)). Only then is the partial promoted to
+[Audio safety](#audio-safety)). ffprobe reads only headers and the first frames, so
+the output's video is then decoded in full (`ffmpeg -map 0:v:0 -f null -`): any
+decoder error fails the job, as does a decoded frame count that differs from the
+frames ffmpeg reported writing, or by more than 0.1% from the source's mkvmerge
+`NUMBER_OF_FRAMES` statistic when it has a current one. ffmpeg and the tools built on
+it copy that statistic unchanged when they remux, even after a trim, so it counts only
+when the application that wrote it also wrote the file (MKVToolNix: `libmatroska` in
+the muxing application; MakeMKV); otherwise it is ignored. This costs one more read of the
+output and CPU decode time, never another encode. Only then is the partial promoted to
 `<source-stem>.kompressor.mkv`. A keep-original job ends there and never renames,
 truncates, replaces or deletes the source. Re-encoded video (and audio converted by Efficient Audio) drops
 copied mkvmerge track statistics (`BPS`, `NUMBER_OF_BYTES`, `NUMBER_OF_FRAMES`,
@@ -52,8 +74,9 @@ otherwise report the source bitrate and size. Copied streams keep theirs. Measur
 
 Stop & Skip is persisted as a cancellation request in SQLite. The standalone owner
 of the affected CPU or GPU lane observes that request, terminates only the subprocess
-it owns (the encode or the audio verification), removes the partial output and records
-the job as skipped. A job in the `replacing` state cannot be stopped, blocked by a tag
+it owns (the encode or the audio/decode verification), removes the partial output and
+records the job as skipped. Whatever error the stop causes (ffmpeg's exit status 255,
+a partial removed while ffprobe reads it) is recorded as that stop, not as a failure. A job in the `replacing` state cannot be stopped, blocked by a tag
 change or cut off by quiet hours; the swap always runs to a verified replacement or
 a restored original. Manual worker pause blocks new claims
 but lets an active job finish. Quiet hours also block new claims; when the quiet
@@ -68,6 +91,47 @@ An interrupted replacement is never requeued; it is resolved first, as described
 under [Source replacement](#source-replacement). Pending jobs
 from the other runtime mode are blocked instead of being run by the wrong worker.
 CPU and GPU execution remain independent; one lane never recovers or stops the other.
+
+Each lane has exactly one owner. A worker takes an exclusive lock
+(`.kompressor-worker-<lane>.lock` next to the database) before its startup recovery,
+which requeues the lane's active job and clears its workspace; a second worker for the
+same lane (for example an old `qsv` unit next to the `gpu` unit) exits with status 4,
+which the units do not restart, instead of destroying the running encode.
+
+A lane does not wait forever on a hung ffmpeg. An encode or verification run (audio
+hashing, the full decode) whose output position and frame count stop advancing for
+15 minutes (a wedged GPU, a stalled mount) is killed and its job failed; ffmpeg keeps
+printing progress while hung, so only real advancement counts. Two waits remain by
+design. The source replacement copy runs in the worker itself and is never
+interrupted (the swap always ends in a verified replacement or a restored original),
+so a mount that hangs during it holds the lane until it answers. And a process stuck
+in uninterruptible I/O (a hard NFS mount) exits only when the kernel lets it, whatever
+signal it is sent.
+A job's state changes (completed, failed, stopped) are retried for as long as SQLite
+reports the database locked by another connection (`SQLITE_BUSY`/`SQLITE_LOCKED`),
+because the lane cannot claim its next job until that write lands; any other write
+error, including a read-only or failing database, is logged after five attempts and
+left to restart recovery. Progress is written at most every 2 seconds (the WebUI
+refreshes at that rate); a failed progress write is only logged and never ends a
+healthy encode.
+
+A library root that cannot be listed is an outage, not a verdict on its jobs, and so is
+an empty root while the inventory still lists files on it (an unmounted mount point is
+an empty directory; scans apply the same rule). Queued jobs on it stay queued with a
+"Waiting: …" note in the queue: revalidation skips them instead of blocking them, and
+the lane claims jobs on other roots or waits, re-checking every 10 seconds. The worker
+log records when a lane starts and stops waiting, not every check. An encode that fails
+while its root is unavailable is requeued from zero with a note instead of failing. A
+file that is missing while its root is reachable still blocks its job, as before, and
+so does a root emptied after scans recorded its files missing.
+
+Library storage is only touched before a database transaction opens: root listings,
+and for replace jobs the source checks (its path, and whether its folder's mount is
+writable), when queueing, replacing from History, claiming, revalidating and
+recovering. A hung network mount therefore never holds SQLite's write lock (which
+would stall the WebUI and the other lane). A
+listing that has not answered within 5 seconds counts as unavailable; it keeps
+running in the background and is reused, not repeated, until the mount answers.
 
 
 ## Audio safety
@@ -95,8 +159,10 @@ mismatch fails the job; nothing is promoted or replaced. The hash pass costs one
 extra read of the source and output (I/O only, no decoding) and runs for keep-original
 jobs too.
 
-Unticking "Preserve subtitles / chapters / attachments / metadata" drops subtitles,
-attachments, chapters and global container tags only. It uses
+Unticking "Preserve subtitles / chapters / attachments / metadata" (the job's
+`preserve_subtitles_and_metadata`; API callers may still send the old
+`preserve_subtitles`) drops subtitles, attachments, chapters and global container
+tags only. It uses
 `-map_metadata:g -1`: a bare `-map_metadata -1` would also have stripped every audio
 track's language and title, which earlier builds did.
 
@@ -113,13 +179,20 @@ A replace job (the WebUI default) runs the full encode and validation above, the
    `.<job-id>.kompressor-incoming` (a hidden name the scanner ignores), fsynced,
    given the source's mode, and re-read to confirm its SHA-256 matches the
    workspace output.
-3. **Swap.** SourceGuard re-checks the source afresh (same revision, path, inode,
-   size, mtime, exactly one hardlink; ctime is ignored so chmod/ACL maintenance
-   does not block replacement). The original is renamed to
+3. **Swap.** SourceGuard re-checks the source afresh (same revision, path, device
+   and inode, size, mtime, exactly one hardlink; nothing is hashed, and ctime is
+   ignored so chmod/ACL maintenance does not block replacement). The original is renamed to
    `.<job-id>.kompressor-backup`, and the verified copy is renamed into the source path.
 4. **Final validation.** The file now at the source path must be the staged copy
    (same inode and size) and pass the same ffprobe output validation. On failure the
    copy is removed and the backup renamed back: the original is restored.
+
+   Whenever a swap fails with the original untouched or restored (not enough free
+   space, a failed copy, an ffprobe timeout in the final check), the validated
+   encode is not thrown away: the job completes as a keep-original result with the
+   reason, and History offers **Replace source** for it, exactly as after a restart
+   during replacement. Only an unresolved state (`MANUAL CHECK REQUIRED`) fails the
+   job, and then nothing further is deleted.
 5. **Cleanup.** Only after that is the replacement given the source's owner and
    group (best effort: where chown is not permitted, e.g. unprivileged LXC or a
    mergerfs pool, the worker log records the new owner and the job is not marked;
@@ -135,7 +208,7 @@ next start resolves the job before any other recovery, using only identity check
 | --- | --- |
 | Original at the source path, no backup | Staged copy removed, original untouched; the validated output is kept as a History result (Replace source retries the swap) |
 | Source path empty, original at the backup | Backup renamed back, original restored; validated output kept as above |
-| Staged copy at the source path, phase before `verified` | Rolled back to the original; job failed |
+| Staged copy at the source path, phase before `verified` | Rolled back to the original; validated output kept as above |
 | Staged copy at the source path, phase `verified` | Backup removed; job completed |
 | Staged copy at the source path, backup already gone | Job completed |
 | Anything else (unknown file at the path, backup not the original) | Nothing touched; job failed with `MANUAL CHECK REQUIRED` and all paths |
@@ -146,7 +219,7 @@ Replacement also runs `before_replacement` directly before the swap, so a file t
 becomes hardlinked (for example re-seeded) while encoding is not replaced.
 
 After replacement the inventory still describes the old file until the next
-**Scan library**. Queueing the same item again before that fails safely at the source
+**Rescan library**. Queueing the same item again before that fails safely at the source
 guard. After the rescan it shows HEVC and is blocked by "Preset does not allow HEVC
 recompression" unless a preset allows it.
 
@@ -246,8 +319,11 @@ codec_type=audio` lists the same audio tracks, languages and titles as before.
 
 ## VA-API GPU migration
 
-The GPU lane now uses only `hevc_vaapi`. Persisted `qsv` lane keys, the worker CLI,
-service filename and `KOMPRESSOR_QSV_DEVICE` remain compatible; UI labels say GPU.
+The GPU lane now uses only `hevc_vaapi` and is called `gpu` throughout: the worker
+argument (`app.worker_main gpu`), `kompressor-worker-gpu.service`, `KOMPRESSOR_GPU_DEVICE`
+and the UI labels. Names from before the rename still work: persisted `qsv` lane keys
+are read as `gpu`, the worker accepts `qsv` with a deprecation warning, and
+`KOMPRESSOR_QSV_DEVICE` is read when `KOMPRESSOR_GPU_DEVICE` is unset.
 User preset names and queued preset snapshots are unchanged. GPU `encoder_preset`
 values remain stored for compatibility but are not emitted as x265 effort options.
 See [VA-API migration and manual checks](VAAPI_MIGRATION.md) for command details.

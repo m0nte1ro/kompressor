@@ -73,12 +73,18 @@ class MediaProcessor:
         return self.preferences.save_library_paths(paths)
 
     def get_runtime_settings(self) -> dict:
-        return {**dict(self.runtime_settings), "startup": dict(self.runtime_settings), "startup_apply_timing": "restart_required",
+        current = dict(self.runtime_settings)
+        if self.discovery is not None:
+            self.queue.refresh_runtime_availability()
+            refreshed = getattr(self.queue.worker, "latest_runtime", None)
+            if refreshed is not None:
+                current.update(refreshed)
+        return {**current, "startup": dict(self.runtime_settings), "startup_apply_timing": "restart_required",
                 "library_paths": self.get_library_paths().model_dump(),
                 "paths_apply_timing": "next_scan; active scan keeps captured roots",
                 "paths_precedence": "persisted settings (including empty) > environment/.env > empty defaults",
                 "presets_apply_timing": "immediate eligibility; new jobs only; queued snapshots unchanged",
-                "encoding_enabled": self.runtime_settings.get("encoding_enabled", False),
+                "encoding_enabled": current.get("available", current.get("encoding_enabled", False)),
                 "development_mode": "unused compatibility flag"}
 
     def create_preset(self, payload: PresetSettings):
@@ -94,17 +100,18 @@ class MediaProcessor:
         self.presets.delete(preset_id)
 
     def evaluate_compression(self, media_id: str, scope: MediaScope, preset_id: str,
-                             preserve_audio: bool | None = None, preserve_subtitles: bool = True,
-                             replace_source: bool = False):
+                             preserve_audio: bool | None = None, preserve_subtitles_and_metadata: bool = True,
+                             replace_source: bool = False, video_bitrate: int | None = None):
         preset = self.catalog.preset(preset_id)
         entry = self.catalog.find(media_id, scope)
-        result = self.catalog.evaluate(entry, preset, preserve_audio, preserve_subtitles)
+        result = self.catalog.evaluate(entry, preset, preserve_audio, preserve_subtitles_and_metadata, video_bitrate)
         if self.discovery is not None:
             execution_reasons = self.queue.execution_reasons(
                 entry, preset, result,
                 requested_preserve_audio=preserve_audio,
-                preserve_subtitles=preserve_subtitles,
+                preserve_subtitles_and_metadata=preserve_subtitles_and_metadata,
                 replace_source=replace_source,
+                video_bitrate=video_bitrate,
             )
             if execution_reasons:
                 result = result.model_copy(update={
@@ -186,9 +193,11 @@ class MediaProcessor:
     def update_tags(self, payload: TagUpdate):
         # Tag changes and queue revalidation commit atomically. Any real process
         # cancellation waits until both the queue lock and DB transaction release.
+        # Library storage is checked first, never while holding the write lock.
+        storage = self.queue.storage_checks()
         with self.queue.lock, self.queue.repository.transaction():
             updated = self._tagger().update(payload)
-            self.queue.revalidate(defer_external_stops=True)
+            self.queue.revalidate(defer_external_stops=True, storage=storage)
         return {"updated": updated}
 
     def scan_library(self):

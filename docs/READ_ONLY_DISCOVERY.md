@@ -23,7 +23,7 @@ Roots default to unconfigured, never to production paths. Either root can be
 omitted. Environment roots are defaults; paths explicitly saved in Settings take
 precedence. Paths must be absolute and non-overlapping, with the application
 SQLite database outside them. Saving paths does not scan, create or move media.
-Use **Settings → Scan library**, or `POST /api/library/scan`, to initiate discovery.
+Use **Settings → Rescan library**, or `POST /api/library/scan`, to initiate discovery.
 `GET /api/library/scan` shows the current/last report in this application process.
 
 Scans are explicit and run in a managed background thread. POST returns 202;
@@ -76,17 +76,34 @@ rename, delete, chmod/chown, hash, or traverse symlink files/directories. A syml
 root is unavailable. Supported extensions are listed in `filesystem_scanner.py`.
 
 Incomplete directory traversal yields a partial scan; an inaccessible root yields
-an unavailable scan. Neither marks unobserved records missing. Complete scans can
+an unavailable scan, and so does an empty root that held files at the last scan (an
+unmounted mount point is an empty directory). Neither marks unobserved records missing. Complete scans can
 mark missing records without deleting their history. Probe failures do not turn a
 physically discovered file into a missing file. Stat facts are checked again after
 probing; facts from a file changed during the probe are discarded and reported.
 
 Unchanged sources reuse persisted probe facts. Basic filesystem-derived naming is
-intentional: movies use filenames; shows use the series directory and `SxxExx`
-filename notation. Unrecognized episode names are reported rather than guessed.
+intentional: movies use filenames; shows use the series directory plus `S01E05`, `S01 E05`, or `01x05`/`20x01`
+filename notation. The patterns resolve to the same semantic episode ID;
+original filenames are not renamed. Unrecognized episode names are reported rather than guessed.
 Other naming schemes, edition/multi-episode semantics, arbitrary series-folder
 renames and manual identity resolution are not added in this milestone. Existing
 same-path/unique physical-identity matches preserve their semantic IDs.
+
+**Relocation without proof** is different from an unrecognized episode name.
+When a **complete** scan finds a file at a new path/device/inode but cannot
+prove a unique match to an older file using physical identity or a full content
+hash, it registers the observed path with a **new file ID**. Any old path not
+observed becomes missing; its old history/revisions remain intact. This never
+hides a real episode or assumes identical bytes based only on filename and size,
+even when the old record had a fingerprint that the new file lacks. Semantic
+episode tags tied to the same show/season/episode media ID continue to apply.
+A verified physical match or unique matching full hash still preserves file ID.
+
+For **partial** scans, the old path may simply be unobserved, so candidates
+without a unique strong match remain unresolved and can still produce
+**Ambiguous relocation**. Finish a complete scan before judging those; the
+scanner never renames, changes, or deletes source files.
 
 ## Probe facts and limitations
 
@@ -113,12 +130,20 @@ cached probes are derived on load, so this correction needs no rescan or ffprobe
 run. Missing dimensions and rasters outside the supported classes stay unknown;
 a resolution in the filename is not evidence of measured dimensions.
 
+A file with measured dimensions outside the classes (for example 2560×1440 or
+4096×2160) still encodes at its own size. It matches only presets that apply to
+every resolution; a preset limited to some classes excludes it. When such a preset
+picks its bitrate from a per-resolution table (QVBR), the file is not in the table,
+so the encode modal asks for a video bitrate. That bitrate applies only to the
+files that need it and is stored on their jobs. Missing dimensions still block.
+
 1920×1080 interlaced content stays resolution class 1080 with an `1080i` display
 label. It is blocked with: “Interlaced source requires deinterlacing; no validated
 pipeline is enabled”. A scan type the file does not signal (common for
 progressive MKVs without a field order) is resolved when the library is built: a
-`1080i`/`576i`-style file name counts as interlaced, otherwise a known resolution
-is treated as progressive with a policy warning. Signalled interlacing always wins.
+`1080i`/`576i`-style file name counts as interlaced, otherwise a stream with known
+dimensions is treated as progressive with a policy warning. Signalled interlacing
+always wins.
 
 HDR classification derives from stored facts. Ten-bit alone does not imply HDR.
 SDR signalling remains SDR; PQ/BT.2020 can be represented as HDR10. Mastering

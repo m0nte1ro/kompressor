@@ -36,10 +36,10 @@ def test_cross_scope_is_rejected_by_backend(client, movie_payload, show_payload)
 
 def test_preservation_and_preset_snapshot(client, catalog, show_payload):
     catalog.media.library.shows[0].tags.append("Preserve Audio")
-    show_payload.update(preserve_audio=False, preserve_subtitles=False)
+    show_payload.update(preserve_audio=False, preserve_subtitles_and_metadata=False)
     job = add(client, show_payload)["added"][0]
     assert job["preserve_audio"] is True
-    assert job["preserve_subtitles"] is False
+    assert job["preserve_subtitles_and_metadata"] is False
     assert job["preset"]["rate_control"] == "qvbr"
     assert job["preset"]["qvbr_bitrates_by_resolution"]["1080p"] == 4_000_000
     assert job["preset"]["quality_value"] == 23
@@ -291,3 +291,57 @@ def test_quiet_hours_cross_midnight_and_apply_progress_cutoff(queue, movie_paylo
     assert controls.quiet_action("cpu", saved) == "stop"
     saved.progress = 50.1
     assert controls.quiet_action("cpu", saved) == "finish"
+
+
+def test_the_old_preserve_subtitles_name_is_still_read():
+    """Jobs saved, and API callers written, before the rename say preserve_subtitles."""
+    from app.models.queue import QueueJob
+    from app.routers.api import EligibilityRequest
+    from tests.test_real_encoding import queue_job
+    saved = queue_job().model_dump()
+    del saved["preserve_subtitles_and_metadata"]
+    saved["preserve_subtitles"] = False
+    job = QueueJob.model_validate(saved)
+    assert job.preserve_subtitles_and_metadata is False
+    assert "preserve_subtitles" not in job.model_dump()  # Saved again under the new name.
+    request = {"media_ids": ["m"], "scope": "movie", "preset_id": "p", "preserve_subtitles": False}
+    assert EnqueueRequest.model_validate(request).preserve_subtitles_and_metadata is False
+    assert EligibilityRequest.model_validate(
+        {"media_id": "m", "scope": "movie", "preset_id": "p", "preserve_subtitles": False}
+    ).preserve_subtitles_and_metadata is False
+
+
+def test_unfinished_jobs_are_read_through_the_status_index(tmp_path):
+    from app.repositories.database import JOB_STATUS, Database
+    from app.repositories.sqlite import SQLiteQueueRepository
+    from tests.test_real_encoding import queue_job
+    repository = SQLiteQueueRepository(Database(tmp_path / "state.sqlite3"))
+    for job_id, status in [("done", "completed"), ("waiting", "queued"), ("running", "encoding"), ("failed", "failed")]:
+        repository.add(queue_job(id=job_id, status=status))
+    assert [job.id for job in repository.pending()] == ["waiting", "running"]
+    assert repository.get("done").status == "completed" and repository.get("missing") is None
+    with repository.database.read() as connection:
+        plan = connection.execute(f"EXPLAIN QUERY PLAN SELECT payload FROM jobs WHERE {JOB_STATUS} = 'queued'").fetchall()
+    assert any("job_status" in row[3] for row in plan), plan
+
+
+def test_job_status_changes_follow_the_transition_table():
+    from app.models.queue import JOB_TRANSITIONS, InvalidTransition
+    from tests.test_real_encoding import queue_job
+    job = queue_job(status="queued")
+    for status in ("encoding", "validating", "replacing", "completed", "completed"):  # Staying put is no change.
+        job.move_to(status)
+    for final in ("completed", "skipped", "blocked", "failed"):
+        assert not JOB_TRANSITIONS[final]
+        with pytest.raises(InvalidTransition, match=f"A {final} job cannot become queued"):
+            queue_job(status=final).move_to("queued")
+    with pytest.raises(InvalidTransition):
+        queue_job(status="replacing").move_to("stopping")  # A source swap is never stopped.
+
+
+def test_queue_and_worker_code_change_job_status_only_through_the_table():
+    from app.config import PROJECT_ROOT
+    paths = [*(PROJECT_ROOT / "app/services").glob("queue*.py"), *(PROJECT_ROOT / "app/workers").glob("*.py")]
+    offenders = [f"{path.name}:{number}" for path in paths
+                 for number, line in enumerate(path.read_text().splitlines(), 1) if re.search(r"\.status = ", line)]
+    assert offenders == []
