@@ -91,19 +91,19 @@ renames and manual identity resolution are not added in this milestone. Existing
 same-path/unique physical-identity matches preserve their semantic IDs.
 
 **Relocation without proof** is different from an unrecognized episode name.
-When a complete scan sees an episode at a new path/device/inode that looks like
-an old episode but has no matching physical identity or available content hash,
-the observed file is registered as a **new file ID**. The old unobserved path
-becomes missing; its historical file record remains. This avoids hiding the new
-episode or guessing that its bytes are identical to the old file. Semantic tags
-tied to the same show/season/episode media ID continue to apply. A verified
-physical match or unique matching full hash still preserves the old file ID.
+When a **complete** scan finds a file at a new path/device/inode but cannot
+prove a unique match to an older file using physical identity or a full content
+hash, it registers the observed path with a **new file ID**. Any old path not
+observed becomes missing; its old history/revisions remain intact. This never
+hides a real episode or assumes identical bytes based only on filename and size,
+even when the old record had a fingerprint that the new file lacks. Semantic
+episode tags tied to the same show/season/episode media ID continue to apply.
+A verified physical match or unique matching full hash still preserves file ID.
 
-If usable fingerprints exist but do not prove a unique match, or a scan is
-partial, reconciliation still reports **Ambiguous relocation** and keeps that
-candidate unresolved. Such a warning calls for investigation (duplicate release,
-external rename/replacement, partial mount, insufficient content evidence); it is
-not an ffprobe or codec failure. The scanner never renames or deletes sources.
+For **partial** scans, the old path may simply be unobserved, so candidates
+without a unique strong match remain unresolved and can still produce
+**Ambiguous relocation**. Finish a complete scan before judging those; the
+scanner never renames, changes, or deletes source files.
 
 ## Probe facts and limitations
 
