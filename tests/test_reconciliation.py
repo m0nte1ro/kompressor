@@ -127,15 +127,16 @@ def test_cross_device_move_uses_full_hash_only_on_ambiguous_candidates(inventory
     assert inventory.capture(file_id) == reference
 
 
-def test_partial_fingerprint_only_requests_stronger_evidence(inventory, snapshot):
+def test_unverified_complete_relocation_with_sample_hash_gets_fresh_file_id(inventory, snapshot):
     hashes = {'sample_scheme': 'sample-v1', 'sample': 'same-sample'}
     old = changed(snapshot.files[0], fingerprints=hashes)
     file_id = inventory.reconcile(scan(snapshot, 1, [old])).created[0]
     moved = changed(old, relative_path='candidate.mkv', inode=999)
     result = inventory.reconcile(scan(snapshot, 2, [moved]))
-    assert not result.created and not result.moved and not result.missing
-    assert result.issues[0].fingerprint_needed == 'full'
-    assert inventory.capture(file_id)
+    assert len(result.created) == 1 and result.missing == [file_id]
+    assert not result.moved and not result.issues
+    assert inventory.repository.load().files[file_id].presence == 'missing'
+    assert inventory.repository.load().files[result.created[0]].relative_path == 'candidate.mkv'
 
 
 def test_cheap_unverified_relocation_is_indexed_with_a_new_identity(inventory, snapshot):
