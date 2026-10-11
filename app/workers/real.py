@@ -153,6 +153,24 @@ class RealEncoderWorker:
         self._root_lock = Lock()
         self._root_listings: dict[str, _RootListing] = {}
         self._progress_written: dict[str, float] = {}
+        # In the web process, probe again when a formerly unavailable GPU comes up.
+        self.availability_probe: Callable[[], dict] | None = None
+        self._availability_checked = 0.0
+
+    def refresh_availability(self) -> frozenset[str]:
+        """Refresh the WebUI's cached capability snapshot at most every 30 s."""
+        if self.availability_probe is not None and (
+                not self._availability_checked
+                or time.monotonic() - self._availability_checked >= 30.0):
+            self._availability_checked = time.monotonic()
+            try:
+                status = self.availability_probe()
+                self.supported_backends = frozenset(status["supported_backends"])
+                self.enabled = bool(self.supported_backends)
+                self.unavailable_reason = status.get("unavailable_reason")
+            except Exception:
+                log.exception("Runtime capability refresh failed; retaining previous state")
+        return self.supported_backends
 
     def diagnostics(self, runtime: dict) -> dict:
         supported = list(runtime.get("supported_backends", self.supported_backends))
