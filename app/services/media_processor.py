@@ -73,12 +73,18 @@ class MediaProcessor:
         return self.preferences.save_library_paths(paths)
 
     def get_runtime_settings(self) -> dict:
-        return {**dict(self.runtime_settings), "startup": dict(self.runtime_settings), "startup_apply_timing": "restart_required",
+        current = dict(self.runtime_settings)
+        if self.discovery is not None:
+            self.queue.refresh_runtime_availability()
+            refreshed = getattr(self.queue.worker, "latest_runtime", None)
+            if refreshed is not None:
+                current.update(refreshed)
+        return {**current, "startup": dict(self.runtime_settings), "startup_apply_timing": "restart_required",
                 "library_paths": self.get_library_paths().model_dump(),
                 "paths_apply_timing": "next_scan; active scan keeps captured roots",
                 "paths_precedence": "persisted settings (including empty) > environment/.env > empty defaults",
                 "presets_apply_timing": "immediate eligibility; new jobs only; queued snapshots unchanged",
-                "encoding_enabled": self.runtime_settings.get("encoding_enabled", False),
+                "encoding_enabled": current.get("available", current.get("encoding_enabled", False)),
                 "development_mode": "unused compatibility flag"}
 
     def create_preset(self, payload: PresetSettings):
