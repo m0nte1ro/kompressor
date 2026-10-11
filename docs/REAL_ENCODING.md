@@ -18,7 +18,18 @@ The workspace must already contain a writable `jobs/` directory. Settings shows 
 resolved binary paths, whether `libx265` and `hevc_vaapi` are available, the configured GPU render
 device, workspace writability, active encoder mode, supported backends, and lane
 availability. Binary and
-workspace changes require an application restart. Library roots cannot overlap
+workspace configuration changes require an application restart. Runtime lane
+availability is different: the WebUI refreshes its CPU/GPU capability snapshot
+on request (cached for 30 seconds), so a GPU render device that appears after
+WebUI startup can become eligible without a WebUI restart. This refresh reports
+capabilities, not a guarantee that the standalone worker service is running.
+
+The GPU worker runs a real Main10/QVBR smoke test on startup. If a render device
+disappears, the worker holds queued GPU jobs and periodically retries a VA-API
+smoke test (30-second backoff). After an FFmpeg failure, it smoke-tests the GPU:
+if VA-API itself is unavailable, the current job is requeued and subsequent
+claims wait until recovery; if VA-API is healthy, normal source/job failure
+handling applies. The CPU lane continues independently. Library roots cannot overlap
 one another, the database, or the output workspace.
 
 The supported slice remains conservative: HEVC, confirmed SDR, progressive video,
