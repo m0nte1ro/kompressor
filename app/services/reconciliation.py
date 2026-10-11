@@ -110,32 +110,26 @@ class ReconciliationService:
                 confirmed = [r for r in plausible if full_match(r.observation, item) is True]
                 if snapshot.status == "complete" and len(plausible) == len(confirmed) == 1:
                     record = confirmed[0]
-                elif plausible:
-                    # A cheap scan has no hashes. For an otherwise unverified
-                    # relocation, never adopt a previous file_id: that would
-                    # transfer physical history and in-flight jobs to a file
-                    # which may merely have the same size and episode name.
-                    # Instead register the observed file as a NEW identity and
-                    # let the old absent path become missing on a complete scan.
-                    # Semantic episode tags remain associated with media_id.
-                    #
-                    # If prior content fingerprints exist, keep the ambiguity
-                    # explicit until the candidate can be verified; discarding
-                    # that stronger evidence would lose possible continuity.
-                    has_evidence = (item.fingerprints.sample or item.fingerprints.full
-                                    or any(r.observation.fingerprints.sample
-                                           or r.observation.fingerprints.full for r in plausible))
-                    if snapshot.status != "complete" or has_evidence:
-                        tier = "full" if any(sample_match(r.observation, item) is True or
-                                             r.observation.fingerprints.full or item.fingerprints.full
-                                             for r in plausible) else "sample"
-                        result.issues.append(ReconciliationIssue(
-                            path=item.relative_path, fingerprint_needed=tier,
-                            candidate_file_ids=[r.file_id for r in plausible],
-                            reason="Ambiguous relocation; complete scan and unique strong evidence required.",
-                        ))
-                        unresolved.update(r.file_id for r in plausible)
-                        continue
+                elif plausible and snapshot.status != "complete":
+                    # A partial scan cannot establish that the old path is gone.
+                    # Do not introduce a second file ID until the root is complete.
+                    tier = "full" if any(sample_match(r.observation, item) is True or
+                                         r.observation.fingerprints.full or item.fingerprints.full
+                                         for r in plausible) else "sample"
+                    result.issues.append(ReconciliationIssue(
+                        path=item.relative_path, fingerprint_needed=tier,
+                        candidate_file_ids=[r.file_id for r in plausible],
+                        reason="Ambiguous relocation; complete scan and unique strong evidence required.",
+                    ))
+                    unresolved.update(r.file_id for r in plausible)
+                    continue
+                # A complete scan with no unique strong match means this observed
+                # path is a NEW physical file, not a verified relocation. Create
+                # its own file ID below, mark the old absent path missing, and
+                # retain the older revision and history without reassignment.
+                # This is safe even when the old record had a fingerprint and the
+                # new candidate did not: never assume equal bytes based on name
+                # and size. Semantic episode tags remain on the common media ID.
             if record is not None and not self._same_media(record, item):
                 result.issues.append(ReconciliationIssue(path=item.relative_path,
                                                          reason="Media reassignment requires explicit confirmation."))
