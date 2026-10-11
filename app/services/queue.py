@@ -53,6 +53,11 @@ class QueueService(QueueHistory, QueueRecovery, RealJobLifecycle, WorkerControls
         self._lanes_waiting: set[str] = set()
         self.move_sequence = max((j.move_next_order for j in repository.get_all()), default=0)
 
+    def refresh_runtime_availability(self) -> None:
+        refresh = getattr(self.worker, "refresh_availability", None)
+        if refresh is not None:
+            self.supported_backends = frozenset(refresh())
+
     @staticmethod
     def _payload(job: QueueJob) -> dict:
         payload = job.model_dump()
@@ -100,6 +105,7 @@ class QueueService(QueueHistory, QueueRecovery, RealJobLifecycle, WorkerControls
         )
 
     def snapshot(self) -> dict:
+        self.refresh_runtime_availability()
         # get_all() already uses a SQLite read snapshot. Do not reserve the global
         # writer lock for browser polling now that CPU and GPU are separate processes.
         with self.lock:
@@ -154,6 +160,7 @@ class QueueService(QueueHistory, QueueRecovery, RealJobLifecycle, WorkerControls
                           requested_preserve_audio: bool | None,
                           preserve_subtitles_and_metadata: bool, replace_source: bool = False,
                           video_bitrate: int | None = None) -> list[str]:
+        self.refresh_runtime_availability()
         reasons = []
         if preset.backend not in self.supported_backends:
             reasons.append(f"{preset.backend.upper()} real encoding is not available in this runtime.")
@@ -174,6 +181,7 @@ class QueueService(QueueHistory, QueueRecovery, RealJobLifecycle, WorkerControls
         return list(dict.fromkeys(reasons))
 
     def enqueue(self, request: EnqueueRequest) -> dict:
+        self.refresh_runtime_availability()
         # Validate the preset before any mutation. Scope mismatches are also
         # evaluated per item by the policy engine and returned as exclusions.
         preset = self.catalog.preset(request.preset_id)
