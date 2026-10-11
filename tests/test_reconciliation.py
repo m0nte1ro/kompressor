@@ -138,12 +138,19 @@ def test_partial_fingerprint_only_requests_stronger_evidence(inventory, snapshot
     assert inventory.capture(file_id)
 
 
-def test_cheap_ambiguous_candidate_requests_sample_not_full_hash(inventory, snapshot):
-    inventory.reconcile(snapshot)
+def test_cheap_unverified_relocation_is_indexed_with_a_new_identity(inventory, snapshot):
+    old_id = inventory.reconcile(snapshot).created[0]
     moved = changed(snapshot.files[0], relative_path='candidate.mkv', inode=999)
     result = inventory.reconcile(scan(snapshot, 2, [moved]))
-    assert result.issues[0].fingerprint_needed == 'sample'
-    assert not result.created
+    # Without hashes, identical size/media name is not proof of the same bytes.
+    # Keep the old record/history, mark its path missing, and show the new file.
+    assert len(result.created) == 1 and result.created[0] != old_id
+    assert result.missing == [old_id]
+    assert not result.moved and not result.issues
+    state = inventory.repository.load()
+    assert state.files[old_id].presence == 'missing'
+    assert state.files[result.created[0]].relative_path == 'candidate.mkv'
+    assert state.files[result.created[0]].media_id == state.files[old_id].media_id
 
 
 def test_same_sample_cannot_hide_content_change(inventory, snapshot):
