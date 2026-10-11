@@ -307,14 +307,15 @@ class RealEncoderWorker:
     def _gpu_usable(self) -> bool:
         """After device loss, verify actual VA-API encoding before claiming work."""
         device = self.encoder.gpu_device
-        if device is None or not self.encoder.gpu_device_check(device)[0]:
+        device_ready = device is not None and self.encoder.gpu_device_check(device)[0]
+        if not device_ready:
             self._gpu_degraded = True
         if not self._gpu_degraded:
             return True
         if time.monotonic() < self._gpu_retry_at:
             return False
         self._gpu_retry_at = time.monotonic() + 30.0
-        if device is None:
+        if not device_ready:
             return False
         ready, reason = self.encoder.vaapi_runtime_check(
             self.encoder.binary, device, self.probe.binary, self.encoder.workspace_root)
