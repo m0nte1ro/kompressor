@@ -12,7 +12,9 @@ from app.models.inventory import FileObservation, InventoryState, ScanSnapshot
 from app.models.media import MediaScope
 
 SUPPORTED_EXTENSIONS = {'.mkv', '.mp4', '.m4v', '.avi', '.mov', '.ts', '.m2ts', '.mpg', '.mpeg', '.webm'}
-EPISODE = re.compile(r'(?i)(?<![a-z0-9])S(\d{1,3})E(\d{1,4})(?!\d)')
+# Standard S01E02, spaced S01 E02, and common 01x02/20x01 releases.
+# Boundaries prevent matching numbers embedded in unrelated titles or IDs.
+EPISODE = re.compile(r'(?i)(?<![a-z0-9])(?:S(?P<s>\\d{1,3})[ ._-]*E|(?P<x>\\d{1,3})x)(?P<e>\\d{1,4})(?!\\d)')
 
 
 def root_identity(scope: MediaScope, root: Path) -> str:
@@ -27,7 +29,7 @@ def semantic_key(scope: MediaScope, relative: str) -> str | None:
     if match is None:
         return None
     show = path.parts[0] if len(path.parts) > 1 else path.stem[:match.start()].strip(' .-_')
-    return f'{show}:S{int(match[1])}E{int(match[2])}'
+    return f'{show}:S{int(match.group("s") or match.group("x"))}E{int(match.group("e"))}'
 
 
 class FilesystemScanner:
