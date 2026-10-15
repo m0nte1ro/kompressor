@@ -109,5 +109,5 @@ def test_four_library_sections_have_independent_inventory(tmp_path, monkeypatch)
         cartoon_show = re.search(r'href="/cartoons/([^"]+)"', cartoons_page)
         assert cartoon_show is not None
         assert client.get("/cartoons/" + cartoon_show.group(1)).status_code == 200
-        assert client.get("/shows/" + cartoon_show.group(1)).status_code == 200
+        assert client.get("/shows/" + cartoon_show.group(1)).status_code == 404
         assert client.get("/cartoons/incorrect").status_code == 404
