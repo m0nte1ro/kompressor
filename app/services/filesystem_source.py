@@ -7,6 +7,7 @@ from collections.abc import Callable
 from app.models.inventory import FileObservation, SourceReference
 from app.repositories.inventory import InventoryRepository
 from app.services.filesystem_scanner import root_identity
+from app.services.library_discovery import library_scope
 
 
 class FilesystemObservationSource:
@@ -16,7 +17,7 @@ class FilesystemObservationSource:
 
     def _root(self, root_id: str) -> Path | None:
         for scope, root in self.roots().items():
-            media_scope = "movie" if scope == "movie" else "show"
+            media_scope = library_scope(scope)
             if root_identity(media_scope, root) == root_id:
                 return root
         return None

@@ -12,6 +12,7 @@ from app.models.tags import TagTarget
 from app.repositories.inventory import InventoryRepository
 from app.services.errors import NotFound
 from app.services.filesystem_scanner import EPISODE, root_identity
+from app.services.library_discovery import library_scope
 
 
 def display_name(value: str) -> str:
@@ -85,7 +86,7 @@ class FilesystemMediaRepository:
         self.encoding_enabled = encoding_enabled
 
     def root_ids(self) -> list[str]:
-        return [root_identity('movie' if scope == 'movie' else 'show', root) for scope, root in self.roots().items()]
+        return [root_identity(library_scope(scope), root) for scope, root in self.roots().items()]
 
     def summary(self) -> dict:
         return self.inventory.views.summary(self.root_ids())
@@ -97,6 +98,7 @@ class FilesystemMediaRepository:
             match = EPISODE.search(relative.stem)
             name = relative.parts[0] if len(relative.parts) > 1 else relative.stem[:match.start()] if match else relative.stem
             cards.append({'show': Show(id=row['show_id'], name=display_name(name)),
+                          'root_id': row.get('root_id'),
                           'count': row['count'], 'size': row['size']})
         return sorted(cards, key=lambda card: card['show'].name.casefold())
 
@@ -107,7 +109,7 @@ class FilesystemMediaRepository:
             for value in paths:
                 relative = Path(value)
                 match = EPISODE.search(relative.stem)
-                if match is None or target.kind == 'season' and int(match[1]) != target.season:
+                if match is None or target.kind == 'season' and int(match.group('s') or match.group('x')) != target.season:
                     continue
                 name = relative.parts[0] if len(relative.parts) > 1 else relative.stem[:match.start()]
                 show = Show(id=target.id, name=display_name(name))
@@ -124,7 +126,7 @@ class FilesystemMediaRepository:
 
     def select_library(self, scope: str | None = None, show_id: str | None = None, file_id: str | None = None) -> MediaLibrary:
         roots = self.roots()
-        locations = {root_identity('movie' if scope == 'movie' else 'show', path): path for scope, path in roots.items()}
+        locations = {root_identity(library_scope(scope), path): path for scope, path in roots.items()}
         library = MediaLibrary()
         shows: dict[str, Show] = {}
         for record in self.inventory.files(roots=list(locations), present=True, scope=scope, show_id=show_id, file_id=file_id):

@@ -96,9 +96,45 @@ def shows(request: Request, processor: Processor):
 
 @router.get("/shows/{show_id}", response_class=HTMLResponse)
 def episodes(request: Request, show_id: str, processor: Processor):
+    from fastapi import HTTPException
     detail = processor.get_show(show_id)
+    if processor.discovery is not None:
+        root = processor._library_root("show")
+        if root is None or not any(
+                row["item"].path.startswith(str(root) + "/") for row in detail["rows"]):
+            raise HTTPException(status_code=404, detail="Series not found in Shows.")
     return render(request, "library.html", "shows", detail["show"].name, scope="show", **detail,
                   subtitle="All episodes · series → season → episode policy",
+                  media_backend=media_backend(processor))
+
+
+@router.get("/cartoons", response_class=HTMLResponse)
+def cartoons(request: Request, processor: Processor):
+    return render(request, "shows.html", "cartoons", "Cartoons",
+                  cards=processor.get_shows("cartoons"), section="cartoons",
+                  subtitle="Animated series · inherited series, season and episode tags",
+                  media_backend=media_backend(processor))
+
+
+@router.get("/cartoons/{show_id}", response_class=HTMLResponse)
+def cartoon_episodes(request: Request, show_id: str, processor: Processor):
+    from fastapi import HTTPException
+    detail = processor.get_show(show_id)
+    root = processor._library_root("cartoons")
+    if root is None or not any(
+            row["item"].path.startswith(str(root) + "/") for row in detail["rows"]):
+        raise HTTPException(status_code=404, detail="Animated series not found.")
+    return render(request, "library.html", "cartoons", detail["show"].name,
+                  scope="show", section="cartoons", **detail,
+                  subtitle="Animated episodes · series → season → episode policy",
+                  media_backend=media_backend(processor))
+
+
+@router.get("/cartoons-filmes", response_class=HTMLResponse)
+def cartoons_filmes(request: Request, processor: Processor):
+    return render(request, "library.html", "cartoons-filmes", "Cartoons Filmes",
+                  scope="movie", rows=processor.get_movies("cartoons_filmes"),
+                  subtitle="Animated film inventory and compression policies",
                   media_backend=media_backend(processor))
 
 

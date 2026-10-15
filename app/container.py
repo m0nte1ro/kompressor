@@ -43,7 +43,9 @@ def build_media_processor(config: Settings, database_path: Path | None = None, *
                           worker_backend: Literal["cpu", "gpu"] = "cpu") -> MediaProcessor:
     db_path = database_path if database_path is not None else config.database_path
     defaults = LibraryPaths(movies_path=str(config.movies_root) if config.movies_root else "",
-                            shows_path=str(config.shows_root) if config.shows_root else "")
+                            shows_path=str(config.shows_root) if config.shows_root else "",
+                            cartoons_path=str(config.cartoons_root) if config.cartoons_root else "",
+                            cartoons_filmes_path=str(config.cartoons_filmes_root) if config.cartoons_filmes_root else "")
     database = Database(db_path)
     preferences = SQLitePreferencesRepository(database, defaults, WorkerSettings(timezone=config.timezone))
     configured_roots(preferences.get_library_paths(), db_path)

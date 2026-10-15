@@ -42,7 +42,8 @@ def roots(tmp_path: Path):
 def config(tmp_path, roots):
     movies, shows = roots
     return Settings(media_backend='filesystem', movies_root=movies, shows_root=shows,
-                    database_path=tmp_path / 'app-state' / 'state.sqlite3', ffprobe_binary='not-installed-ffprobe')
+                    database_path=tmp_path / 'app-state' / 'state.sqlite3', ffprobe_binary='not-installed-ffprobe',
+                    cartoons_root=None, cartoons_filmes_root=None)
 
 
 @pytest.fixture
@@ -277,9 +278,10 @@ def test_seed_mode_never_executes_probe(tmp_path, monkeypatch):
 
 
 def test_paths_are_configurable_and_no_production_defaults(tmp_path, probe):
-    config = Settings(media_backend='filesystem', database_path=tmp_path / 'state.sqlite3', movies_root=None, shows_root=None)
+    config = Settings(media_backend='filesystem', database_path=tmp_path / 'state.sqlite3', movies_root=None, shows_root=None,
+                      cartoons_root=None, cartoons_filmes_root=None)
     with TestClient(create_app(config=config)) as client:
-        assert client.get('/api/settings').json() == {'movies_path': '', 'shows_path': ''}
+        assert client.get('/api/settings').json() == {'movies_path': '', 'shows_path': '', 'cartoons_path': '', 'cartoons_filmes_path': ''}
         assert scan(client).status_code == 422
         assert client.put('/api/settings', json={'movies_path': 'relative', 'shows_path': ''}).status_code == 422
         movies = tmp_path / 'library'
