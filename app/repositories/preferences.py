@@ -1,3 +1,5 @@
+import json
+
 from app.models.preferences import LibraryPaths, WorkerSettings
 from app.repositories.database import Database
 
@@ -21,7 +23,9 @@ class SQLitePreferencesRepository:
             ).fetchone()
             if row is None:
                 return self.defaults.model_copy()
-            return LibraryPaths.model_validate_json(row[0])
+            # Preserve existing saved roots while supplying new fields from
+            # environment defaults to pre-feature installations.
+            return LibraryPaths.model_validate({**self.defaults.model_dump(), **json.loads(row[0])})
 
     def save_library_paths(self, paths: LibraryPaths) -> LibraryPaths:
         payload = paths.model_dump_json()
