@@ -102,6 +102,34 @@ def episodes(request: Request, show_id: str, processor: Processor):
                   media_backend=media_backend(processor))
 
 
+@router.get("/cartoons", response_class=HTMLResponse)
+def cartoons(request: Request, processor: Processor):
+    return render(request, "shows.html", "cartoons", "Cartoons",
+                  cards=processor.get_shows("cartoons"), section="cartoons",
+                  subtitle="Animated series · inherited series, season and episode tags",
+                  media_backend=media_backend(processor))
+
+
+@router.get("/cartoons/{show_id}", response_class=HTMLResponse)
+def cartoon_episodes(request: Request, show_id: str, processor: Processor):
+    from fastapi import HTTPException
+    if not any(card["show"].id == show_id for card in processor.get_shows("cartoons")):
+        raise HTTPException(status_code=404, detail="Animated series not found.")
+    detail = processor.get_show(show_id)
+    return render(request, "library.html", "cartoons", detail["show"].name,
+                  scope="show", section="cartoons", **detail,
+                  subtitle="Animated episodes · series → season → episode policy",
+                  media_backend=media_backend(processor))
+
+
+@router.get("/cartoons-filmes", response_class=HTMLResponse)
+def cartoons_filmes(request: Request, processor: Processor):
+    return render(request, "library.html", "cartoons-filmes", "Cartoons Filmes",
+                  scope="movie", rows=processor.get_movies("cartoons_filmes"),
+                  subtitle="Animated film inventory and compression policies",
+                  media_backend=media_backend(processor))
+
+
 @router.get("/queue", response_class=HTMLResponse)
 def queue(request: Request, processor: Processor):
     return render(request, "queue.html", "queue", "Queue",
