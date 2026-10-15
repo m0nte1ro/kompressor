@@ -98,7 +98,7 @@ def shows(request: Request, processor: Processor):
 def episodes(request: Request, show_id: str, processor: Processor):
     from fastapi import HTTPException
     detail = processor.get_show(show_id)
-    if media_backend(processor) == "filesystem":
+    if processor.discovery is not None:
         root = processor._library_root("show")
         if root is None or not any(
                 row["item"].path.startswith(str(root) + "/") for row in detail["rows"]):
