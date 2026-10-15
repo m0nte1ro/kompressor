@@ -46,6 +46,8 @@ def test_restart_preserves_preferences_queue_order_and_history(tmp_path, legacy_
         assert client.get("/api/settings").json() == {
             "movies_path": "/srv/media/movies",
             "shows_path": "/srv/media/shows",
+            "cartoons_path": "",
+            "cartoons_filmes_path": "",
         }
         presets = client.get("/api/presets").json()
         assert len(presets) == 6
