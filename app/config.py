@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     media_backend: Literal["seed", "filesystem"] = "seed"
     movies_root: Path | None = None
     shows_root: Path | None = None
+    cartoons_root: Path | None = Path("/media/cartoons")
+    cartoons_filmes_root: Path | None = Path("/media/cartoons-filmes")
     ffprobe_binary: str = Field(default="ffprobe", min_length=1)
     ffprobe_timeout: float = Field(default=30, gt=0, le=600)
     ffmpeg_binary: str = Field(default="ffmpeg", min_length=1)
