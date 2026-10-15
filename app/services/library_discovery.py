@@ -15,16 +15,23 @@ from app.services.fingerprints import unchanged
 from app.services.reconciliation import ReconciliationService
 
 
+def library_scope(key: str) -> str:
+    """Inventory scope is movie/show; the library key identifies the UI section."""
+    return "movie" if key in {"movie", "cartoons_filmes"} else "show"
+
+
 def configured_roots(paths: LibraryPaths, database_path: Path) -> dict[str, Path]:
-    roots = {scope: Path(value).absolute() for scope, value in
-             (("movie", paths.movies_path), ("show", paths.shows_path)) if value}
-    for root in roots.values():
-        if database_path.resolve().is_relative_to(root.resolve()):
+    roots = {key: Path(value).absolute() for key, value in (
+        ("movie", paths.movies_path), ("show", paths.shows_path),
+        ("cartoons", paths.cartoons_path),
+        ("cartoons_filmes", paths.cartoons_filmes_path)) if value}
+    resolved = [(key, root.resolve()) for key, root in roots.items()]
+    for key, root in resolved:
+        if database_path.resolve().is_relative_to(root):
             raise InvalidOperation("Application database must be outside media roots.")
-    if len(roots) == 2:
-        movie, show = roots["movie"].resolve(), roots["show"].resolve()
-        if movie.is_relative_to(show) or show.is_relative_to(movie):
-            raise InvalidOperation("Movie and show roots must not overlap.")
+        for other_key, other in resolved:
+            if key != other_key and (root.is_relative_to(other) or other.is_relative_to(root)):
+                raise InvalidOperation("Library roots must not overlap.")
     return roots
 
 
@@ -97,7 +104,7 @@ class LibraryDiscoveryService:
             for scope, root in roots.items():
                 if self.stop.is_set():
                     break
-                media_scope = 'movie' if scope == 'movie' else 'show'
+                media_scope = library_scope(scope)
                 state = self.reconciliation.repository.root_state(root_identity(media_scope, root))
                 sequence = state.scan_sequences.get(root_identity(media_scope, root), 0)
                 discovered = 0
