@@ -8,8 +8,10 @@ class LibraryPaths(BaseModel):
 
     movies_path: str = Field(default="", min_length=0, max_length=500)
     shows_path: str = Field(default="", min_length=0, max_length=500)
+    cartoons_path: str = Field(default="/media/cartoons", min_length=0, max_length=500)
+    cartoons_filmes_path: str = Field(default="/media/cartoons-filmes", min_length=0, max_length=500)
 
-    @field_validator("movies_path", "shows_path")
+    @field_validator("movies_path", "shows_path", "cartoons_path", "cartoons_filmes_path")
     @classmethod
     def absolute_or_empty(cls, value: str) -> str:
         if value and not Path(value).is_absolute():
