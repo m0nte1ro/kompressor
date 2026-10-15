@@ -98,6 +98,7 @@ class FilesystemMediaRepository:
             match = EPISODE.search(relative.stem)
             name = relative.parts[0] if len(relative.parts) > 1 else relative.stem[:match.start()] if match else relative.stem
             cards.append({'show': Show(id=row['show_id'], name=display_name(name)),
+                          'root_id': row.get('root_id'),
                           'count': row['count'], 'size': row['size']})
         return sorted(cards, key=lambda card: card['show'].name.casefold())
 
