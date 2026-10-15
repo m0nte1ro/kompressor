@@ -96,6 +96,10 @@ def shows(request: Request, processor: Processor):
 
 @router.get("/shows/{show_id}", response_class=HTMLResponse)
 def episodes(request: Request, show_id: str, processor: Processor):
+    from fastapi import HTTPException
+    if media_backend(processor) == "filesystem" and not any(
+            card["show"].id == show_id for card in processor.get_shows("show")):
+        raise HTTPException(status_code=404, detail="Series not found in Shows.")
     detail = processor.get_show(show_id)
     return render(request, "library.html", "shows", detail["show"].name, scope="show", **detail,
                   subtitle="All episodes · series → season → episode policy",
