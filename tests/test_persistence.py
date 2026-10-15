@@ -14,6 +14,8 @@ def test_restart_preserves_preferences_queue_order_and_history(tmp_path, legacy_
         assert client.put("/api/settings", json={
             "movies_path": "/srv/media/movies",
             "shows_path": "/srv/media/shows",
+            "cartoons_path": "",
+            "cartoons_filmes_path": "",
         }).status_code == 200
         preset = client.get("/api/presets?scope=movie").json()[0]
         id = preset.pop("id")
