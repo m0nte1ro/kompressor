@@ -161,25 +161,45 @@ def cleanup(path: Path, *, audio_index: int | None = None,
             staged.unlink()
 
 
+def candidates(path: Path, recursive: bool) -> list[Path]:
+    if path.is_file():
+        return [path]
+    if not recursive or not path.is_dir() or path.is_symlink():
+        raise CleanupError("Pass an MKV file or a directory with --recursive.")
+    # Do not traverse directory symlinks or automatically reprocess our own outputs.
+    return sorted(p for p in path.rglob("*.mkv") if not p.is_symlink()
+                  and ".audio-cleanup." not in p.name and ".original." not in p.name)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Keep one PT audio track, copy video unchanged.")
     parser.add_argument("file", type=Path)
     parser.add_argument("--audio-index", type=int, help="FFprobe stream index (required when multiple PT tracks)")
-    parser.add_argument("--replace", action="store_true", help="Replace source, retaining a backup")
+    parser.add_argument("--recursive", action="store_true", help="Process MKVs beneath a directory")
+    parser.add_argument("--plan", action="store_true", help="Show selected streams without changing files")
+    parser.add_argument("--replace", action="store_true", help="Replace sources, retaining original backups")
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("--ffprobe", default="ffprobe")
     args = parser.parse_args(argv)
+    failures = 0
     try:
-        info = probe(args.file, args.ffprobe)
-        print("Audio tracks:\n" + describe(info), flush=True)
-        selected = select_audio(info, args.audio_index)
-        print(f"Keeping ONLY audio stream #{selected['index']} ({language(selected)}), default.", flush=True)
-        print(cleanup(args.file, audio_index=args.audio_index, replace=args.replace,
-                      ffmpeg=args.ffmpeg, ffprobe=args.ffprobe))
-        return 0
-    except (CleanupError, OSError, ValueError, KeyError, json.JSONDecodeError) as error:
+        paths = candidates(args.file, args.recursive)
+    except CleanupError as error:
         print(f"Audio cleanup refused: {error}", file=sys.stderr)
         return 1
+    for path in paths:
+        try:
+            info = probe(path, args.ffprobe)
+            chosen = select_audio(info, args.audio_index)
+            print(f"{path}: keep ONLY #{chosen['index']} ({language(chosen)}), default", flush=True)
+            if not args.plan:
+                print(cleanup(path, audio_index=args.audio_index, replace=args.replace,
+                              ffmpeg=args.ffmpeg, ffprobe=args.ffprobe), flush=True)
+        except (CleanupError, OSError, ValueError, KeyError, json.JSONDecodeError) as error:
+            print(f"{path}: REFUSED: {error}", file=sys.stderr)
+            failures += 1
+    print(f"Processed {len(paths)} file(s); {failures} refused.", flush=True)
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
