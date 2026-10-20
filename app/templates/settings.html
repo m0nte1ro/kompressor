@@ -40,11 +40,13 @@
   <form id="library-paths-form" class="field-grid">
     <label class="field">Movies path<input name="movies_path" value="{{ library_paths.movies_path }}" maxlength="500"></label>
     <label class="field">Shows path<input name="shows_path" value="{{ library_paths.shows_path }}" maxlength="500"></label>
+    <label class="field">Cartoons path<input name="cartoons_path" value="{{ library_paths.cartoons_path }}" maxlength="500"></label>
+    <label class="field">Cartoons Filmes path<input name="cartoons_filmes_path" value="{{ library_paths.cartoons_filmes_path }}" maxlength="500"></label>
     <div class="settings-actions"><button type="submit" class="primary">Save library paths</button><span id="library-paths-status" class="muted" role="status"></span></div>
   </form>
 </section>
 <section class="card future-settings"><h2>Library discovery</h2>
-  <p class="muted">Scans run in the background. Movies and Shows update automatically while discovery and probing proceed. Run a single application worker.</p>
+  <p class="muted">Scans run in the background. Movies, Shows, Cartoons and Cartoons Filmes update automatically while discovery and probing proceed. Run a single application worker.</p>
   <p class="muted">Environment configuration requires restart: backend {{ runtime_settings.startup.media_backend or scan_status.backend }}, ffprobe {{ runtime_settings.startup.ffprobe_binary or 'ffprobe' }}, timeout {{ runtime_settings.startup.ffprobe_timeout or 30 }} seconds. These are not editable in this form.</p>
   <p>{{ 'Read-only filesystem inventory ·' if scan_status.backend == 'filesystem' else 'Seed library ·' }} {{ 'real encoding available' if runtime_settings.encoding_enabled else 'simulated workers' if scan_status.backend == 'seed' else 'encoding disabled' }}</p>
   {% if scan_status.backend == 'filesystem' %}<button class="primary" data-scan-library>Rescan library</button><p id="scan-status" role="status">{{ scan_status.state }}</p><ul id="scan-errors"></ul>{% else %}<p class="muted">Set KOMPRESSOR_MEDIA_BACKEND=filesystem to enable read-only discovery and ffprobe.</p>{% endif %}

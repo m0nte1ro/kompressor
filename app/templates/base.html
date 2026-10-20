@@ -13,7 +13,7 @@
   <aside class="sidebar">
     <a class="brand" href="/movies"><span class="logo" aria-hidden="true">◆</span> {{ request.app.title }}</a>
     <nav aria-label="Main navigation">
-      {% for key, icon, name in [('movies', '▣', 'Movies'), ('shows', '▤', 'Shows'), ('queue', '≋', 'Queue'), ('history', '↺', 'History'), ('settings', '⚙', 'Settings')] %}
+      {% for key, icon, name in [('movies', '▣', 'Movies'), ('shows', '▤', 'Shows'), ('cartoons', '▤', 'Cartoons'), ('cartoons-filmes', '▣', 'Cartoons Filmes'), ('queue', '≋', 'Queue'), ('history', '↺', 'History'), ('settings', '⚙', 'Settings')] %}
       <a href="/{{ key }}" {% if page == key %}aria-current="page"{% endif %}>
         <span aria-hidden="true">{{ icon }}</span> {{ name }}
         {% if key == 'queue' %}<span class="badge blue" id="queue-count">0</span>{% endif %}

@@ -28,7 +28,7 @@ class InventoryViews:
         if not roots:
             return []
         with self.database.read() as connection:
-            return [dict(row) for row in connection.execute('''SELECT f.show_id, MIN(f.relative_path) AS path,
+            return [dict(row) for row in connection.execute('''SELECT f.show_id, MIN(f.root_id) AS root_id, MIN(f.relative_path) AS path,
                 COUNT(*) AS count, SUM(o.size) AS size FROM library_files f
                 JOIN observations o USING(observation_id) WHERE f.presence='present'
                 AND f.show_id IS NOT NULL AND f.root_id IN (''' + ','.join('?' for _ in roots)

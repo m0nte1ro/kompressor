@@ -44,11 +44,30 @@ class MediaProcessor:
     def get_summary(self):
         return self.catalog.summary()
 
-    def get_movies(self):
-        return self.catalog.previews("movie")
+    def _library_root(self, key: str) -> Path | None:
+        if self.discovery is None:
+            return None
+        return self.discovery.roots().get(key)
 
-    def get_shows(self):
-        return self.catalog.shows()
+    def get_movies(self, library_key: str = "movie"):
+        rows = self.catalog.previews("movie")
+        if self.discovery is None:
+            return rows if library_key == "movie" else []
+        root = self._library_root(library_key)
+        if root is None:
+            return []
+        return [row for row in rows if Path(row["item"].path).is_relative_to(root)]
+
+    def get_shows(self, library_key: str = "show"):
+        cards = self.catalog.shows()
+        if self.discovery is None:
+            return cards if library_key == "show" else []
+        root = self._library_root(library_key)
+        if root is None:
+            return []
+        from app.services.filesystem_scanner import root_identity
+        root_id = root_identity("show", root)
+        return [card for card in cards if card.get("root_id") == root_id]
 
     def get_show(self, show_id: str):
         return self.catalog.show_detail(show_id)

@@ -15,6 +15,8 @@ if (form) {
         body: JSON.stringify({
           movies_path: form.elements.movies_path.value,
           shows_path: form.elements.shows_path.value,
+          cartoons_path: form.elements.cartoons_path.value,
+          cartoons_filmes_path: form.elements.cartoons_filmes_path.value,
         }),
       });
       status.textContent = 'Saved';

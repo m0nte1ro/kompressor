@@ -10,7 +10,7 @@
 </div>
 <section class="show-grid" aria-label="Shows">
   {% for card in cards %}
-  <a href="/shows/{{ card.show.id | urlencode }}" class="card show-card" data-name="{{ card.show.name }}">
+  <a href="/{{ section | default("shows") }}/{{ card.show.id | urlencode }}" class="card show-card" data-name="{{ card.show.name }}">
     <span class="show-symbol" aria-hidden="true">▤</span><h2>{{ card.show.name }}</h2>
     <p class="muted">{{ card.count }} episodes · {{ card.size | size }}</p>
     <div class="badges">{% for tag in card.show.tags %}<span class="badge violet">{{ tag }}</span>{% else %}<span class="badge">Default show policies</span>{% endfor %}</div>

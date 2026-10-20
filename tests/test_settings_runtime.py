@@ -38,7 +38,8 @@ def test_saved_roots_override_environment_and_change_both_next_scan_roots(tmp_pa
     config.movies_root = tmp_path
     config.shows_root = tmp_path
     with TestClient(create_app(config=config)) as client:
-        assert client.get('/api/settings').json() == {'movies_path': str(movies), 'shows_path': str(shows)}
+        assert client.get('/api/settings').json() == {'movies_path': str(movies), 'shows_path': str(shows),
+                                                     'cartoons_path': '', 'cartoons_filmes_path': ''}
         assert scan(client).json()['state'] == 'completed'
 
 
